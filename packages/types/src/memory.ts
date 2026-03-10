@@ -49,6 +49,16 @@ export interface HeartbeatResult {
   urgency?: 'immediate' | 'soon' | 'can_wait';
 }
 
+export interface HeartbeatAnalysis {
+  should_act: boolean;
+  action_brief: string;
+  recommended_actions: string[];
+  urgency: 'none' | 'low' | 'medium' | 'high' | 'critical';
+  reasoning: string;
+  autonomy: 'observe' | 'suggest' | 'act';
+  user_facing: string;
+}
+
 export interface HeartbeatContextResult {
   should_act: boolean;
   scheduled: Memory[];
@@ -57,6 +67,7 @@ export interface HeartbeatContextResult {
   conflicts: Array<{ memory: Memory; reason: string }>;
   relevant_memories: SearchResult[];
   summary: string;
+  analysis?: HeartbeatAnalysis;
 }
 
 export interface MemoryStats {

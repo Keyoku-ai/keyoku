@@ -31,6 +31,35 @@ export function formatMemoryContext(results: SearchResult[]): string {
  * Used with the combined /heartbeat/context endpoint.
  */
 export function formatHeartbeatContext(ctx: HeartbeatContextResult): string {
+  // If LLM analysis is available, use the analyzed output
+  if (ctx.analysis) {
+    const a = ctx.analysis;
+    const sections: string[] = [];
+
+    sections.push(`## Action Brief\n${escapeMemoryText(a.action_brief)}`);
+
+    if (a.recommended_actions.length > 0) {
+      const header = a.autonomy === 'act'
+        ? '## Execute These Actions'
+        : a.autonomy === 'suggest'
+        ? '## Suggested Actions'
+        : '## Observations';
+      sections.push(header);
+      for (const action of a.recommended_actions) {
+        sections.push(`- ${escapeMemoryText(action)}`);
+      }
+    }
+
+    if (a.user_facing) {
+      sections.push(`## Tell the User\n${escapeMemoryText(a.user_facing)}`);
+    }
+
+    sections.push(`Urgency: ${a.urgency} | Mode: ${a.autonomy}`);
+
+    return `<keyoku-heartbeat>\n${sections.join('\n\n')}\n</keyoku-heartbeat>`;
+  }
+
+  // Fall back to raw signal formatting when no LLM analysis
   const sections: string[] = [];
 
   if (ctx.scheduled.length > 0) {

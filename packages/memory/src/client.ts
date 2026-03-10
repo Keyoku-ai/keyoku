@@ -126,7 +126,7 @@ export class KeyokuClient {
     });
   }
 
-  /** Combined heartbeat + context search in a single call. */
+  /** Combined heartbeat + context search in a single call, with optional LLM analysis. */
   async heartbeatContext(entityId: string, options?: {
     query?: string;
     top_k?: number;
@@ -135,6 +135,9 @@ export class KeyokuClient {
     max_results?: number;
     agent_id?: string;
     team_id?: string;
+    analyze?: boolean;
+    activity_summary?: string;
+    autonomy?: 'observe' | 'suggest' | 'act';
   }): Promise<HeartbeatContextResult> {
     return this.request<HeartbeatContextResult>('POST', '/api/v1/heartbeat/context', {
       entity_id: entityId,

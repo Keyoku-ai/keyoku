@@ -78,10 +78,14 @@ export function registerHooks(
             min_score: 0.1,
             agent_id: agentId,
             max_results: 10,
+            analyze: true,
+            activity_summary: activitySummary || undefined,
+            autonomy: config.autonomy,
           });
           const formatted = formatHeartbeatContext(ctx);
           if (formatted) {
-            api.logger.info?.(`keyoku: heartbeat context injected (should_act: ${ctx.should_act}, memories: ${ctx.relevant_memories.length})`);
+            const analyzed = ctx.analysis ? ` [${ctx.analysis.autonomy}/${ctx.analysis.urgency}]` : '';
+            api.logger.info?.(`keyoku: heartbeat context injected (should_act: ${ctx.should_act}, memories: ${ctx.relevant_memories.length}${analyzed})`);
             return { prependContext: formatted };
           }
         } catch (err) {

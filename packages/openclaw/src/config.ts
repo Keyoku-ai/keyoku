@@ -19,6 +19,8 @@ export interface KeyokuConfig {
   agentId?: string;
   /** Maximum characters to consider for auto-capture (default: 2000) */
   captureMaxChars?: number;
+  /** Autonomy level for heartbeat actions (default: 'suggest') */
+  autonomy?: 'observe' | 'suggest' | 'act';
 }
 
 export const DEFAULT_CONFIG: Required<KeyokuConfig> = {
@@ -30,6 +32,7 @@ export const DEFAULT_CONFIG: Required<KeyokuConfig> = {
   entityId: '',
   agentId: '',
   captureMaxChars: 2000,
+  autonomy: 'suggest',
 };
 
 export function resolveConfig(config?: KeyokuConfig): Required<KeyokuConfig> {
