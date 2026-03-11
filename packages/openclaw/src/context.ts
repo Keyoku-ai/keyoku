@@ -31,6 +31,22 @@ export function formatMemoryContext(results: SearchResult[]): string {
  * Used with the combined /heartbeat/context endpoint.
  */
 export function formatHeartbeatContext(ctx: HeartbeatContextResult): string {
+  // Nudge: engine selected a specific memory to reference naturally
+  if (ctx.decision_reason === 'nudge' && ctx.nudge_context) {
+    const sections: string[] = [];
+    sections.push(`## Nudge\nYou haven't heard from the user in a while. Here's something from memory you could casually bring up — only if it feels natural and useful. ONE short sentence max.`);
+    sections.push(`- ${escapeMemoryText(ctx.nudge_context)}`);
+
+    if (ctx.relevant_memories?.length > 0) {
+      sections.push('## What You Know');
+      for (const r of ctx.relevant_memories) {
+        sections.push(`- ${escapeMemoryText(r.memory.content)}`);
+      }
+    }
+
+    return `<heartbeat-signals>\n${sections.join('\n\n')}\n</heartbeat-signals>`;
+  }
+
   // If LLM analysis is available, use the analyzed output
   if (ctx.analysis) {
     const a = ctx.analysis;
@@ -157,7 +173,7 @@ export function formatHeartbeatContext(ctx: HeartbeatContextResult): string {
 
   if (sections.length === 0) return '';
 
-  return `<heartbeat-signals>\nYou are being checked in on. Review the signals below alongside the current conversation. If any signal warrants action (a reminder, a nudge, a status update), do it. If nothing needs attention right now, reply HEARTBEAT_OK.\n\n${sections.join('\n')}\n</heartbeat-signals>`;
+  return `<heartbeat-signals>\nReview the signals below. If something genuinely warrants a message (a deadline, a reminder, new info), send ONE short sentence. Do NOT repeat things you have already said. If nothing is new or urgent, reply HEARTBEAT_OK.\n\n${sections.join('\n')}\n</heartbeat-signals>`;
 }
 
 /**

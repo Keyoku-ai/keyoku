@@ -111,6 +111,11 @@ export interface HeartbeatContextResult {
   summary: string;
   analysis?: HeartbeatAnalysis;
 
+  // Decision metadata
+  decision_reason?: string;      // "act", "nudge", "suppress_cooldown", "suppress_stale", "suppress_quiet", "suppress_llm", "no_signals"
+  highest_urgency_tier?: string; // "immediate", "elevated", "normal", "low"
+  nudge_context?: string;        // memory content for nudge
+
   // Extended signals
   goal_progress?: GoalProgress[];
   continuity?: SessionContinuity;

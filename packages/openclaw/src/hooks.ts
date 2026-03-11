@@ -105,11 +105,6 @@ function summarizeRecentActivity(messages: unknown[], maxMessages = 6): string {
   return parts.join('\n');
 }
 
-// Idle check-in: track consecutive quiet heartbeats.
-// After N quiet beats, force the LLM to engage with the user.
-const IDLE_CHECK_IN_INTERVAL = 3; // every 3 quiet beats (~15 min with 5m heartbeat)
-let quietHeartbeatCount = 0;
-
 export function registerHooks(
   api: PluginApi,
   client: KeyokuClient,
@@ -125,20 +120,18 @@ export function registerHooks(
 
       const isHeartbeat = ev.prompt.includes('HEARTBEAT');
 
-      // Heartbeat path: use heartbeat context endpoint with LLM analysis
+      // Heartbeat path: engine handles all intelligence (cooldown, novelty, active hours, nudges)
       if (isHeartbeat && config.heartbeat) {
         const activitySummary = summarizeRecentActivity(ev.messages ?? []);
 
-        // Always search memories — conversation context enriches the query,
-        // but memories should drive heartbeat even when context is empty.
         const heartbeatQuery = activitySummary
           || 'important things about this user, recent plans, preferences, and what they care about';
 
         try {
           const ctx = await client.heartbeatContext(entityId, {
             query: heartbeatQuery,
-            top_k: Math.max(config.topK, 8), // heartbeat needs more memory context than auto-recall
-            min_score: 0.05, // lower threshold — cast a wider net for heartbeat
+            top_k: Math.max(config.topK, 8),
+            min_score: 0.05,
             agent_id: agentId,
             max_results: 10,
             analyze: true,
@@ -146,52 +139,23 @@ export function registerHooks(
             autonomy: config.autonomy,
           });
 
-          // Idle check-in: if nothing to act on, count quiet beats
-          if (!ctx.should_act) {
-            quietHeartbeatCount++;
-            api.logger.info?.(`keyoku: quiet heartbeat ${quietHeartbeatCount}/${IDLE_CHECK_IN_INTERVAL}`);
+          const memories = ctx.relevant_memories ?? [];
+          const decision = ctx.decision_reason ?? 'unknown';
 
-            if (quietHeartbeatCount >= IDLE_CHECK_IN_INTERVAL) {
-              quietHeartbeatCount = 0;
-
-              // Build a check-in signal with any known memories
-              const memoryHints = ctx.relevant_memories
-                .slice(0, 5)
-                .map((r) => r.memory.content)
-                .join('; ');
-
-              const checkInBlock = [
-                '<heartbeat-signals>',
-                '## Action Brief',
-                'It has been a while since you last reached out. Send the user a brief, friendly message right now.',
-                '',
-                '## Tell the User',
-                memoryHints
-                  ? `Hey! Just checking in. Reference what you know about them: ${memoryHints}`
-                  : 'Hey! Just wanted to check in — how are things going?',
-                '',
-                '## Execute These Actions',
-                '- Send a short, warm greeting to the user',
-                '',
-                'should_act: true',
-                `Urgency: low | Mode: ${config.autonomy}`,
-                '</heartbeat-signals>',
-              ];
-
-              api.logger.info?.('keyoku: idle check-in triggered — forcing engagement');
-              return { prependContext: checkInBlock.join('\n') };
+          // Engine decides — plugin just logs and passes through
+          if (ctx.should_act) {
+            const formatted = formatHeartbeatContext(ctx);
+            if (formatted) {
+              const analysis = ctx.analysis;
+              const analyzed = analysis ? ` [${analysis.autonomy}/${analysis.urgency}]` : '';
+              api.logger.info?.(
+                `keyoku: heartbeat ${decision} (memories: ${memories.length}, tier: ${ctx.highest_urgency_tier ?? 'n/a'}${analyzed})`
+              );
+              return { prependContext: formatted };
             }
-          } else {
-            // Active heartbeat resets the quiet counter
-            quietHeartbeatCount = 0;
           }
 
-          const formatted = formatHeartbeatContext(ctx);
-          if (formatted) {
-            const analyzed = ctx.analysis ? ` [${ctx.analysis.autonomy}/${ctx.analysis.urgency}]` : '';
-            api.logger.info?.(`keyoku: heartbeat context injected (should_act: ${ctx.should_act}, memories: ${ctx.relevant_memories.length}${analyzed})`);
-            return { prependContext: formatted };
-          }
+          api.logger.info?.(`keyoku: heartbeat ${decision} (should_act: false, memories: ${memories.length})`);
         } catch (err) {
           api.logger.warn(`keyoku: heartbeat context failed: ${String(err)}`);
         }
