@@ -17,7 +17,7 @@ export function escapeMemoryText(text: string): string {
  * Format search results into a context block for prompt injection.
  */
 export function formatMemoryContext(results: SearchResult[]): string {
-  if (results.length === 0) return '';
+  if (!results?.length) return '';
 
   const lines = results.map(
     (r) => `- [${(r.similarity * 100).toFixed(0)}%] ${escapeMemoryText(r.memory.content)}`,
@@ -36,7 +36,7 @@ export function formatHeartbeatContext(ctx: HeartbeatContextResult): string {
     const a = ctx.analysis;
 
     // If analysis says nothing to do, return empty so idle check-in logic can take over
-    if (!ctx.should_act && !a.action_brief && !a.user_facing && a.recommended_actions.length === 0) {
+    if (!ctx.should_act && !a.action_brief && !a.user_facing && (a.recommended_actions?.length ?? 0) === 0) {
       return '';
     }
 
@@ -44,7 +44,7 @@ export function formatHeartbeatContext(ctx: HeartbeatContextResult): string {
 
     sections.push(`## Action Brief\n${escapeMemoryText(a.action_brief)}`);
 
-    if (a.recommended_actions.length > 0) {
+    if (a.recommended_actions?.length > 0) {
       const header = a.autonomy === 'act'
         ? '## Execute These Actions'
         : a.autonomy === 'suggest'
@@ -68,35 +68,35 @@ export function formatHeartbeatContext(ctx: HeartbeatContextResult): string {
   // Fall back to raw signal formatting when no LLM analysis
   const sections: string[] = [];
 
-  if (ctx.scheduled.length > 0) {
+  if (ctx.scheduled?.length > 0) {
     sections.push('## Scheduled Tasks Due');
     for (const m of ctx.scheduled) {
       sections.push(`- ${escapeMemoryText(m.content)}`);
     }
   }
 
-  if (ctx.deadlines.length > 0) {
+  if (ctx.deadlines?.length > 0) {
     sections.push('## Approaching Deadlines');
     for (const m of ctx.deadlines) {
       sections.push(`- ${escapeMemoryText(m.content)} (expires: ${m.expires_at ?? 'unknown'})`);
     }
   }
 
-  if (ctx.pending_work.length > 0) {
+  if (ctx.pending_work?.length > 0) {
     sections.push('## Pending Work');
     for (const m of ctx.pending_work) {
       sections.push(`- ${escapeMemoryText(m.content)}`);
     }
   }
 
-  if (ctx.conflicts.length > 0) {
+  if (ctx.conflicts?.length > 0) {
     sections.push('## Conflicts');
     for (const c of ctx.conflicts) {
       sections.push(`- ${escapeMemoryText(c.memory.content)} — ${escapeMemoryText(c.reason)}`);
     }
   }
 
-  if (ctx.relevant_memories.length > 0) {
+  if (ctx.relevant_memories?.length > 0) {
     sections.push('## Relevant Memories');
     for (const r of ctx.relevant_memories) {
       sections.push(`- [${(r.similarity * 100).toFixed(0)}%] ${escapeMemoryText(r.memory.content)}`);
@@ -119,7 +119,7 @@ export function formatHeartbeatContext(ctx: HeartbeatContextResult): string {
   if (ctx.sentiment_trend && ctx.sentiment_trend.direction !== 'stable') {
     sections.push(`## Sentiment Trend: ${ctx.sentiment_trend.direction}`);
     sections.push(`- Recent avg: ${ctx.sentiment_trend.recent_avg.toFixed(2)}, Previous avg: ${ctx.sentiment_trend.previous_avg.toFixed(2)}`);
-    if (ctx.sentiment_trend.notable.length > 0) {
+    if (ctx.sentiment_trend.notable?.length > 0) {
       for (const m of ctx.sentiment_trend.notable) {
         sections.push(`- [sentiment: ${m.sentiment.toFixed(2)}] ${escapeMemoryText(m.content)}`);
       }
@@ -156,7 +156,7 @@ export function formatHeartbeatContext(ctx: HeartbeatContextResult): string {
  * Format a list of memories for display (e.g., CLI or tool output).
  */
 export function formatMemoryList(memories: Memory[]): string {
-  if (memories.length === 0) return 'No memories found.';
+  if (!memories?.length) return 'No memories found.';
 
   return memories
     .map((m, i) => `${i + 1}. [${m.type}] ${m.content.slice(0, 120)}${m.content.length > 120 ? '...' : ''}`)
