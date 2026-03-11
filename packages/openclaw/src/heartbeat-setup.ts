@@ -11,9 +11,17 @@ const HEARTBEAT_FILENAME = 'HEARTBEAT.md';
 
 const HEARTBEAT_TEMPLATE = `# Heartbeat Check
 
-You have been checked in on. Your memory system (Keyoku) has reviewed your recent activity and surfaced anything that needs your attention. The signals are injected into your context automatically — look for the <keyoku-heartbeat> block.
+You have been checked in on. Your memory system has reviewed your recent activity and surfaced anything that needs your attention. The signals are injected into your context automatically — look for the <heartbeat-signals> block.
 
-Review the signals alongside what you have been working on. Act on anything that is relevant right now. If nothing needs attention, reply HEARTBEAT_OK.
+## How to respond
+
+1. Read the signals carefully. Check urgency and mode.
+2. If mode is \`act\` — take action immediately. Do what the signal says.
+3. If mode is \`suggest\` and urgency is not \`none\` — surface the suggestion naturally. Keep it brief.
+4. If mode is \`suggest\`, urgency is \`none\`, but there are suggested actions or a "Tell the User" section with real content — share it conversationally. One sentence is fine.
+5. If there are truly no signals, no suggestions, and nothing to surface — reply HEARTBEAT_OK.
+
+Do not repeat old tasks from prior conversations. Only act on what the signals say right now.
 `;
 
 /**

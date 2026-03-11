@@ -17,6 +17,7 @@ import { registerTools } from './tools.js';
 import { registerHooks } from './hooks.js';
 import { registerService } from './service.js';
 import { registerCli } from './cli.js';
+import { registerIncrementalCapture } from './incremental-capture.js';
 import { ensureHeartbeatMd } from './heartbeat-setup.js';
 import type { PluginApi } from './types.js';
 
@@ -52,6 +53,11 @@ export default function keyokuMemory(config?: KeyokuConfig) {
 
       // Register CLI subcommands
       registerCli(api, client, entityId);
+
+      // Register incremental per-message capture
+      if (cfg.incrementalCapture) {
+        registerIncrementalCapture(api, client, entityId, agentId, cfg);
+      }
 
       // Auto-generate HEARTBEAT.md if heartbeat is enabled and file doesn't exist
       if (cfg.heartbeat) {

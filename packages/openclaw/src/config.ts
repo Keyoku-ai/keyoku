@@ -21,6 +21,8 @@ export interface KeyokuConfig {
   captureMaxChars?: number;
   /** Autonomy level for heartbeat actions (default: 'suggest') */
   autonomy?: 'observe' | 'suggest' | 'act';
+  /** Capture memories incrementally per message (default: true) */
+  incrementalCapture?: boolean;
 }
 
 export const DEFAULT_CONFIG: Required<KeyokuConfig> = {
@@ -33,6 +35,7 @@ export const DEFAULT_CONFIG: Required<KeyokuConfig> = {
   agentId: '',
   captureMaxChars: 2000,
   autonomy: 'suggest',
+  incrementalCapture: true,
 };
 
 export function resolveConfig(config?: KeyokuConfig): Required<KeyokuConfig> {

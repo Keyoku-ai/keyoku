@@ -59,6 +59,48 @@ export interface HeartbeatAnalysis {
   user_facing: string;
 }
 
+export interface GoalProgress {
+  plan: Memory;
+  activities: Memory[];
+  progress: number;
+  days_left: number;
+  status: 'on_track' | 'at_risk' | 'stalled' | 'no_activity';
+}
+
+export interface SessionContinuity {
+  last_memories: Memory[];
+  session_age_hours: number;
+  was_interrupted: boolean;
+  resume_suggestion: string;
+}
+
+export interface SentimentTrend {
+  recent_avg: number;
+  previous_avg: number;
+  direction: 'improving' | 'declining' | 'stable';
+  delta: number;
+  notable: Memory[];
+}
+
+export interface RelationshipAlert {
+  entity_name: string;
+  days_silent: number;
+  related_plans: Memory[];
+  urgency: 'info' | 'attention' | 'urgent';
+}
+
+export interface KnowledgeGap {
+  question: string;
+  asked_at: string;
+}
+
+export interface BehavioralPattern {
+  description: string;
+  confidence: number;
+  day_of_week?: number;
+  topics: string[];
+}
+
 export interface HeartbeatContextResult {
   should_act: boolean;
   scheduled: Memory[];
@@ -68,6 +110,14 @@ export interface HeartbeatContextResult {
   relevant_memories: SearchResult[];
   summary: string;
   analysis?: HeartbeatAnalysis;
+
+  // Extended signals
+  goal_progress?: GoalProgress[];
+  continuity?: SessionContinuity;
+  sentiment_trend?: SentimentTrend;
+  relationship_alerts?: RelationshipAlert[];
+  knowledge_gaps?: KnowledgeGap[];
+  behavioral_patterns?: BehavioralPattern[];
 }
 
 export interface MemoryStats {

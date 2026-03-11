@@ -35,10 +35,44 @@ export function looksLikePromptInjection(text: string): boolean {
 export function shouldCapture(text: string, maxChars = 2000): boolean {
   if (text.length < 10 || text.length > maxChars) return false;
   if (text.includes('<relevant-memories>')) return false;
-  if (text.includes('<keyoku-heartbeat>')) return false;
+  if (text.includes('<heartbeat-signals>')) return false;
   if (text.startsWith('<') && text.includes('</')) return false;
   if (looksLikePromptInjection(text)) return false;
   return MEMORY_TRIGGERS.some((r) => r.test(text));
+}
+
+const SUBSTANTIAL_PATTERNS = [
+  // Decisions and choices
+  /\b(decided|will use|going with|chose|configured|set up|switched to|picked|selected)\b/i,
+  // Summaries and conclusions
+  /\b(summary|conclusion|result|finding|outcome|in short|to summarize|overall)\b/i,
+  // Actions completed
+  /\b(created|built|implemented|fixed|resolved|deployed|installed|migrated|refactored)\b/i,
+  // Explicit memory cues
+  /\b(note|remember|important|key takeaway|keep in mind|for reference|fyi)\b/i,
+  // Architecture and design
+  /\b(architecture|design|pattern|approach|strategy|tradeoff|trade-off)\b/i,
+  // Project structure
+  /\b(directory|folder|file structure|layout|organized|structured)\b/i,
+  // Tech stack and tools
+  /\b(using|stack|framework|library|database|api|endpoint|schema|model)\b/i,
+  // Contains bullet points or numbered lists (likely a list/summary)
+  /^\s*[-*]\s+/m,
+  /^\s*\d+[.)]\s+/m,
+  // Contains code references
+  /`[^`]+`/,
+  // Contains URLs or paths
+  /https?:\/\/\S+/,
+  /\/[\w-]+\/[\w-]+/,
+];
+
+/**
+ * Check if text contains substantial information worth capturing.
+ * Used for incremental (per-message) capture of assistant output.
+ */
+export function hasSubstantialContent(text: string): boolean {
+  if (text.length < 50) return false;
+  return SUBSTANTIAL_PATTERNS.some((p) => p.test(text));
 }
 
 /**

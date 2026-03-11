@@ -6,6 +6,7 @@
 import type { KeyokuClient } from '@keyoku/memory';
 import type { PluginApi, PluginLogger } from './types.js';
 import { formatMemoryList } from './context.js';
+import { importMemoryFiles } from './migration.js';
 
 // Minimal Commander-like interface for chaining
 interface CommandChain {
@@ -68,6 +69,25 @@ export function registerCli(api: PluginApi, client: KeyokuClient, entityId: stri
         .action(async () => {
           await client.deleteAllMemories(entityId);
           console.log('All memories cleared.');
+        });
+
+      memory
+        .command('import')
+        .description('Import OpenClaw memory files (MEMORY.md, memory/*.md) into Keyoku')
+        .option('--dir <path>', 'Workspace directory containing memory files', '.')
+        .option('--dry-run', 'Show what would be imported without storing')
+        .action(async (opts: unknown) => {
+          const options = opts as { dir: string; dryRun?: boolean };
+          const result = await importMemoryFiles({
+            client,
+            entityId,
+            workspaceDir: options.dir,
+            dryRun: options.dryRun,
+            logger: console,
+          });
+          console.log(
+            `\nImport complete: ${result.imported} imported, ${result.skipped} skipped, ${result.errors} errors`,
+          );
         });
     },
     { commands: ['memory'] },

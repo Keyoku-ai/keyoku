@@ -1,14 +1,4 @@
-This repository contains software under two separate licenses:
-
-  1. The Keyoku Framework (all source code) — MIT License
-  2. The Keyoku Binary (keyoku, keyoku.exe) — Keyoku Proprietary License
-
-================================================================================
-SECTION 1 — MIT LICENSE (Keyoku Framework)
-================================================================================
-
-Applies to: All source code, documentation, and configuration files in this
-repository, including all packages under the packages/ directory.
+MIT License
 
 Copyright (c) 2025 Keyoku
 
@@ -29,37 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-================================================================================
-SECTION 2 — KEYOKU PROPRIETARY LICENSE (Keyoku Binary)
-================================================================================
-
-Applies to: The Keyoku binary files (keyoku, keyoku.exe) distributed alongside
-this framework. These binaries are NOT covered by the MIT License above.
-
-Copyright (c) 2025 Keyoku. All rights reserved.
-
-The Keyoku binary is proprietary software provided free of charge subject to
-the following terms:
-
-1. PERMITTED USE. You may use the Keyoku binary solely as a component of, or
-   in conjunction with, the Keyoku framework. Standalone use of the Keyoku
-   binary outside the Keyoku framework is not permitted.
-
-2. NO REVERSE ENGINEERING. You may not reverse-engineer, decompile,
-   disassemble, or otherwise attempt to derive the source code of the Keyoku
-   binary.
-
-3. NO SEPARATE DISTRIBUTION. You may not extract, redistribute, or sublicense
-   the Keyoku binary independently from the Keyoku framework.
-
-4. NO WARRANTY. The Keyoku binary is provided "as is" without warranty of any
-   kind, express or implied.
-
-5. TERMINATION. This license terminates automatically if you breach any of
-   its terms. Upon termination, you must cease all use of the Keyoku binary
-   and destroy all copies in your possession.
-
-6. MODIFICATIONS. Keyoku reserves the right to modify these terms in future
-   releases. Continued use of the Keyoku binary after such modifications
-   constitutes acceptance of the updated terms.

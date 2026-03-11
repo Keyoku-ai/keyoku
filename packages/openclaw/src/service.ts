@@ -4,7 +4,9 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { randomBytes } from 'node:crypto';
 import type { PluginApi } from './types.js';
 
 let keyokuProcess: ChildProcess | null = null;
@@ -25,18 +27,42 @@ async function isKeyokuRunning(url: string): Promise<boolean> {
 }
 
 /**
- * Find keyoku binary on PATH or in common locations.
+ * Wait for Keyoku to become healthy, polling every interval up to a timeout.
+ */
+async function waitForHealthy(url: string, timeoutMs = 5000, intervalMs = 500): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await isKeyokuRunning(url)) return true;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return false;
+}
+
+/**
+ * Find keyoku binary on disk or PATH.
  */
 function findKeyokuBinary(): string | null {
-  // Try common locations
+  const home = process.env.HOME ?? '';
   const candidates = [
-    'keyoku',
-    resolve(process.env.HOME ?? '', '.keyoku', 'bin', 'keyoku'),
-    resolve(process.env.HOME ?? '', '.local', 'bin', 'keyoku'),
+    resolve(home, '.keyoku', 'bin', 'keyoku'),
+    resolve(home, '.local', 'bin', 'keyoku'),
   ];
 
-  // Just return the name and let spawn handle PATH resolution
-  return candidates[0];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+
+  // Fall back to PATH resolution
+  return 'keyoku';
+}
+
+/**
+ * Ensure the Keyoku data directory exists and return the DB path.
+ */
+function ensureDataDir(): string {
+  const dir = resolve(process.env.HOME ?? '', '.keyoku', 'data');
+  mkdirSync(dir, { recursive: true });
+  return resolve(dir, 'keyoku.db');
 }
 
 export function registerService(api: PluginApi, keyokuUrl: string): void {
@@ -56,11 +82,33 @@ export function registerService(api: PluginApi, keyokuUrl: string): void {
         return;
       }
 
+      // Prepare environment
+      const env = { ...process.env };
+      if (!env.KEYOKU_SESSION_TOKEN) {
+        env.KEYOKU_SESSION_TOKEN = randomBytes(16).toString('hex');
+        api.logger.info('keyoku: Generated session token');
+      }
+      if (!env.KEYOKU_DB_PATH) {
+        env.KEYOKU_DB_PATH = ensureDataDir();
+        api.logger.info(`keyoku: Using database at ${env.KEYOKU_DB_PATH}`);
+      }
+
       try {
         keyokuProcess = spawn(binary, [], {
           stdio: ['ignore', 'pipe', 'pipe'],
           detached: false,
-          env: { ...process.env },
+          env,
+        });
+
+        // Pipe stdout/stderr to logger
+        keyokuProcess.stdout?.on('data', (data: Buffer) => {
+          const line = data.toString().trim();
+          if (line) api.logger.info(`keyoku: ${line}`);
+        });
+
+        keyokuProcess.stderr?.on('data', (data: Buffer) => {
+          const line = data.toString().trim();
+          if (line) api.logger.warn(`keyoku: ${line}`);
         });
 
         keyokuProcess.on('error', (err) => {
@@ -75,10 +123,8 @@ export function registerService(api: PluginApi, keyokuUrl: string): void {
           keyokuProcess = null;
         });
 
-        // Wait briefly for startup
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-
-        if (await isKeyokuRunning(keyokuUrl)) {
+        // Wait for health check with retry
+        if (await waitForHealthy(keyokuUrl)) {
           api.logger.info('keyoku: Keyoku started successfully');
         } else {
           api.logger.warn('keyoku: Keyoku started but health check failed — it may still be initializing');

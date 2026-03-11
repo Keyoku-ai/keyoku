@@ -7,7 +7,6 @@
 import type { KeyokuClient } from '@keyoku/memory';
 import type { KeyokuConfig } from './config.js';
 import { formatMemoryContext, formatHeartbeatContext } from './context.js';
-import { extractCapturableTexts } from './capture.js';
 import type { PluginApi } from './types.js';
 
 /**
@@ -58,21 +57,20 @@ export function registerHooks(
   agentId: string,
   config: Required<KeyokuConfig>,
 ): void {
-  // before_prompt_build: inject relevant memories + heartbeat data
+  // before_prompt_build: auto-recall + heartbeat context injection
   if (config.autoRecall || config.heartbeat) {
     api.on('before_prompt_build', async (event: unknown) => {
       const ev = event as { prompt?: string; messages?: unknown[] };
       if (!ev.prompt || ev.prompt.length < 5) return;
 
-      const isHeartbeat = config.heartbeat && ev.prompt.includes('HEARTBEAT');
+      const isHeartbeat = ev.prompt.includes('HEARTBEAT');
 
-      if (isHeartbeat) {
-        // Build a query from recent conversation activity, not the heartbeat prompt itself
+      // Heartbeat path: use heartbeat context endpoint with LLM analysis
+      if (isHeartbeat && config.heartbeat) {
         const activitySummary = summarizeRecentActivity(ev.messages ?? []);
 
         try {
           const ctx = await client.heartbeatContext(entityId, {
-            // Use conversation activity as the search query, not "Read HEARTBEAT.md..."
             query: activitySummary || undefined,
             top_k: config.topK,
             min_score: 0.1,
@@ -91,47 +89,41 @@ export function registerHooks(
         } catch (err) {
           api.logger.warn(`keyoku: heartbeat context failed: ${String(err)}`);
         }
-      } else if (config.autoRecall) {
-        // Normal prompt: search for relevant memories using the user's actual message
+        return;
+      }
+
+      // Auto-recall path: search memories relevant to user's prompt + recent context
+      if (config.autoRecall && !isHeartbeat) {
         try {
-          const results = await client.search(entityId, ev.prompt, { limit: config.topK, min_score: 0.1 });
+          // Build a richer query: user prompt + last assistant message for context
+          const recentContext = summarizeRecentActivity(ev.messages ?? [], 2);
+          const query = recentContext
+            ? `${ev.prompt}\n\nRecent context:\n${recentContext}`
+            : ev.prompt;
+
+          api.logger.info?.(`keyoku: auto-recall searching (query: ${query.slice(0, 80)}...)`);
+
+          const results = await client.search(entityId, query, {
+            limit: config.topK,
+            min_score: 0.15,
+          });
+
           if (results.length > 0) {
-            const ctx = formatMemoryContext(results);
-            if (ctx) {
-              api.logger.info?.(`keyoku: injected ${results.length} memories into context`);
-              return { prependContext: ctx };
-            }
+            const formatted = formatMemoryContext(results);
+            api.logger.info?.(`keyoku: auto-recall injected ${results.length} memories`);
+            return { prependContext: formatted };
+          } else {
+            api.logger.info?.('keyoku: auto-recall found 0 matching memories');
           }
         } catch (err) {
-          api.logger.warn(`keyoku: recall failed: ${String(err)}`);
+          api.logger.warn(`keyoku: auto-recall failed: ${String(err)}`);
         }
       }
     });
   }
 
-  // agent_end: auto-capture memorable facts from conversation
-  if (config.autoCapture) {
-    api.on('agent_end', async (event: unknown) => {
-      const ev = event as { messages?: unknown[]; success?: boolean };
-      if (!ev.success || !ev.messages || ev.messages.length === 0) return;
-
-      try {
-        const toCapture = extractCapturableTexts(ev.messages, config.captureMaxChars);
-        if (toCapture.length === 0) return;
-
-        let stored = 0;
-        // Limit to 3 captures per conversation to avoid noise
-        for (const text of toCapture.slice(0, 3)) {
-          await client.remember(entityId, text, { agent_id: agentId, source: 'auto-capture' });
-          stored++;
-        }
-
-        if (stored > 0) {
-          api.logger.info(`keyoku: auto-captured ${stored} memories`);
-        }
-      } catch (err) {
-        api.logger.warn(`keyoku: capture failed: ${String(err)}`);
-      }
-    });
-  }
+  // NOTE: agent_end capture removed — incremental capture (incremental-capture.ts)
+  // now handles both user and assistant messages in real-time, making the
+  // session-end batch capture redundant. This also eliminates the only source
+  // of duplicate /remember calls.
 }

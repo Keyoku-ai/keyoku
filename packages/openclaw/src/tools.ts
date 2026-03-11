@@ -1,7 +1,9 @@
 /**
  * OpenClaw tool registrations for Keyoku memory operations.
- * Registers 6 tools: memory_recall, memory_store, memory_forget, memory_stats,
- * schedule_create, schedule_list
+ * Registers 7 tools:
+ *   memory_search, memory_get (OpenClaw standard — replaces built-in file-based memory)
+ *   memory_store, memory_forget, memory_stats (Keyoku memory management)
+ *   schedule_create, schedule_list (Keyoku scheduling)
  */
 
 import { Type } from '@sinclair/typebox';
@@ -9,39 +11,105 @@ import type { KeyokuClient } from '@keyoku/memory';
 import type { PluginApi } from './types.js';
 
 export function registerTools(api: PluginApi, client: KeyokuClient, entityId: string, agentId: string): void {
-  // memory_recall — search memories by query
+  // memory_search — OpenClaw-standard search tool (replaces memory-core's built-in)
   api.registerTool(
     {
-      name: 'memory_recall',
-      label: 'Memory Recall',
+      name: 'memory_search',
+      label: 'Memory Search',
       description:
-        'Search through long-term memories. Use when you need context about user preferences, past decisions, or previously discussed topics.',
+        'Search through memories for relevant information. Returns semantically similar memories ranked by relevance.',
       parameters: Type.Object({
         query: Type.String({ description: 'Search query' }),
-        limit: Type.Optional(Type.Number({ description: 'Max results (default: 5)' })),
+        maxResults: Type.Optional(Type.Number({ description: 'Max results (default: 5)' })),
+        minScore: Type.Optional(Type.Number({ description: 'Minimum relevance score 0-1' })),
       }),
       async execute(_toolCallId, params) {
-        const { query, limit = 5 } = params as { query: string; limit?: number };
-        const results = await client.search(entityId, query, { limit });
+        const { query, maxResults = 5, minScore = 0.1 } = params as {
+          query: string;
+          maxResults?: number;
+          minScore?: number;
+        };
+        const results = await client.search(entityId, query, { limit: maxResults, min_score: minScore });
 
         if (results.length === 0) {
           return {
-            content: [{ type: 'text', text: 'No relevant memories found.' }],
+            content: [{ type: 'text', text: JSON.stringify({ results: [], provider: 'memory', mode: 'semantic' }) }],
             details: { count: 0 },
           };
         }
 
-        const text = results
-          .map((r, i) => `${i + 1}. [${(r.similarity * 100).toFixed(0)}%] ${r.memory.content}`)
-          .join('\n');
+        const mapped = results.map((r) => ({
+          path: `mem:${r.memory.id}`,
+          startLine: 1,
+          endLine: 1,
+          score: r.similarity,
+          snippet: r.memory.content,
+          source: 'memory',
+          citation: `mem:${r.memory.id}`,
+        }));
 
         return {
-          content: [{ type: 'text', text: `Found ${results.length} memories:\n\n${text}` }],
-          details: { count: results.length },
+          content: [
+            { type: 'text', text: JSON.stringify({ results: mapped, provider: 'memory', mode: 'semantic' }) },
+          ],
+          details: { count: mapped.length },
         };
       },
     },
-    { name: 'memory_recall' },
+    { name: 'memory_search' },
+  );
+
+  // memory_get — OpenClaw-standard memory read tool (replaces file-based reads)
+  api.registerTool(
+    {
+      name: 'memory_get',
+      label: 'Memory Get',
+      description:
+        'Read a specific memory by its ID (mem:<id>) or search for a memory by keyword.',
+      parameters: Type.Object({
+        path: Type.String({ description: 'Memory path (mem:<id>) or keyword to search' }),
+        from: Type.Optional(Type.Number({ description: 'Line offset (unused)' })),
+        lines: Type.Optional(Type.Number({ description: 'Line count (unused)' })),
+      }),
+      async execute(_toolCallId, params) {
+        const { path: memPath } = params as { path: string; from?: number; lines?: number };
+
+        if (memPath.startsWith('mem:') || memPath.startsWith('keyoku:')) {
+          const id = memPath.startsWith('mem:') ? memPath.slice(4) : memPath.slice(7);
+          try {
+            const memory = await client.getMemory(id);
+            return {
+              content: [{ type: 'text', text: JSON.stringify({ text: memory.content, path: memPath }) }],
+            };
+          } catch {
+            return {
+              content: [{ type: 'text', text: JSON.stringify({ text: '', path: memPath, error: 'Memory not found' }) }],
+            };
+          }
+        }
+
+        // Fallback: treat path as a search query
+        const results = await client.search(entityId, memPath, { limit: 1 });
+        if (results.length > 0) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  text: results[0].memory.content,
+                  path: `mem:${results[0].memory.id}`,
+                }),
+              },
+            ],
+          };
+        }
+
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ text: '', path: memPath, error: 'Not found' }) }],
+        };
+      },
+    },
+    { name: 'memory_get' },
   );
 
   // memory_store — store a new memory

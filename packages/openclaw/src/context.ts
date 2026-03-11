@@ -56,7 +56,7 @@ export function formatHeartbeatContext(ctx: HeartbeatContextResult): string {
 
     sections.push(`Urgency: ${a.urgency} | Mode: ${a.autonomy}`);
 
-    return `<keyoku-heartbeat>\n${sections.join('\n\n')}\n</keyoku-heartbeat>`;
+    return `<heartbeat-signals>\n${sections.join('\n\n')}\n</heartbeat-signals>`;
   }
 
   // Fall back to raw signal formatting when no LLM analysis
@@ -97,9 +97,53 @@ export function formatHeartbeatContext(ctx: HeartbeatContextResult): string {
     }
   }
 
+  if (ctx.goal_progress && ctx.goal_progress.length > 0) {
+    sections.push('## Goal Progress');
+    for (const g of ctx.goal_progress) {
+      const daysStr = g.days_left >= 0 ? `${Math.round(g.days_left)} days left` : 'no deadline';
+      sections.push(`- ${escapeMemoryText(g.plan.content)} (${Math.round(g.progress * 100)}% done, ${daysStr}, ${g.status})`);
+    }
+  }
+
+  if (ctx.continuity?.was_interrupted) {
+    sections.push('## Session Continuity');
+    sections.push(`- ${escapeMemoryText(ctx.continuity.resume_suggestion)} (${Math.round(ctx.continuity.session_age_hours)}h ago)`);
+  }
+
+  if (ctx.sentiment_trend && ctx.sentiment_trend.direction !== 'stable') {
+    sections.push(`## Sentiment Trend: ${ctx.sentiment_trend.direction}`);
+    sections.push(`- Recent avg: ${ctx.sentiment_trend.recent_avg.toFixed(2)}, Previous avg: ${ctx.sentiment_trend.previous_avg.toFixed(2)}`);
+    if (ctx.sentiment_trend.notable.length > 0) {
+      for (const m of ctx.sentiment_trend.notable) {
+        sections.push(`- [sentiment: ${m.sentiment.toFixed(2)}] ${escapeMemoryText(m.content)}`);
+      }
+    }
+  }
+
+  if (ctx.relationship_alerts && ctx.relationship_alerts.length > 0) {
+    sections.push('## Relationship Alerts');
+    for (const r of ctx.relationship_alerts) {
+      sections.push(`- ${escapeMemoryText(r.entity_name)}: silent for ${r.days_silent} days [${r.urgency}]`);
+    }
+  }
+
+  if (ctx.knowledge_gaps && ctx.knowledge_gaps.length > 0) {
+    sections.push('## Knowledge Gaps');
+    for (const g of ctx.knowledge_gaps) {
+      sections.push(`- ${escapeMemoryText(g.question)}`);
+    }
+  }
+
+  if (ctx.behavioral_patterns && ctx.behavioral_patterns.length > 0) {
+    sections.push('## Behavioral Patterns');
+    for (const p of ctx.behavioral_patterns) {
+      sections.push(`- ${escapeMemoryText(p.description)} (${Math.round(p.confidence * 100)}% confidence)`);
+    }
+  }
+
   if (sections.length === 0) return '';
 
-  return `<keyoku-heartbeat>\nYou are being checked in on. Review the signals below alongside the current conversation. If any signal warrants action (a reminder, a nudge, a status update), do it. If nothing needs attention right now, reply HEARTBEAT_OK.\n\n${sections.join('\n')}\n</keyoku-heartbeat>`;
+  return `<heartbeat-signals>\nYou are being checked in on. Review the signals below alongside the current conversation. If any signal warrants action (a reminder, a nudge, a status update), do it. If nothing needs attention right now, reply HEARTBEAT_OK.\n\n${sections.join('\n')}\n</heartbeat-signals>`;
 }
 
 /**

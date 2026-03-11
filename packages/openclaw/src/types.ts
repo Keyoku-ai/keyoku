@@ -30,7 +30,7 @@ export type PluginApi = {
   name: string;
   logger: PluginLogger;
   pluginConfig?: Record<string, unknown>;
-  registerTool: (tool: AgentTool, opts?: { name?: string }) => void;
+  registerTool: (tool: AgentTool, opts?: { name?: string; names?: string[] }) => void;
   registerHook?: (events: string | string[], handler: (...args: unknown[]) => unknown, opts?: Record<string, unknown>) => void;
   registerCli: (registrar: (ctx: { program: unknown; config: unknown; logger: PluginLogger }) => void, opts?: { commands?: string[] }) => void;
   registerService: (service: { id: string; start: (ctx: unknown) => void | Promise<void>; stop?: (ctx: unknown) => void | Promise<void> }) => void;
