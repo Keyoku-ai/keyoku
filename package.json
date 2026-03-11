@@ -1,8 +1,27 @@
 {
   "name": "keyoku",
   "version": "2.0.0",
+  "description": "TypeScript SDK for AI memory — auto-recall, auto-capture, and intelligent heartbeat",
   "private": true,
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/keyoku-ai/keyoku.git"
+  },
+  "homepage": "https://github.com/keyoku-ai/keyoku",
+  "bugs": {
+    "url": "https://github.com/keyoku-ai/keyoku/issues"
+  },
+  "keywords": [
+    "ai",
+    "memory",
+    "agents",
+    "semantic-search",
+    "vector-search",
+    "llm",
+    "openclaw"
+  ],
+  "license": "MIT",
   "workspaces": [
     "packages/types",
     "packages/memory",
