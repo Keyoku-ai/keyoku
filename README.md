@@ -20,9 +20,8 @@
 
   [![version](https://img.shields.io/badge/version-2.0.0-6366f1?style=flat-square)](packages/)
   [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-  [![CI](https://img.shields.io/github/actions/workflow/status/keyoku-ai/keyoku/ci.yml?style=flat-square&label=CI)](https://github.com/keyoku-ai/keyoku/actions)
   [![License: MIT](https://img.shields.io/badge/License-MIT-22c55e?style=flat-square)](LICENSE)
-  [![GitHub Stars](https://img.shields.io/github/stars/keyoku-ai/keyoku?style=flat-square)](https://github.com/keyoku-ai/keyoku/stargazers)
+  [![GitHub Stars](https://img.shields.io/github/stars/Keyoku-ai/keyoku?style=flat-square)](https://github.com/Keyoku-ai/keyoku/stargazers)
 
 </div>
 
