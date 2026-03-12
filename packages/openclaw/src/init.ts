@@ -31,6 +31,8 @@ const OPENCLAW_CONFIG_PATH = join(HOME, '.openclaw', 'openclaw.json');
 const KEYOKU_BIN_DIR = join(HOME, '.keyoku', 'bin');
 const KEYOKU_BIN_PATH = join(KEYOKU_BIN_DIR, 'keyoku');
 const OPENCLAW_MEMORY_DIR = join(HOME, '.openclaw', 'memory');
+const OPENCLAW_EXTENSIONS_DIR = join(HOME, '.openclaw', 'extensions');
+const PLUGIN_INSTALL_DIR = join(OPENCLAW_EXTENSIONS_DIR, 'keyoku-memory');
 
 interface OpenClawConfig {
   plugins?: {
@@ -293,6 +295,47 @@ function writeOpenClawConfig(config: OpenClawConfig): void {
   writeFileSync(OPENCLAW_CONFIG_PATH, JSON.stringify(config, null, 2) + '\n', 'utf-8');
 }
 
+// ── Plugin Installation ──────────────────────────────────────────────────
+
+/**
+ * Install the @keyoku/openclaw plugin to ~/.openclaw/extensions/keyoku-memory/
+ * so OpenClaw can discover it on restart. When running via npx, the package
+ * lives in a temp cache that disappears — this copies it to a permanent location.
+ */
+function installPluginFiles(): void {
+  const packageRoot = join(__dirname, '..');
+
+  // Copy the entire package to the extensions directory
+  mkdirSync(PLUGIN_INSTALL_DIR, { recursive: true });
+
+  // Copy dist/
+  const distSrc = join(packageRoot, 'dist');
+  const distDest = join(PLUGIN_INSTALL_DIR, 'dist');
+  if (existsSync(distSrc)) {
+    cpSync(distSrc, distDest, { recursive: true });
+  }
+
+  // Copy skills/
+  const skillsSrc = join(packageRoot, 'skills');
+  const skillsDest = join(PLUGIN_INSTALL_DIR, 'skills');
+  if (existsSync(skillsSrc)) {
+    cpSync(skillsSrc, skillsDest, { recursive: true });
+  }
+
+  // Copy package.json
+  const pkgSrc = join(packageRoot, 'package.json');
+  if (existsSync(pkgSrc)) {
+    cpSync(pkgSrc, join(PLUGIN_INSTALL_DIR, 'package.json'));
+  }
+
+  // Install dependencies: copy node_modules from the npx cache
+  const nmSrc = join(packageRoot, 'node_modules');
+  const nmDest = join(PLUGIN_INSTALL_DIR, 'node_modules');
+  if (existsSync(nmSrc)) {
+    cpSync(nmSrc, nmDest, { recursive: true });
+  }
+}
+
 // ── Skill Installation ───────────────────────────────────────────────────
 
 /**
@@ -331,7 +374,6 @@ function installSkill(): void {
 async function setupLlmProvider(): Promise<void> {
   // Check existing env vars
   const hasOpenAI = !!process.env.OPENAI_API_KEY;
-  const hasAnthropic = !!process.env.ANTHROPIC_API_KEY;
   const hasGemini = !!process.env.GEMINI_API_KEY;
 
   // Extraction provider
@@ -352,17 +394,11 @@ async function setupLlmProvider(): Promise<void> {
       appendToEnvFile('KEYOKU_EMBEDDING_PROVIDER', 'openai');
       appendToEnvFile('KEYOKU_EMBEDDING_MODEL', 'text-embedding-3-small');
       success(`Auto-configured: ${c.bold}OpenAI${c.reset} for extraction + embeddings`);
-    } else if (hasAnthropic) {
-      appendToEnvFile('KEYOKU_EXTRACTION_PROVIDER', 'anthropic');
-      appendToEnvFile('KEYOKU_EXTRACTION_MODEL', 'claude-haiku-4-5-20251001');
-      success(`Auto-configured: ${c.bold}Anthropic${c.reset} for extraction`);
-      warn('Anthropic does not provide embeddings — add an OpenAI or Gemini key for embeddings');
     } else {
       // No API key detected — prompt for provider
       const provider = await choose('Which LLM provider?', [
         { label: 'OpenAI', value: 'openai', desc: 'extraction + embeddings' },
         { label: 'Gemini', value: 'gemini', desc: 'extraction + embeddings' },
-        { label: 'Anthropic', value: 'anthropic', desc: 'extraction only' },
       ]);
 
       if (provider === 'gemini') {
@@ -376,16 +412,6 @@ async function setupLlmProvider(): Promise<void> {
           success('Gemini configured');
         } else {
           warn('No key provided — set GEMINI_API_KEY manually');
-        }
-      } else if (provider === 'anthropic') {
-        const key = await prompt('Anthropic API key (sk-ant-...):');
-        if (key) {
-          appendToEnvFile('ANTHROPIC_API_KEY', key);
-          appendToEnvFile('KEYOKU_EXTRACTION_PROVIDER', 'anthropic');
-          appendToEnvFile('KEYOKU_EXTRACTION_MODEL', 'claude-haiku-4-5-20251001');
-          warn('Add an OpenAI or Gemini key for embeddings');
-        } else {
-          warn('No key provided — set ANTHROPIC_API_KEY manually');
         }
       } else {
         // Default: OpenAI
@@ -408,7 +434,6 @@ async function setupLlmProvider(): Promise<void> {
   const detected: string[] = [];
   if (hasOpenAI) detected.push('OpenAI');
   if (hasGemini) detected.push('Gemini');
-  if (hasAnthropic) detected.push('Anthropic');
   if (detected.length > 0) {
     success(`API keys detected: ${c.bold}${detected.join(', ')}${c.reset}`);
   }
@@ -619,6 +644,11 @@ export async function init(): Promise<void> {
 
     writeOpenClawConfig(config);
     success('Plugin registered in openclaw.json');
+
+    // Install plugin files to extensions directory so OpenClaw can discover them
+    info('Installing plugin to extensions...');
+    installPluginFiles();
+    success(`Plugin installed → ${c.dim}${PLUGIN_INSTALL_DIR}${c.reset}`);
   }
 
   // Step 4: DB path
