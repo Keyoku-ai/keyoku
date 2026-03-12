@@ -186,7 +186,7 @@ describe('context', () => {
       };
 
       const ctx = formatHeartbeatContext(hb);
-      expect(ctx).toContain('You are being checked in on');
+      expect(ctx).toContain('Review the signals below');
       expect(ctx).toContain('HEARTBEAT_OK');
     });
 
