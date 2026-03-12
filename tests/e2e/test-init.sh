@@ -82,11 +82,12 @@ full_cleanup
 HAS_PLUGINS=$(python3 -c "import json; c=json.load(open('$HOME/.openclaw/openclaw.json')); print('true' if 'plugins' in c else 'false')" 2>/dev/null || echo "error")
 assert "Clean config has no plugins section" "$( [ "$HAS_PLUGINS" = "false" ] && echo true || echo false )"
 
-# Run init — pipe answers for all prompts (OPENAI_API_KEY already in env, so no key prompt):
-# 1. autonomy (suggest), 2. timezone (accept default), 3. quiet hours (yes),
-# 4. quiet start (default 23), 5. quiet end (default 7)
+# Run init — pipe answers for all prompts (API keys already in env, so no key prompt):
+# 1. embedding provider (default=Gemini), 2. extraction provider (default=Gemini),
+# 3. extraction model (default), 4. autonomy (suggest), 5. timezone (accept default),
+# 6. quiet hours (yes), 7. quiet start (default 23), 8. quiet end (default 7)
 # No migration prompt since --no-memory was used
-printf 'suggest\n\ny\n\n\n' | node "$INIT_BIN" 2>&1 || true
+printf '\n\n\nsuggest\n\ny\n\n\n' | node "$INIT_BIN" 2>&1 || true
 
 # Verify plugin registered
 PLUGIN_ENABLED=$(python3 -c "
@@ -140,9 +141,9 @@ assert "Keyoku engine running" "$( [ "$KEYOKU_RUNNING" = "200" ] && echo true ||
 
 if [ "$KEYOKU_RUNNING" = "200" ]; then
   # Run init with migration — pipe answers for all prompts:
-  # 1. autonomy (suggest), 2. timezone (accept), 3. quiet hours (yes),
-  # 4. start (default), 5. end (default), 6. migration (y)
-  printf 'suggest\n\ny\n\n\ny\n' | node "$INIT_BIN" 2>&1 || true
+  # 1-3. LLM defaults, 4. autonomy (suggest), 5. timezone (accept),
+  # 6. quiet hours (yes), 7. start (default), 8. end (default), 9. migration (y)
+  printf '\n\n\nsuggest\n\ny\n\n\ny\n' | node "$INIT_BIN" 2>&1 || true
 
   # Wait for embeddings to index
   sleep 5
@@ -245,6 +246,12 @@ assert "Env file has KEYOKU_EXTRACTION_MODEL" "$HAS_EXTRACTION_MODEL"
 HAS_DB_PATH=$(grep -q "KEYOKU_DB_PATH=" "$ENV_FILE" 2>/dev/null && echo true || echo false)
 assert "Env file has KEYOKU_DB_PATH" "$HAS_DB_PATH"
 
+HAS_EMBEDDING_PROVIDER=$(grep -q "KEYOKU_EMBEDDING_PROVIDER=" "$ENV_FILE" 2>/dev/null && echo true || echo false)
+assert "Env file has KEYOKU_EMBEDDING_PROVIDER" "$HAS_EMBEDDING_PROVIDER"
+
+HAS_EMBEDDING_MODEL=$(grep -q "KEYOKU_EMBEDDING_MODEL=" "$ENV_FILE" 2>/dev/null && echo true || echo false)
+assert "Env file has KEYOKU_EMBEDDING_MODEL" "$HAS_EMBEDDING_MODEL"
+
 echo ""
 
 # ============================================================
@@ -264,8 +271,9 @@ echo ""
 bold "=== Scenario F: Idempotent Re-run ==="
 # ============================================================
 
-# Pipe answers: autonomy (suggest), tz (accept), quiet (yes), start (default), end (default)
-RERUN_OUTPUT=$(printf 'suggest\n\ny\n\n\n' | node "$INIT_BIN" 2>&1 || true)
+# Pipe answers: LLM defaults, autonomy (suggest), tz (accept), quiet (yes), start (default), end (default)
+# Note: On re-run, LLM prompts may be skipped if env vars already set from previous run
+RERUN_OUTPUT=$(printf '\n\n\nsuggest\n\ny\n\n\n' | node "$INIT_BIN" 2>&1 || true)
 ALREADY_REG=$(echo "$RERUN_OUTPUT" | grep -qi "already" && echo true || echo false)
 assert "Re-run detects already registered" "$ALREADY_REG"
 
@@ -279,8 +287,8 @@ bold "=== Scenario G: Autonomy Level ==="
 full_cleanup
 "$SCRIPT_DIR/setup.sh" --no-memory > /dev/null 2>&1
 
-# Pipe: act autonomy, accept tz, enable quiet, defaults
-printf '3\n\ny\n\n\n' | node "$INIT_BIN" 2>&1 || true
+# Pipe: LLM defaults, act autonomy, accept tz, enable quiet, defaults
+printf '\n\n\n3\n\ny\n\n\n' | node "$INIT_BIN" 2>&1 || true
 
 AUTONOMY_SET=$(python3 -c "
 import json
@@ -293,7 +301,7 @@ assert "Autonomy level saved as 'act' in plugin config" "$AUTONOMY_SET"
 # Verify default when invalid input
 full_cleanup
 "$SCRIPT_DIR/setup.sh" --no-memory > /dev/null 2>&1
-printf 'invalid-input\n\ny\n\n\n' | node "$INIT_BIN" 2>&1 || true
+printf '\n\n\ninvalid-input\n\ny\n\n\n' | node "$INIT_BIN" 2>&1 || true
 
 AUTONOMY_DEFAULT=$(python3 -c "
 import json
@@ -327,8 +335,8 @@ assert "Env file has quiet hour end" "$HAS_QUIET_END"
 # Test with custom quiet hours
 full_cleanup
 "$SCRIPT_DIR/setup.sh" --no-memory > /dev/null 2>&1
-# Pipe: suggest autonomy, custom tz, enable quiet, start=22, end=8
-printf 'suggest\n2\ny\n22\n8\n' | node "$INIT_BIN" 2>&1 || true
+# Pipe: LLM defaults, suggest autonomy, custom tz, enable quiet, start=22, end=8
+printf '\n\n\nsuggest\n2\ny\n22\n8\n' | node "$INIT_BIN" 2>&1 || true
 
 CUSTOM_TZ=$(grep -q "KEYOKU_QUIET_HOURS_TIMEZONE=America/New_York" "$ENV_FILE" 2>/dev/null && echo true || echo false)
 assert "Custom timezone saved (America/New_York)" "$CUSTOM_TZ"
@@ -342,7 +350,7 @@ assert "Custom quiet end saved (8)" "$CUSTOM_END"
 # Test with quiet hours disabled
 full_cleanup
 "$SCRIPT_DIR/setup.sh" --no-memory > /dev/null 2>&1
-printf 'suggest\n\n2\n' | node "$INIT_BIN" 2>&1 || true
+printf '\n\n\nsuggest\n\n2\n' | node "$INIT_BIN" 2>&1 || true
 
 QUIET_DISABLED=$(grep -q "KEYOKU_QUIET_HOURS_ENABLED=false" "$ENV_FILE" 2>/dev/null && echo true || echo false)
 assert "Quiet hours disabled when user says no" "$QUIET_DISABLED"
@@ -369,7 +377,7 @@ assert "SKILL.md documents autonomy modes" "$HAS_AUTONOMY_MODES"
 # Test idempotency — re-run should skip
 SKILL_MTIME_BEFORE=$(stat -f %m "$SKILL_PATH" 2>/dev/null || stat -c %Y "$SKILL_PATH" 2>/dev/null || echo "0")
 sleep 1
-printf 'suggest\n\ny\n\n\n' | node "$INIT_BIN" 2>&1 || true
+printf '\n\n\nsuggest\n\ny\n\n\n' | node "$INIT_BIN" 2>&1 || true
 SKILL_MTIME_AFTER=$(stat -f %m "$SKILL_PATH" 2>/dev/null || stat -c %Y "$SKILL_PATH" 2>/dev/null || echo "0")
 assert "SKILL.md not overwritten on re-run (idempotent)" "$( [ "$SKILL_MTIME_BEFORE" = "$SKILL_MTIME_AFTER" ] && echo true || echo false )"
 
@@ -380,7 +388,7 @@ bold "=== Scenario J: Health Check ==="
 # ============================================================
 
 # Health check should gracefully handle engine not running
-HEALTH_OUTPUT=$(printf 'suggest\n\ny\n\n\n' | node "$INIT_BIN" 2>&1 || true)
+HEALTH_OUTPUT=$(printf '\n\n\nsuggest\n\ny\n\n\n' | node "$INIT_BIN" 2>&1 || true)
 HAS_HEALTH_MSG=$(echo "$HEALTH_OUTPUT" | grep -qi "auto-start\|health\|not running" && echo true || echo false)
 assert "Health check reports status when engine not running" "$HAS_HEALTH_MSG"
 
@@ -412,8 +420,8 @@ sleep 3
 KEYOKU_RUNNING=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:18900/api/v1/health 2>/dev/null || echo "000")
 if [ "$KEYOKU_RUNNING" = "200" ]; then
   # Run init with migration enabled
-  # Pipe: suggest autonomy, accept tz, enable quiet, defaults, migrate yes
-  printf 'suggest\n\ny\n\n\ny\n' | node "$INIT_BIN" 2>&1 || true
+  # Pipe: LLM defaults, suggest autonomy, accept tz, enable quiet, defaults, migrate yes
+  printf '\n\n\nsuggest\n\ny\n\n\ny\n' | node "$INIT_BIN" 2>&1 || true
 
   # Wait for LLM extraction
   sleep 8
@@ -486,7 +494,8 @@ KEYOKU_RUNNING=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:18900/a
 if [ "$KEYOKU_RUNNING" = "200" ]; then
   # No MEMORY.md so only heartbeat rules get migrated
   # Init detects heartbeat rules → prompts for migration
-  printf 'suggest\n\ny\n\n\ny\n' | node "$INIT_BIN" 2>&1 || true
+  # Pipe: LLM defaults, suggest autonomy, accept tz, enable quiet, defaults, migrate yes
+  printf '\n\n\nsuggest\n\ny\n\n\ny\n' | node "$INIT_BIN" 2>&1 || true
 
   sleep 8
 

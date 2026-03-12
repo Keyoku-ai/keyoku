@@ -101,7 +101,7 @@ describe('context', () => {
       const ctx = formatHeartbeatContext(hb);
       expect(ctx).toContain('<heartbeat-signals>');
       expect(ctx).toContain('</heartbeat-signals>');
-      expect(ctx).toContain('## Approaching Deadlines');
+      expect(ctx).toContain('DEADLINE:');
       expect(ctx).toContain('Report due');
       expect(ctx).toContain('2024-03-15');
     });
@@ -118,7 +118,7 @@ describe('context', () => {
       };
 
       const ctx = formatHeartbeatContext(hb);
-      expect(ctx).toContain('## Scheduled Tasks Due');
+      expect(ctx).toContain('DUE NOW:');
       expect(ctx).toContain('Daily standup');
     });
 
@@ -134,8 +134,7 @@ describe('context', () => {
       };
 
       const ctx = formatHeartbeatContext(hb);
-      expect(ctx).toContain('## Conflicts');
-      expect(ctx).toContain('A says X');
+      expect(ctx).toContain('Conflict:');
       expect(ctx).toContain('Contradicts B');
     });
 
@@ -151,7 +150,7 @@ describe('context', () => {
       };
 
       const ctx = formatHeartbeatContext(hb);
-      expect(ctx).toContain('## Pending Work');
+      expect(ctx).toContain('Active tasks:');
       expect(ctx).toContain('Finish review');
     });
 
@@ -169,12 +168,11 @@ describe('context', () => {
       };
 
       const ctx = formatHeartbeatContext(hb);
-      expect(ctx).toContain('## Relevant Memories');
-      expect(ctx).toContain('[85%]');
+      expect(ctx).toContain('What you know about them:');
       expect(ctx).toContain('Related context');
     });
 
-    it('includes preamble text in raw signal mode', () => {
+    it('includes heartbeat-signals tags in raw signal mode', () => {
       const hb: HeartbeatContextResult = {
         should_act: true,
         pending_work: [makeMemory({ content: 'Something to do' })],
@@ -186,8 +184,9 @@ describe('context', () => {
       };
 
       const ctx = formatHeartbeatContext(hb);
-      expect(ctx).toContain('Review the signals below');
-      expect(ctx).toContain('HEARTBEAT_OK');
+      expect(ctx).toContain('<heartbeat-signals>');
+      expect(ctx).toContain('</heartbeat-signals>');
+      expect(ctx).toContain('Something to do');
     });
 
     it('formats analyzed heartbeat with action brief', () => {
@@ -212,13 +211,9 @@ describe('context', () => {
 
       const ctx = formatHeartbeatContext(hb);
       expect(ctx).toContain('<heartbeat-signals>');
-      expect(ctx).toContain('## Action Brief');
       expect(ctx).toContain('User has a meeting in 10 minutes');
-      expect(ctx).toContain('## Suggested Actions');
+      expect(ctx).toContain('Key message: You have a meeting coming up soon!');
       expect(ctx).toContain('Remind user about the meeting');
-      expect(ctx).toContain('## Tell the User');
-      expect(ctx).toContain('You have a meeting coming up soon!');
-      expect(ctx).toContain('Urgency: high | Mode: suggest');
     });
 
     it('returns empty for analysis with nothing to do', () => {

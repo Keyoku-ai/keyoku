@@ -124,11 +124,47 @@ export function registerHooks(
       if (isHeartbeat && config.heartbeat) {
         const activitySummary = summarizeRecentActivity(ev.messages ?? []);
 
-        // Detect active conversation: messages array has recent user content
-        const hasUserMessages = Array.isArray(ev.messages) && ev.messages.some((m) => {
+        // Detect active conversation: check if the most recent user message
+        // was within the last 15 minutes. Messages may have a `timestamp` field
+        // (ISO string or epoch ms). If no timestamps available, fall back to
+        // checking only the last few messages in the array.
+        const msgs = (ev.messages ?? []) as Array<{ role?: string; content?: string; timestamp?: string | number }>;
+        const CONVERSATION_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+        const now = Date.now();
+        let hasUserMessages = false;
+
+        // Count real (non-heartbeat) user messages to detect session-establishing messages
+        let userMsgCount = 0;
+        for (const m of msgs) {
           const msg = m as { role?: string; content?: string };
-          return msg.role === 'user' && msg.content && !msg.content.includes('HEARTBEAT');
-        });
+          if (msg.role === 'user' && msg.content && !msg.content.includes('HEARTBEAT')) {
+            userMsgCount++;
+          }
+        }
+
+        // If there's only 1 user message, it's the initial session-establishing message — skip it
+        if (userMsgCount > 1) {
+          // Walk backwards to find the most recent non-heartbeat user message
+          for (let i = msgs.length - 1; i >= 0; i--) {
+            const msg = msgs[i];
+            if (!msg.content || msg.content.includes('HEARTBEAT')) continue;
+            if (msg.role !== 'user') continue;
+
+            // If message has a timestamp, use it
+            if (msg.timestamp) {
+              const ts = typeof msg.timestamp === 'number'
+                ? msg.timestamp
+                : new Date(msg.timestamp).getTime();
+              if (!isNaN(ts) && (now - ts) < CONVERSATION_WINDOW_MS) {
+                hasUserMessages = true;
+              }
+            } else {
+              // No timestamp — only consider it active if it's in the last 4 messages
+              hasUserMessages = i >= msgs.length - 4;
+            }
+            break; // only check the most recent user message
+          }
+        }
 
         const heartbeatQuery = activitySummary
           || 'important things about this user, recent plans, preferences, and what they care about';

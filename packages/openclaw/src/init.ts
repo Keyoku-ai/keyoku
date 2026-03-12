@@ -65,7 +65,7 @@ const c = {
 // ── Output Helpers ───────────────────────────────────────────────────────
 
 let currentStep = 0;
-const totalSteps = 10;
+const totalSteps = 11;
 
 function stepHeader(label: string): void {
   currentStep++;
@@ -502,73 +502,116 @@ Do not repeat old tasks from prior conversations. Only act on what the signals s
 
 /**
  * Set up LLM provider and API keys.
- * Embeddings auto-match the extraction provider (no separate key needed for Gemini).
+ *
+ * Flow:
+ *   5a. Embedding provider (Gemini or OpenAI only — Anthropic has no embedding models)
+ *   5b. Extraction provider (Gemini, OpenAI, or Anthropic)
+ *   5c. Extraction model (depends on provider, shows benchmark notes)
+ *   5d. API key(s) for each unique provider selected
  */
 async function setupLlmProvider(): Promise<void> {
   // Check existing env vars
   const hasOpenAI = !!process.env.OPENAI_API_KEY;
   const hasGemini = !!process.env.GEMINI_API_KEY;
+  const hasAnthropic = !!process.env.ANTHROPIC_API_KEY;
 
-  // Extraction provider
-  const currentProvider = process.env.KEYOKU_EXTRACTION_PROVIDER;
-  if (currentProvider) {
-    success(`Extraction: ${c.bold}${currentProvider}${c.reset} (${process.env.KEYOKU_EXTRACTION_MODEL || 'default model'})`);
-  } else {
-    // Auto-detect best available provider
-    if (hasGemini) {
-      appendToEnvFile('KEYOKU_EXTRACTION_PROVIDER', 'gemini');
-      appendToEnvFile('KEYOKU_EXTRACTION_MODEL', 'gemini-2.5-flash');
-      appendToEnvFile('KEYOKU_EMBEDDING_PROVIDER', 'gemini');
-      appendToEnvFile('KEYOKU_EMBEDDING_MODEL', 'gemini-embedding-001');
-      success(`Auto-configured: ${c.bold}Gemini${c.reset} for extraction + embeddings`);
-    } else if (hasOpenAI) {
-      appendToEnvFile('KEYOKU_EXTRACTION_PROVIDER', 'openai');
-      appendToEnvFile('KEYOKU_EXTRACTION_MODEL', 'gpt-5-mini');
-      appendToEnvFile('KEYOKU_EMBEDDING_PROVIDER', 'openai');
-      appendToEnvFile('KEYOKU_EMBEDDING_MODEL', 'text-embedding-3-small');
-      success(`Auto-configured: ${c.bold}OpenAI${c.reset} for extraction + embeddings`);
-    } else {
-      // No API key detected — prompt for provider
-      const provider = await choose('Which LLM provider?', [
-        { label: 'OpenAI', value: 'openai', desc: 'extraction + embeddings' },
-        { label: 'Gemini', value: 'gemini', desc: 'extraction + embeddings' },
-      ]);
-
-      if (provider === 'gemini') {
-        const key = await prompt('Gemini API key:');
-        if (key) {
-          appendToEnvFile('GEMINI_API_KEY', key);
-          appendToEnvFile('KEYOKU_EXTRACTION_PROVIDER', 'gemini');
-          appendToEnvFile('KEYOKU_EXTRACTION_MODEL', 'gemini-2.5-flash');
-          appendToEnvFile('KEYOKU_EMBEDDING_PROVIDER', 'gemini');
-          appendToEnvFile('KEYOKU_EMBEDDING_MODEL', 'gemini-embedding-001');
-          success('Gemini configured');
-        } else {
-          warn('No key provided — set GEMINI_API_KEY manually');
-        }
-      } else {
-        // Default: OpenAI
-        const key = await prompt('OpenAI API key (sk-...):');
-        if (key && key.startsWith('sk-')) {
-          appendToEnvFile('OPENAI_API_KEY', key);
-          appendToEnvFile('KEYOKU_EXTRACTION_PROVIDER', 'openai');
-          appendToEnvFile('KEYOKU_EXTRACTION_MODEL', 'gpt-5-mini');
-          appendToEnvFile('KEYOKU_EMBEDDING_PROVIDER', 'openai');
-          appendToEnvFile('KEYOKU_EMBEDDING_MODEL', 'text-embedding-3-small');
-          success('OpenAI configured');
-        } else {
-          warn('Invalid key — set OPENAI_API_KEY manually');
-        }
-      }
-    }
+  // Show current config if already set (but still allow reconfiguration)
+  const currentExtraction = process.env.KEYOKU_EXTRACTION_PROVIDER;
+  const currentEmbedding = process.env.KEYOKU_EMBEDDING_PROVIDER;
+  if (currentExtraction && currentEmbedding) {
+    info(`Current: ${c.dim}${currentExtraction}/${process.env.KEYOKU_EXTRACTION_MODEL || 'default'} + ${currentEmbedding}/${process.env.KEYOKU_EMBEDDING_MODEL || 'default'}${c.reset}`);
   }
 
   // Show detected API keys
   const detected: string[] = [];
   if (hasOpenAI) detected.push('OpenAI');
   if (hasGemini) detected.push('Gemini');
+  if (hasAnthropic) detected.push('Anthropic');
   if (detected.length > 0) {
     success(`API keys detected: ${c.bold}${detected.join(', ')}${c.reset}`);
+  }
+
+  // ── 5a: Embedding provider ──────────────────────────────────────────
+  console.log('');
+  log('Embeddings convert text into vectors for semantic search.');
+  log(`${c.yellow}Anthropic does not offer embedding models.${c.reset}`);
+
+  const embeddingProvider = await choose('Embedding provider?', [
+    { label: 'Gemini', value: 'gemini', desc: 'gemini-embedding-001' },
+    { label: 'OpenAI', value: 'openai', desc: 'text-embedding-3-small' },
+  ]);
+
+  if (embeddingProvider === 'gemini') {
+    appendToEnvFile('KEYOKU_EMBEDDING_PROVIDER', 'gemini');  // engine uses "gemini"
+    appendToEnvFile('KEYOKU_EMBEDDING_MODEL', 'gemini-embedding-001');
+  } else {
+    appendToEnvFile('KEYOKU_EMBEDDING_PROVIDER', 'openai');
+    appendToEnvFile('KEYOKU_EMBEDDING_MODEL', 'text-embedding-3-small');
+  }
+  success(`Embedding → ${c.bold}${embeddingProvider}${c.reset}`);
+
+  // ── 5b: Extraction provider ─────────────────────────────────────────
+  const extractionProvider = await choose('Extraction provider?', [
+    { label: 'Gemini (recommended)', value: 'gemini', desc: 'Best price-to-quality ratio' },
+    { label: 'OpenAI', value: 'openai', desc: 'Reliable, widely supported' },
+    { label: 'Anthropic', value: 'anthropic', desc: 'Highest quality, no embeddings (uses your embedding provider)' },
+  ]);
+
+  appendToEnvFile('KEYOKU_EXTRACTION_PROVIDER', extractionProvider);
+
+  // ── 5c: Extraction model ────────────────────────────────────────────
+  let extractionModel: string;
+
+  if (extractionProvider === 'gemini') {
+    extractionModel = await choose('Extraction model?', [
+      { label: 'gemini-3.1-flash-lite-preview (recommended)', value: 'gemini-3.1-flash-lite-preview', desc: 'Cheapest and fastest, near-perfect quality' },
+      { label: 'gemini-2.5-flash', value: 'gemini-2.5-flash', desc: 'Thinking model, highest accuracy, slower' },
+    ]);
+  } else if (extractionProvider === 'openai') {
+    extractionModel = await choose('Extraction model?', [
+      { label: 'gpt-4.1-mini', value: 'gpt-4.1-mini', desc: 'Balanced speed and quality' },
+      { label: 'gpt-4.1-nano', value: 'gpt-4.1-nano', desc: 'Cheapest, slightly less reliable on complex schemas' },
+    ]);
+  } else {
+    // Anthropic — single model
+    extractionModel = 'claude-haiku-4-5-20251001';
+    info(`Extraction model: ${c.bold}claude-haiku-4-5-20251001${c.reset}  ${c.dim}Fast, top-tier quality${c.reset}`);
+  }
+
+  appendToEnvFile('KEYOKU_EXTRACTION_MODEL', extractionModel);
+  success(`Extraction → ${c.bold}${extractionProvider}/${extractionModel}${c.reset}`);
+  log(`${c.dim}More models coming soon — re-run init to update.${c.reset}`);
+
+  // ── 5d: API keys ────────────────────────────────────────────────────
+  // Collect the unique providers that need keys
+  const neededProviders = new Set([embeddingProvider, extractionProvider]);
+
+  for (const provider of neededProviders) {
+    if (provider === 'gemini' && !hasGemini) {
+      const key = await prompt('Gemini API key:');
+      if (key) {
+        appendToEnvFile('GEMINI_API_KEY', key);
+        success('Gemini API key saved');
+      } else {
+        warn('No key provided — set GEMINI_API_KEY manually');
+      }
+    } else if (provider === 'openai' && !hasOpenAI) {
+      const key = await prompt('OpenAI API key (sk-...):');
+      if (key && key.startsWith('sk-')) {
+        appendToEnvFile('OPENAI_API_KEY', key);
+        success('OpenAI API key saved');
+      } else {
+        warn('Invalid key — set OPENAI_API_KEY manually');
+      }
+    } else if (provider === 'anthropic' && !hasAnthropic) {
+      const key = await prompt('Anthropic API key (sk-ant-...):');
+      if (key && key.startsWith('sk-ant-')) {
+        appendToEnvFile('ANTHROPIC_API_KEY', key);
+        success('Anthropic API key saved');
+      } else {
+        warn('Invalid key — set ANTHROPIC_API_KEY manually');
+      }
+    }
   }
 }
 
@@ -727,6 +770,132 @@ async function setupTimezoneAndQuietHours(): Promise<void> {
   }
 
   success(`Quiet hours → ${c.bold}${isNaN(start) ? 23 : start}:00 – ${isNaN(end) ? 7 : end}:00${c.reset} (${timezone})`);
+}
+
+// ── Heartbeat Delivery Setup ─────────────────────────────────────────────
+
+/**
+ * Platform-specific instructions for finding group chat IDs.
+ */
+const GROUP_ID_HINTS: Record<string, string> = {
+  telegram: 'Add @RawDataBot to your group — it replies with the chat ID (a negative number like -4970078838)',
+  discord: 'Right-click your channel → Copy Channel ID (enable Developer Mode in Settings → Advanced first)',
+  slack: 'Open channel details → scroll to the bottom → Channel ID',
+  whatsapp: 'Group JID (shown in WhatsApp Web URL or API logs)',
+  googlechat: 'Space ID from the URL (spaces/<id>)',
+  msteams: 'Channel ID from Teams admin or Graph API',
+  signal: 'Group ID from Signal API logs',
+};
+
+/**
+ * Set up heartbeat delivery in openclaw.json.
+ *
+ * Detects configured channels, asks for a group chat ID,
+ * and writes agents.defaults.heartbeat with target + to.
+ */
+async function setupHeartbeatDelivery(config: OpenClawConfig): Promise<void> {
+  // Detect configured channels from openclaw.json
+  const channels = config.channels as Record<string, unknown> | undefined;
+  const configuredChannels = channels
+    ? Object.keys(channels).filter((k) => k !== 'defaults')
+    : [];
+
+  if (configuredChannels.length === 0) {
+    log('No messaging channels configured in openclaw.json');
+    log('Heartbeat will run but messages won\'t be delivered externally');
+    log(`${c.dim}Configure a channel (telegram, discord, etc.) and re-run init${c.reset}`);
+    return;
+  }
+
+  info(`Detected channel(s): ${c.bold}${configuredChannels.join(', ')}${c.reset}`);
+
+  console.log('');
+  log('Heartbeat lets your agent proactively message you when something needs attention.');
+  log(`${c.yellow}Heartbeats deliver to group chats only — DMs are blocked by OpenClaw.${c.reset}`);
+
+  const enableDelivery = await choose('Set up heartbeat delivery now?', [
+    { label: 'Yes', value: 'yes', desc: 'configure group chat delivery' },
+    { label: 'Skip', value: 'no', desc: 'heartbeat runs but no messages sent' },
+  ]);
+
+  if (enableDelivery === 'no') {
+    // Write target: "none" explicitly so it's clear in config
+    ensureAgentsDefaults(config);
+    (config as any).agents.defaults.heartbeat = {
+      ...((config as any).agents?.defaults?.heartbeat || {}),
+      every: '30m',
+      target: 'none',
+    };
+    writeOpenClawConfig(config);
+    success('Heartbeat delivery → none (runs silently)');
+    return;
+  }
+
+  // Pick channel
+  let targetChannel: string;
+  if (configuredChannels.length === 1) {
+    targetChannel = configuredChannels[0];
+    info(`Using ${c.bold}${targetChannel}${c.reset} (only configured channel)`);
+  } else {
+    const channelOptions = configuredChannels.map((ch) => ({
+      label: ch.charAt(0).toUpperCase() + ch.slice(1),
+      value: ch,
+    }));
+    targetChannel = await choose('Which channel should receive heartbeat messages?', channelOptions);
+  }
+
+  // Get group chat ID
+  const hint = GROUP_ID_HINTS[targetChannel];
+  console.log('');
+  log(`Enter the ${c.bold}group chat ID${c.reset} for ${targetChannel}.`);
+  if (hint) {
+    log(`${c.dim}Tip: ${hint}${c.reset}`);
+  }
+  log(`${c.yellow}Must be a group/channel — DMs will not work.${c.reset}`);
+  console.log('');
+
+  const groupId = await prompt(`${targetChannel} group chat ID:`);
+
+  if (!groupId) {
+    warn('No group ID provided — heartbeat delivery disabled');
+    ensureAgentsDefaults(config);
+    (config as any).agents.defaults.heartbeat = {
+      ...((config as any).agents?.defaults?.heartbeat || {}),
+      every: '30m',
+      target: 'none',
+    };
+    writeOpenClawConfig(config);
+    return;
+  }
+
+  // Pick interval
+  const interval = await choose('Heartbeat interval?', [
+    { label: '15 minutes', value: '15m', desc: 'balanced' },
+    { label: '30 minutes', value: '30m', desc: 'default, lower cost' },
+    { label: '1 hour', value: '1h', desc: 'minimal cost' },
+    { label: '5 minutes', value: '5m', desc: 'frequent, higher cost' },
+  ]);
+
+  // Write to openclaw.json
+  ensureAgentsDefaults(config);
+  (config as any).agents.defaults.heartbeat = {
+    ...((config as any).agents?.defaults?.heartbeat || {}),
+    every: interval,
+    target: targetChannel,
+    to: groupId,
+  };
+  writeOpenClawConfig(config);
+
+  success(`Heartbeat → ${c.bold}${targetChannel}${c.reset} (group: ${c.dim}${groupId}${c.reset}, every ${interval})`);
+}
+
+/**
+ * Ensure agents.defaults exists in config.
+ */
+function ensureAgentsDefaults(config: OpenClawConfig): void {
+  if (!config.agents) (config as any).agents = {};
+  if (!(config as any).agents.defaults) (config as any).agents.defaults = {};
+  if (!(config as any).agents.defaults.heartbeat) (config as any).agents.defaults.heartbeat = {};
 }
 
 // ── Start Keyoku for Migration ──────────────────────────────────────────
@@ -919,14 +1088,18 @@ export async function init(): Promise<void> {
   stepHeader('Timezone & Quiet Hours');
   await setupTimezoneAndQuietHours();
 
-  // Step 8: SKILL.md
+  // Step 8: Heartbeat delivery
+  stepHeader('Heartbeat Delivery');
+  await setupHeartbeatDelivery(config);
+
+  // Step 9: SKILL.md
   stepHeader('Install Skill Guide');
   installSkill();
 
-  // Step 8b: HEARTBEAT.md (extract user rules before writing keyoku section)
+  // Step 9b: HEARTBEAT.md (extract user rules before writing keyoku section)
   const heartbeatRules = installHeartbeatMd();
 
-  // Step 9: Migration
+  // Step 10: Migration
   const memoryMdPath = join(HOME, '.openclaw', 'MEMORY.md');
   const hasMemoryMd = existsSync(memoryMdPath);
   const vectorDbs = discoverVectorDbs(OPENCLAW_MEMORY_DIR);
@@ -1013,7 +1186,7 @@ export async function init(): Promise<void> {
     log('No existing memories found — nothing to migrate');
   }
 
-  // Step 10: Health check
+  // Step 11: Health check
   stepHeader('Health Check');
   await healthCheck();
 
@@ -1039,6 +1212,10 @@ export async function init(): Promise<void> {
   console.log(`  ${c.gray}2.${c.reset} Your agent now has persistent memory + heartbeat awareness`);
   console.log(`     ${c.dim}openclaw memory status${c.reset}    ${c.dim}check memory index status${c.reset}`);
   console.log(`     ${c.dim}openclaw memory search${c.reset}    ${c.dim}search stored memories${c.reset}`);
+  console.log('');
+  console.log(`  ${c.gray}3.${c.reset} ${c.yellow}Heartbeat requires a group chat${c.reset}`);
+  console.log(`     ${c.dim}OpenClaw delivers heartbeats to group chats only (not DMs).${c.reset}`);
+  console.log(`     ${c.dim}Add your bot to a Telegram/Discord/WhatsApp group to receive proactive check-ins.${c.reset}`);
   console.log('');
   console.log(`  ${c.indigo}${'━'.repeat(52)}${c.reset}`);
   console.log('');
