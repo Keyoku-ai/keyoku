@@ -20,6 +20,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import { pipeline } from 'node:stream/promises';
+import { execSync } from 'node:child_process';
 import { KeyokuClient } from '@keyoku/memory';
 import { importMemoryFiles } from './migration.js';
 import { migrateAllVectorStores, discoverVectorDbs } from './migrate-vector-store.js';
@@ -527,6 +528,18 @@ function detectTimezone(): string {
 }
 
 /**
+ * Validate an IANA timezone string.
+ */
+function isValidTimezone(tz: string): boolean {
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Set up autonomy level — controls how aggressively heartbeat acts on signals.
  */
 async function setupAutonomy(config: OpenClawConfig): Promise<void> {
@@ -553,8 +566,16 @@ async function setupAutonomy(config: OpenClawConfig): Promise<void> {
 async function setupTimezoneAndQuietHours(): Promise<void> {
   // Auto-detect timezone
   const detected = detectTimezone();
+  let timezone = detected;
+
   const tzAnswer = await prompt(`Timezone? (detected: ${c.bold}${detected}${c.reset}, Enter to accept):`);
-  const timezone = tzAnswer || detected;
+  if (tzAnswer) {
+    if (isValidTimezone(tzAnswer)) {
+      timezone = tzAnswer;
+    } else {
+      warn(`Invalid timezone "${tzAnswer}" — using detected: ${detected}`);
+    }
+  }
 
   appendToEnvFile('KEYOKU_QUIET_HOURS_TIMEZONE', timezone);
   success(`Timezone → ${c.bold}${timezone}${c.reset}`);
@@ -733,7 +754,7 @@ export async function init(): Promise<void> {
 
     const migrate = await choose('Migrate existing memories into Keyoku?', [
       { label: 'Yes', value: 'yes', desc: 'import everything now' },
-      { label: 'No', value: 'no', desc: 'skip, migrate later with openclaw memory migrate' },
+      { label: 'No', value: 'no', desc: 'skip for now' },
     ]);
 
     if (migrate === 'yes') {
@@ -777,7 +798,7 @@ export async function init(): Promise<void> {
         }
       }
     } else {
-      log('Skipping — run later with: openclaw memory migrate');
+      log('Skipping — you can re-run init later to migrate');
     }
   } else {
     stepHeader('Migrate Memories');
@@ -787,6 +808,24 @@ export async function init(): Promise<void> {
   // Step 10: Health check
   stepHeader('Health Check');
   await healthCheck();
+
+  // ── Restart Gateway ───────────────────────────────────────────────────
+  stepHeader('Restart Gateway');
+  const restartAnswer = await promptLower('Restart OpenClaw gateway now to load the plugin? (Y/n):');
+  const shouldRestart = restartAnswer !== 'n';
+
+  if (shouldRestart) {
+    try {
+      info('Restarting gateway...');
+      execSync('openclaw gateway restart', { stdio: 'inherit', timeout: 130_000 });
+      success('Gateway restarted — Keyoku plugin is now active');
+    } catch {
+      warn('Could not restart gateway automatically');
+      log(`Run manually: ${c.bold}openclaw gateway restart${c.reset}`);
+    }
+  } else {
+    log(`Run later: ${c.bold}openclaw gateway restart${c.reset}`);
+  }
 
   // Close readline before exiting
   closeTtyReadline();
@@ -798,12 +837,14 @@ export async function init(): Promise<void> {
   console.log(`  ${c.green}${c.bold}  Setup complete!${c.reset}`);
   console.log('');
   console.log(`  ${c.white}Next steps:${c.reset}`);
-  console.log(`  ${c.gray}1.${c.reset} Restart OpenClaw to load the plugin`);
-  console.log(`     ${c.dim}openclaw restart${c.reset}    ${c.dim}(or close and reopen your editor)${c.reset}`);
-  console.log('');
-  console.log(`  ${c.gray}2.${c.reset} Your agent now has persistent memory + heartbeat awareness`);
-  console.log(`     ${c.dim}openclaw memory stats${c.reset}     ${c.dim}check memory status${c.reset}`);
-  console.log(`     ${c.dim}openclaw memory migrate${c.reset}   ${c.dim}migrate data later${c.reset}`);
+  if (!shouldRestart) {
+    console.log(`  ${c.gray}1.${c.reset} Restart the gateway to load the plugin`);
+    console.log(`     ${c.bold}openclaw gateway restart${c.reset}`);
+    console.log('');
+  }
+  console.log(`  ${c.gray}${shouldRestart ? '1' : '2'}.${c.reset} Your agent now has persistent memory + heartbeat awareness`);
+  console.log(`     ${c.dim}openclaw memory status${c.reset}    ${c.dim}check memory index status${c.reset}`);
+  console.log(`     ${c.dim}openclaw memory search${c.reset}    ${c.dim}search stored memories${c.reset}`);
   console.log('');
   console.log(`  ${c.indigo}${'━'.repeat(52)}${c.reset}`);
   console.log('');

@@ -1,6 +1,6 @@
 {
   "name": "@keyoku/memory",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "Keyoku memory engine HTTP client",
   "type": "module",
   "main": "dist/index.js",
