@@ -5,18 +5,26 @@
  *
  * 1. Detects OpenClaw config
  * 2. Downloads keyoku-engine binary if missing
- * 3. Registers plugin in openclaw.json
- * 4. Preserves existing HEARTBEAT.md
- * 5. Offers migration of existing OpenClaw memories
+ * 3. Registers plugin in openclaw.json (with full config defaults)
+ * 4. Configures DB path (~/.keyoku/data/keyoku.db)
+ * 5. Sets up LLM provider + API key (OpenAI required for embeddings)
+ * 6. Sets autonomy level (observe/suggest/act)
+ * 7. Auto-detects timezone, configures quiet hours
+ * 8. Installs SKILL.md (LLM guidebook) to workspace
+ * 9. Offers migration of existing OpenClaw memories
+ * 10. Health check to verify everything works
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, createWriteStream } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, createWriteStream, cpSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import { pipeline } from 'node:stream/promises';
 import { KeyokuClient } from '@keyoku/memory';
 import { importMemoryFiles } from './migration.js';
 import { migrateAllVectorStores, discoverVectorDbs } from './migrate-vector-store.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const HOME = process.env.HOME ?? '';
 const OPENCLAW_CONFIG_PATH = join(HOME, '.openclaw', 'openclaw.json');
@@ -44,14 +52,65 @@ function warn(msg: string): void {
   console.log(`  [!] ${msg}`);
 }
 
-async function prompt(question: string): Promise<string> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise((resolve) => {
-    rl.question(`  ${question} `, (answer) => {
-      rl.close();
-      resolve(answer.trim().toLowerCase());
+// Pre-buffered stdin lines for piped (non-TTY) input.
+// When stdin is a pipe, readline only delivers the first line via question().
+// We read all lines upfront and serve them from the buffer.
+let stdinLines: string[] | null = null;
+let stdinReady: Promise<void> | null = null;
+
+function ensureStdinBuffer(): Promise<void> {
+  if (stdinReady) return stdinReady;
+  if (process.stdin.isTTY) {
+    stdinReady = Promise.resolve();
+    return stdinReady;
+  }
+  stdinReady = new Promise((resolve) => {
+    const rl = createInterface({ input: process.stdin });
+    const lines: string[] = [];
+    rl.on('line', (line) => lines.push(line));
+    rl.on('close', () => {
+      stdinLines = lines;
+      resolve();
     });
   });
+  return stdinReady;
+}
+
+// Shared readline for TTY interactive mode
+let ttyRl: ReturnType<typeof createInterface> | null = null;
+
+function closeTtyReadline(): void {
+  if (ttyRl) {
+    ttyRl.close();
+    ttyRl = null;
+  }
+}
+
+async function prompt(question: string): Promise<string> {
+  await ensureStdinBuffer();
+
+  // Piped mode — read from pre-buffered lines
+  if (stdinLines !== null) {
+    process.stdout.write(`  ${question} `);
+    const answer = stdinLines.shift() ?? '';
+    console.log(answer);
+    return answer.trim();
+  }
+
+  // TTY mode — interactive prompt
+  if (!ttyRl) {
+    ttyRl = createInterface({ input: process.stdin, output: process.stdout });
+  }
+  return new Promise((resolve) => {
+    ttyRl!.question(`  ${question} `, (answer) => {
+      resolve(answer.trim());
+    });
+  });
+}
+
+/** Prompt that lowercases the answer (for y/n and enum choices). */
+async function promptLower(question: string): Promise<string> {
+  return (await prompt(question)).toLowerCase();
 }
 
 /**
@@ -163,6 +222,229 @@ function writeOpenClawConfig(config: OpenClawConfig): void {
 }
 
 /**
+ * Install the SKILL.md guidebook to the workspace skills directory.
+ * This teaches the LLM how to interpret heartbeat signals, use memory naturally, etc.
+ */
+function installSkill(): void {
+  // The skill ships with the package at ../skills/keyoku-memory/SKILL.md
+  const bundledSkillDir = join(__dirname, '..', 'skills', 'keyoku-memory');
+  const bundledSkillPath = join(bundledSkillDir, 'SKILL.md');
+
+  // Install to workspace skills (highest precedence)
+  const workspaceSkillDir = join(HOME, '.openclaw', 'skills', 'keyoku-memory');
+
+  if (existsSync(join(workspaceSkillDir, 'SKILL.md'))) {
+    success('SKILL.md already installed in workspace');
+    return;
+  }
+
+  if (!existsSync(bundledSkillPath)) {
+    warn('Bundled SKILL.md not found — skill will load from plugin package instead');
+    return;
+  }
+
+  mkdirSync(workspaceSkillDir, { recursive: true });
+  cpSync(bundledSkillPath, join(workspaceSkillDir, 'SKILL.md'));
+  success('SKILL.md installed to ~/.openclaw/skills/keyoku-memory/');
+}
+
+/**
+ * Set up LLM provider and API keys.
+ * OpenAI is required for embeddings. Extraction provider is configurable.
+ */
+async function setupLlmProvider(): Promise<void> {
+  console.log('');
+  log('LLM Provider Setup');
+  log('Keyoku needs an OpenAI API key for embeddings (text-embedding-3-small).');
+  log('It also needs an LLM for memory extraction (can be OpenAI, Anthropic, or Gemini).');
+  console.log('');
+
+  // Check existing env vars
+  const hasOpenAI = !!process.env.OPENAI_API_KEY;
+  const hasAnthropic = !!process.env.ANTHROPIC_API_KEY;
+  const hasGemini = !!process.env.GEMINI_API_KEY;
+
+  if (hasOpenAI) {
+    success('OPENAI_API_KEY found in environment');
+  } else {
+    warn('OPENAI_API_KEY not found — required for memory embeddings');
+    log('Set it in your shell profile or .env file:');
+    log('  export OPENAI_API_KEY=sk-...');
+    console.log('');
+
+    const key = await prompt('Enter your OpenAI API key (or press Enter to skip):');
+    if (key && key.startsWith('sk-')) {
+      appendToEnvFile('OPENAI_API_KEY', key);
+      process.env.OPENAI_API_KEY = key;
+      success('OPENAI_API_KEY saved to ~/.keyoku/.env');
+    } else if (key) {
+      warn('That doesn\'t look like an OpenAI key (should start with sk-). Skipping.');
+    } else {
+      warn('Skipped — you\'ll need to set OPENAI_API_KEY before using memory features');
+    }
+  }
+
+  // Extraction provider
+  const currentProvider = process.env.KEYOKU_EXTRACTION_PROVIDER;
+  if (currentProvider) {
+    success(`Extraction provider: ${currentProvider} (${process.env.KEYOKU_EXTRACTION_MODEL || 'default model'})`);
+    return;
+  }
+
+  // Auto-detect best available provider
+  if (hasOpenAI || process.env.OPENAI_API_KEY) {
+    log('Using OpenAI for memory extraction (detected OPENAI_API_KEY)');
+    appendToEnvFile('KEYOKU_EXTRACTION_PROVIDER', 'openai');
+    appendToEnvFile('KEYOKU_EXTRACTION_MODEL', 'gpt-4.1-mini');
+  } else if (hasGemini) {
+    log('Using Gemini for memory extraction (detected GEMINI_API_KEY)');
+    appendToEnvFile('KEYOKU_EXTRACTION_PROVIDER', 'gemini');
+    appendToEnvFile('KEYOKU_EXTRACTION_MODEL', 'gemini-3.1-flash-lite-preview');
+  } else if (hasAnthropic) {
+    log('Using Anthropic for memory extraction (detected ANTHROPIC_API_KEY)');
+    appendToEnvFile('KEYOKU_EXTRACTION_PROVIDER', 'anthropic');
+    appendToEnvFile('KEYOKU_EXTRACTION_MODEL', 'claude-haiku-4-5-20251001');
+  } else {
+    warn('No LLM API key detected. Memory extraction will not work.');
+    warn('Set at least one: OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY');
+  }
+}
+
+/**
+ * Append a key=value to ~/.keyoku/.env (creates if needed).
+ * This file is sourced by the service when starting keyoku-engine.
+ */
+function appendToEnvFile(key: string, value: string): void {
+  const envDir = join(HOME, '.keyoku');
+  const envPath = join(envDir, '.env');
+  mkdirSync(envDir, { recursive: true });
+
+  let content = '';
+  if (existsSync(envPath)) {
+    content = readFileSync(envPath, 'utf-8');
+    // Replace existing key if present
+    const regex = new RegExp(`^${key}=.*$`, 'm');
+    if (regex.test(content)) {
+      content = content.replace(regex, `${key}=${value}`);
+      writeFileSync(envPath, content, 'utf-8');
+      return;
+    }
+  }
+
+  // Append new key
+  const line = `${key}=${value}\n`;
+  writeFileSync(envPath, content + line, 'utf-8');
+}
+
+/**
+ * Detect the system timezone (IANA format).
+ */
+function detectTimezone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  } catch {
+    return 'America/Los_Angeles';
+  }
+}
+
+/**
+ * Set up autonomy level — controls how aggressively heartbeat acts on signals.
+ */
+async function setupAutonomy(config: OpenClawConfig): Promise<void> {
+  console.log('');
+  log('Autonomy Level');
+  log('Controls how the agent acts on heartbeat signals (deadlines, reminders, etc.).');
+  console.log('');
+  log('  observe  — Note signals silently, only act when the user asks');
+  log('  suggest  — Mention important signals naturally in conversation (recommended)');
+  log('  act      — Proactively execute actions (create reminders, follow up, etc.)');
+  console.log('');
+
+  const answer = await promptLower('Autonomy level [observe/suggest/act] (default: suggest):');
+  const level = ['observe', 'suggest', 'act'].includes(answer) ? answer : 'suggest';
+
+  // Save to plugin config in openclaw.json
+  const entry = config.plugins?.entries?.['keyoku-memory'];
+  if (entry) {
+    if (!entry.config) entry.config = {};
+    entry.config.autonomy = level;
+    writeOpenClawConfig(config);
+  }
+
+  success(`Autonomy set to: ${level}`);
+}
+
+/**
+ * Set up timezone and quiet hours — controls when heartbeats are suppressed.
+ */
+async function setupTimezoneAndQuietHours(): Promise<void> {
+  console.log('');
+  log('Timezone & Quiet Hours');
+
+  // Auto-detect timezone
+  const detected = detectTimezone();
+  const tzAnswer = await prompt(`Timezone? (detected: ${detected}, press Enter to accept):`);
+  const timezone = tzAnswer || detected;
+
+  appendToEnvFile('KEYOKU_QUIET_HOURS_TIMEZONE', timezone);
+  success(`Timezone: ${timezone}`);
+
+  // Quiet hours
+  console.log('');
+  log('Quiet hours suppress non-urgent heartbeat signals (e.g., 11pm–7am).');
+  const enableQuiet = await promptLower('Enable quiet hours? (y/n, default: y):');
+
+  if (enableQuiet === 'n') {
+    appendToEnvFile('KEYOKU_QUIET_HOURS_ENABLED', 'false');
+    log('Quiet hours disabled — heartbeats can fire anytime');
+    return;
+  }
+
+  appendToEnvFile('KEYOKU_QUIET_HOURS_ENABLED', 'true');
+
+  const startAnswer = await prompt('Quiet start hour (0-23, default: 23):');
+  const endAnswer = await prompt('Quiet end hour (0-23, default: 7):');
+
+  const start = startAnswer ? parseInt(startAnswer, 10) : 23;
+  const end = endAnswer ? parseInt(endAnswer, 10) : 7;
+
+  if (!isNaN(start) && start >= 0 && start <= 23) {
+    appendToEnvFile('KEYOKU_QUIET_HOUR_START', String(start));
+  }
+  if (!isNaN(end) && end >= 0 && end <= 23) {
+    appendToEnvFile('KEYOKU_QUIET_HOUR_END', String(end));
+  }
+
+  success(`Quiet hours: ${isNaN(start) ? 23 : start}:00 – ${isNaN(end) ? 7 : end}:00 (${timezone})`);
+}
+
+/**
+ * Run a health check against keyoku-engine to verify the install works.
+ */
+async function healthCheck(): Promise<boolean> {
+  const url = 'http://localhost:18900';
+  log('Running health check...');
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3000);
+    const res = await fetch(`${url}/api/v1/health`, { signal: controller.signal });
+    clearTimeout(timer);
+
+    if (res.ok) {
+      success('Keyoku engine is healthy');
+      return true;
+    }
+    warn(`Health check returned ${res.status}`);
+    return false;
+  } catch {
+    // Engine isn't running yet — that's fine, it auto-starts with OpenClaw
+    log('Keyoku engine not running (it will auto-start when OpenClaw loads the plugin)');
+    return false;
+  }
+}
+
+/**
  * Main init function — orchestrates the full setup.
  */
 export async function init(): Promise<void> {
@@ -179,7 +461,9 @@ export async function init(): Promise<void> {
 
   // Step 2: Check if already installed
   const entries = config.plugins?.entries ?? {};
-  if (entries['keyoku-memory']?.enabled) {
+  const alreadyRegistered = !!entries['keyoku-memory']?.enabled;
+
+  if (alreadyRegistered) {
     success('Keyoku plugin already registered in OpenClaw config');
   } else {
     // Step 3: Ensure binary exists
@@ -192,7 +476,7 @@ export async function init(): Promise<void> {
         warn('Could not download binary. You can install it manually:');
         warn('  Visit: https://github.com/keyoku-ai/keyoku-engine/releases');
         warn(`  Place the binary at: ${KEYOKU_BIN_PATH}`);
-        const proceed = await prompt('Continue without binary? (y/n)');
+        const proceed = await promptLower('Continue without binary? (y/n)');
         if (proceed !== 'y') {
           process.exit(1);
         }
@@ -204,14 +488,40 @@ export async function init(): Promise<void> {
     if (!config.plugins.entries) config.plugins.entries = {};
     if (!config.plugins.slots) config.plugins.slots = {};
 
-    config.plugins.entries['keyoku-memory'] = { enabled: true, config: {} };
+    config.plugins.entries['keyoku-memory'] = {
+      enabled: true,
+      config: {
+        keyokuUrl: 'http://localhost:18900',
+        autoRecall: true,
+        autoCapture: true,
+        heartbeat: true,
+        topK: 5,
+      },
+    };
     config.plugins.slots['memory'] = 'keyoku-memory';
 
     writeOpenClawConfig(config);
     success('Plugin registered in openclaw.json');
   }
 
-  // Step 5: Check for existing memories to migrate
+  // Step 5: Ensure DB path is configured
+  const dbPath = join(HOME, '.keyoku', 'data', 'keyoku.db');
+  appendToEnvFile('KEYOKU_DB_PATH', dbPath);
+
+  // Step 6: Set up LLM provider + API keys
+  await setupLlmProvider();
+
+  // Step 7: Autonomy level
+  await setupAutonomy(config);
+
+  // Step 8: Timezone & quiet hours
+  await setupTimezoneAndQuietHours();
+
+  // Step 9: Install SKILL.md guidebook
+  console.log('');
+  installSkill();
+
+  // Step 10: Check for existing memories to migrate
   const memoryMdPath = join(HOME, '.openclaw', 'MEMORY.md');
   const hasMemoryMd = existsSync(memoryMdPath);
   const vectorDbs = discoverVectorDbs(OPENCLAW_MEMORY_DIR);
@@ -223,12 +533,15 @@ export async function init(): Promise<void> {
     if (hasMemoryMd) log(`  - MEMORY.md`);
     if (hasVectorStores) log(`  - ${vectorDbs.length} vector store(s) in ~/.openclaw/memory/`);
 
-    const migrate = await prompt('Migrate existing memories into Keyoku? (y/n)');
+    const migrate = await promptLower('Migrate existing memories into Keyoku? (y/n)');
 
     if (migrate === 'y') {
       log('Starting migration...');
 
-      const client = new KeyokuClient({ baseUrl: 'http://localhost:18900' });
+      const client = new KeyokuClient({
+        baseUrl: 'http://localhost:18900',
+        token: process.env.KEYOKU_SESSION_TOKEN,
+      });
       const entityId = 'default';
 
       // Migrate markdown files
@@ -266,9 +579,19 @@ export async function init(): Promise<void> {
     }
   }
 
-  // Done
+  // Step 11: Health check
+  console.log('');
+  await healthCheck();
+
+  // Done — close readline before exiting
+  closeTtyReadline();
+
   console.log('\n  Setup complete!\n');
+  log('Restart OpenClaw to load the plugin:');
+  log('  openclaw restart    (or close and reopen your editor)');
+  console.log('');
   log('The plugin will auto-start Keyoku when OpenClaw loads.');
+  log('Your agent now has persistent memory and heartbeat awareness.');
   log('Run `openclaw memory stats` to check your memory status.');
   log('Run `openclaw memory migrate` to migrate data later.\n');
 }

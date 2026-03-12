@@ -24,8 +24,14 @@
       "optional": true
     }
   },
+  "files": [
+    "dist",
+    "bin",
+    "skills"
+  ],
   "openclaw": {
-    "extensions": ["dist/index.js"]
+    "extensions": ["dist/index.js"],
+    "skills": ["skills/keyoku-memory"]
   },
   "license": "MIT",
   "engines": {

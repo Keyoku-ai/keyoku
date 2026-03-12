@@ -1,0 +1,31 @@
+name: E2E Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and run E2E tests
+        env:
+          KEYOKU_SESSION_TOKEN: test-token
+          OPENCLAW_GATEWAY_TOKEN: keyoku-test-token
+          KEYOKU_EXTRACTION_PROVIDER: ${{ secrets.KEYOKU_EXTRACTION_PROVIDER }}
+          KEYOKU_EXTRACTION_MODEL: ${{ secrets.KEYOKU_EXTRACTION_MODEL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          docker compose -f tests/e2e/docker-compose.yml up --build --exit-code-from keyoku-e2e
+
+      - name: Cleanup
+        if: always()
+        run: docker compose -f tests/e2e/docker-compose.yml down -v

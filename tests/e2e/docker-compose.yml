@@ -1,0 +1,31 @@
+services:
+  # Full test suite: unit tests + E2E tests, then exit
+  # Usage: docker compose -f tests/e2e/docker-compose.yml up --build
+  keyoku-e2e:
+    build:
+      context: ../..
+      dockerfile: tests/e2e/Dockerfile
+      args:
+        KEYOKU_VERSION: ${KEYOKU_VERSION:-v0.1.0}
+    command: full-test
+    ports:
+      - "18790:18789"
+      - "18902:18900"
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-keyoku-test-token}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      OPENCLAW_HOOKS_TOKEN: ${OPENCLAW_HOOKS_TOKEN:-hooks-test-token}
+      KEYOKU_SESSION_TOKEN: ${KEYOKU_SESSION_TOKEN:-test-token}
+      KEYOKU_EXTRACTION_PROVIDER: ${KEYOKU_EXTRACTION_PROVIDER:-gemini}
+      KEYOKU_EXTRACTION_MODEL: ${KEYOKU_EXTRACTION_MODEL:-gemini-3.1-flash-lite-preview}
+    volumes:
+      - e2e-test-data:/data
+    init: true
+
+volumes:
+  e2e-test-data:

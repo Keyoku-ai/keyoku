@@ -1,0 +1,44 @@
+{
+  "gateway": {
+    "auth": {
+      "mode": "token",
+      "token": "keyoku-test-token"
+    },
+    "controlUi": {
+      "dangerouslyAllowHostHeaderOriginFallback": true,
+      "dangerouslyDisableDeviceAuth": true,
+      "allowInsecureAuth": true
+    }
+  },
+  "hooks": {
+    "enabled": true,
+    "token": "hooks-test-token"
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "openai/gpt-5.4"
+      },
+      "heartbeat": {
+        "every": "15m",
+        "target": "telegram",
+        "to": "-4970078838",
+        "session": "telegram:group:-4970078838"
+      }
+    }
+  },
+  "channels": {
+    "telegram": {
+      "dmPolicy": "open",
+      "allowFrom": ["*"],
+      "groupPolicy": "open",
+      "groups": {
+        "*": { "requireMention": false }
+      },
+      "actions": {
+        "reactions": true,
+        "sendMessage": true
+      }
+    }
+  }
+}

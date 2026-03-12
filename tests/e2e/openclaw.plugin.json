@@ -1,0 +1,51 @@
+{
+  "id": "keyoku-memory",
+  "kind": "memory",
+  "skills": ["skills/keyoku-memory"],
+  "uiHints": {
+    "keyokuUrl": {
+      "label": "Keyoku URL",
+      "placeholder": "http://localhost:18900",
+      "help": "URL of the Keyoku memory engine"
+    },
+    "autoCapture": {
+      "label": "Auto-Capture",
+      "help": "Automatically capture important information from conversations"
+    },
+    "autoRecall": {
+      "label": "Auto-Recall",
+      "help": "Automatically inject relevant memories into context"
+    },
+    "heartbeat": {
+      "label": "Heartbeat Enhancement",
+      "help": "Enhance heartbeat runs with memory data"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": true,
+    "properties": {
+      "keyokuUrl": {
+        "type": "string"
+      },
+      "autoCapture": {
+        "type": "boolean"
+      },
+      "autoRecall": {
+        "type": "boolean"
+      },
+      "heartbeat": {
+        "type": "boolean"
+      },
+      "topK": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 20
+      },
+      "autonomy": {
+        "type": "string",
+        "enum": ["observe", "suggest", "act"]
+      }
+    }
+  }
+}

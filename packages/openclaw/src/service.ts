@@ -4,7 +4,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import type { PluginApi } from './types.js';
@@ -65,6 +65,26 @@ function ensureDataDir(): string {
   return resolve(dir, 'keyoku.db');
 }
 
+/**
+ * Load key=value pairs from ~/.keyoku/.env if it exists.
+ * These are written by `npx @keyoku/openclaw init` during setup.
+ */
+function loadKeyokuEnv(): Record<string, string> {
+  const envPath = resolve(process.env.HOME ?? '', '.keyoku', '.env');
+  if (!existsSync(envPath)) return {};
+
+  const vars: Record<string, string> = {};
+  const content = readFileSync(envPath, 'utf-8');
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq === -1) continue;
+    vars[trimmed.slice(0, eq)] = trimmed.slice(eq + 1);
+  }
+  return vars;
+}
+
 export function registerService(api: PluginApi, keyokuUrl: string): void {
   api.registerService({
     id: 'keyoku-engine',
@@ -82,12 +102,15 @@ export function registerService(api: PluginApi, keyokuUrl: string): void {
         return;
       }
 
-      // Prepare environment
-      const env = { ...process.env };
+      // Prepare environment — merge ~/.keyoku/.env (init-saved keys) with process.env
+      const keyokuEnv = loadKeyokuEnv();
+      const env = { ...keyokuEnv, ...process.env };
       if (!env.KEYOKU_SESSION_TOKEN) {
         env.KEYOKU_SESSION_TOKEN = randomBytes(16).toString('hex');
         api.logger.info('keyoku: Generated session token');
       }
+      // Expose token to the host process so the client (index.ts) can authenticate
+      process.env.KEYOKU_SESSION_TOKEN = env.KEYOKU_SESSION_TOKEN;
       if (!env.KEYOKU_DB_PATH) {
         env.KEYOKU_DB_PATH = ensureDataDir();
         api.logger.info(`keyoku: Using database at ${env.KEYOKU_DB_PATH}`);
