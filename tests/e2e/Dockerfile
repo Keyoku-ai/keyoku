@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Keyoku E2E Test — OpenClaw + Keyoku plugin (NO pre-registration)
 # Tests: keyoku init inside the container, then starts gateway for e2e
 #
@@ -20,7 +21,7 @@ USER root
 RUN apt-get update -qq && apt-get install -y -qq curl python3 && rm -rf /var/lib/apt/lists/*
 
 # Download pre-built keyoku binary from GitHub releases
-ARG KEYOKU_VERSION=v0.1.0
+ARG KEYOKU_VERSION=v0.2.1
 ARG TARGETARCH
 RUN ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "amd64") && \
     OS="linux" && \
