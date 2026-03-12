@@ -541,6 +541,7 @@ export async function init(): Promise<void> {
       const client = new KeyokuClient({
         baseUrl: 'http://localhost:18900',
         token: process.env.KEYOKU_SESSION_TOKEN,
+        timeout: 60000,
       });
       const entityId = 'default';
 
