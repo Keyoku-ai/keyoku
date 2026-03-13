@@ -16,7 +16,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - ESLint + Prettier configuration with type safety fixes
 
 ### Fixed
-- `HEARTBEAT.md` installed during init instead of plugin register
 - Auto-capture pipeline, entity ID resolution, and client timeout handling
 - Workspace dependency version sync
 
