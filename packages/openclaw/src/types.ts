@@ -22,7 +22,11 @@ export type AgentTool = {
   label?: string;
   description: string;
   parameters: unknown;
-  execute: (toolCallId: string, params: Record<string, unknown>) => Promise<ToolResult>;
+  execute: (
+    toolCallId: string,
+    params: Record<string, unknown>,
+    context?: unknown,
+  ) => Promise<ToolResult>;
 };
 
 export type PluginApi = {

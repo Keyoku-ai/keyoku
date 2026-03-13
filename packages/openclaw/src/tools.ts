@@ -9,11 +9,12 @@
 import { Type } from '@sinclair/typebox';
 import type { KeyokuClient } from '@keyoku/memory';
 import type { PluginApi } from './types.js';
+import type { EntityResolver } from './entity-resolver.js';
 
 export function registerTools(
   api: PluginApi,
   client: KeyokuClient,
-  entityId: string,
+  resolver: EntityResolver,
   agentId: string,
 ): void {
   // memory_search — OpenClaw-standard search tool (replaces memory-core's built-in)
@@ -28,7 +29,7 @@ export function registerTools(
         maxResults: Type.Optional(Type.Number({ description: 'Max results (default: 5)' })),
         minScore: Type.Optional(Type.Number({ description: 'Minimum relevance score 0-1' })),
       }),
-      async execute(_toolCallId, params) {
+      async execute(_toolCallId, params, context) {
         const {
           query,
           maxResults = 5,
@@ -38,6 +39,19 @@ export function registerTools(
           maxResults?: number;
           minScore?: number;
         };
+        if (!resolver.isAllowed(context, 'recall')) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({ results: [], provider: 'memory', mode: 'semantic' }),
+              },
+            ],
+            details: { count: 0 },
+          };
+        }
+
+        const entityId = resolver.resolve(context, 'tool');
         const results = await client.search(entityId, query, {
           limit: maxResults,
           min_score: minScore,
@@ -90,7 +104,7 @@ export function registerTools(
         from: Type.Optional(Type.Number({ description: 'Line offset (unused)' })),
         lines: Type.Optional(Type.Number({ description: 'Line count (unused)' })),
       }),
-      async execute(_toolCallId, params) {
+      async execute(_toolCallId, params, context) {
         const { path: memPath } = params as { path: string; from?: number; lines?: number };
 
         if (memPath.startsWith('mem:') || memPath.startsWith('keyoku:')) {
@@ -115,6 +129,18 @@ export function registerTools(
         }
 
         // Fallback: treat path as a search query
+        if (!resolver.isAllowed(context, 'recall')) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({ text: '', path: memPath, error: 'Not found' }),
+              },
+            ],
+          };
+        }
+
+        const entityId = resolver.resolve(context, 'tool');
         const results = await client.search(entityId, memPath, { limit: 1 });
         if (results.length > 0) {
           return {
@@ -150,8 +176,16 @@ export function registerTools(
       parameters: Type.Object({
         text: Type.String({ description: 'Information to remember' }),
       }),
-      async execute(_toolCallId, params) {
+      async execute(_toolCallId, params, context) {
         const { text } = params as { text: string };
+        if (!resolver.isAllowed(context, 'capture')) {
+          return {
+            content: [{ type: 'text', text: 'Skipped: memory capture disabled for this chat context.' }],
+            details: { skipped: true },
+          };
+        }
+
+        const entityId = resolver.resolve(context, 'tool');
         const result = await client.remember(entityId, text, { agent_id: agentId });
 
         return {
@@ -197,7 +231,8 @@ export function registerTools(
       label: 'Memory Stats',
       description: 'Get memory statistics for the current entity.',
       parameters: Type.Object({}),
-      async execute() {
+      async execute(_toolCallId, _params, context) {
+        const entityId = resolver.resolve(context, 'tool');
         const stats = await client.getStats(entityId);
 
         const text = [
@@ -229,8 +264,16 @@ export function registerTools(
           description: 'Cron tag: "daily", "weekly", "monthly", or cron expression',
         }),
       }),
-      async execute(_toolCallId, params) {
+      async execute(_toolCallId, params, context) {
         const { content, cron_tag } = params as { content: string; cron_tag: string };
+        if (!resolver.isAllowed(context, 'capture')) {
+          return {
+            content: [{ type: 'text', text: 'Skipped: scheduling disabled for this chat context.' }],
+            details: { skipped: true },
+          };
+        }
+
+        const entityId = resolver.resolve(context, 'tool');
         const result = await client.createSchedule(entityId, agentId, content, cron_tag);
 
         return {
@@ -249,7 +292,15 @@ export function registerTools(
       label: 'Schedule List',
       description: 'List active schedules.',
       parameters: Type.Object({}),
-      async execute() {
+      async execute(_toolCallId, _params, context) {
+        if (!resolver.isAllowed(context, 'recall')) {
+          return {
+            content: [{ type: 'text', text: 'No active schedules.' }],
+            details: { count: 0 },
+          };
+        }
+
+        const entityId = resolver.resolve(context, 'tool');
         const schedules = await client.listSchedules(entityId, agentId);
 
         if (schedules.length === 0) {

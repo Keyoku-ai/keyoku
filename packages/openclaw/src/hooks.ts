@@ -8,6 +8,7 @@ import type { KeyokuClient } from '@keyoku/memory';
 import type { KeyokuConfig } from './config.js';
 import { formatMemoryContext, formatHeartbeatContext } from './context.js';
 import type { PluginApi } from './types.js';
+import type { EntityResolver } from './entity-resolver.js';
 
 /**
  * Strip OpenClaw-injected inbound metadata blocks from a prompt string.
@@ -108,7 +109,7 @@ function summarizeRecentActivity(messages: unknown[], maxMessages = 6): string {
 export function registerHooks(
   api: PluginApi,
   client: KeyokuClient,
-  entityId: string,
+  resolver: EntityResolver,
   agentId: string,
   config: Required<KeyokuConfig>,
 ): void {
@@ -122,6 +123,12 @@ export function registerHooks(
 
       // Heartbeat path: engine handles all intelligence (cooldown, novelty, active hours, nudges)
       if (isHeartbeat && config.heartbeat) {
+        if (!resolver.isAllowed(ev, 'heartbeat')) {
+          api.logger.debug?.('keyoku: heartbeat recall skipped in group context by policy');
+          return;
+        }
+
+        const entityId = resolver.resolve(ev, 'heartbeat');
         const activitySummary = summarizeRecentActivity(ev.messages ?? []);
 
         // Detect active conversation: check if the most recent user message
@@ -215,6 +222,12 @@ export function registerHooks(
 
       // Auto-recall path: search memories relevant to user's prompt + recent context
       if (config.autoRecall && !isHeartbeat) {
+        if (!resolver.isAllowed(ev, 'recall')) {
+          api.logger.debug?.('keyoku: auto-recall skipped in group context by policy');
+          return;
+        }
+
+        const entityId = resolver.resolve(ev, 'recall');
         try {
           // Strip OpenClaw metadata blocks so the search query is the actual user message
           const cleanPrompt = stripInboundMetadata(ev.prompt);
@@ -292,6 +305,7 @@ export function registerHooks(
         return;
 
       try {
+        const entityId = resolver.resolve(ev, 'heartbeat');
         await client.recordHeartbeatMessage(entityId, response, { agent_id: agentId });
       } catch (err) {
         api.logger.warn(`keyoku: failed to record heartbeat message: ${String(err)}`);

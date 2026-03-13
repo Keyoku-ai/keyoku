@@ -22,16 +22,18 @@ import type { KeyokuClient } from '@keyoku/memory';
 import type { KeyokuConfig } from './config.js';
 import { looksLikePromptInjection } from './capture.js';
 import type { PluginApi } from './types.js';
+import type { EntityResolver } from './entity-resolver.js';
 
 export function registerIncrementalCapture(
   api: PluginApi,
   client: KeyokuClient,
-  entityId: string,
+  resolver: EntityResolver,
   agentId: string,
   config: Required<KeyokuConfig>,
 ): void {
   // Stash for the most recent user prompt, paired with the next assistant response
   let pendingUserPrompt: string | null = null;
+  let pendingEntityId: string | null = null;
 
   // Step 1: Stash user prompt (no API call yet)
   api.on(
@@ -39,6 +41,12 @@ export function registerIncrementalCapture(
     async (event: unknown) => {
       const ev = event as { prompt?: string };
       if (!ev.prompt || ev.prompt.length < 10) return;
+
+      if (!resolver.isAllowed(ev, 'capture')) {
+        pendingUserPrompt = null;
+        pendingEntityId = null;
+        return;
+      }
 
       // Don't stash heartbeat prompts or injected blocks
       if (ev.prompt.includes('HEARTBEAT')) return;
@@ -48,6 +56,7 @@ export function registerIncrementalCapture(
       if (looksLikePromptInjection(ev.prompt)) return;
 
       pendingUserPrompt = ev.prompt;
+      pendingEntityId = resolver.resolve(ev, 'capture');
     },
     { priority: -10 },
   ); // Low priority — runs after auto-recall
@@ -91,6 +100,12 @@ export function registerIncrementalCapture(
 
     if (!assistantContent || assistantContent.length < 20) return;
 
+    if (!resolver.isAllowed(ev, 'capture')) {
+      pendingUserPrompt = null;
+      pendingEntityId = null;
+      return;
+    }
+
     // Skip heartbeat/memory noise
     if (assistantContent === 'HEARTBEAT_OK' || assistantContent === 'NO_REPLY') return;
     if (
@@ -115,8 +130,11 @@ export function registerIncrementalCapture(
       exchange = exchange.slice(0, config.captureMaxChars);
     }
 
+    const resolvedEntityId = pendingEntityId ?? resolver.resolve(ev, 'capture');
+    pendingEntityId = null;
+
     try {
-      await client.remember(entityId, exchange, {
+      await client.remember(resolvedEntityId, exchange, {
         agent_id: agentId,
         source: 'conversation',
       });

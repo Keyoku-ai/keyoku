@@ -1,6 +1,6 @@
 # Dynamic Entity Scoping (Draft)
 
-Status: **proposal** (not implemented yet)
+Status: **implemented (initial slice)** — runtime resolver + strategy config landed; further hardening/testing can iterate.
 
 Tracked by issue: https://github.com/Keyoku-ai/keyoku/issues/1
 

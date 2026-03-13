@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { registerTools } from '../src/tools.js';
+import { resolveConfig } from '../src/config.js';
+import { createEntityResolver } from '../src/entity-resolver.js';
 import type { PluginApi, AgentTool } from '../src/types.js';
 
 // Mock KeyokuClient
@@ -42,7 +44,8 @@ describe('tools', () => {
   beforeEach(() => {
     mockClient = createMockClient();
     mockApi = createMockApi();
-    registerTools(mockApi.api, mockClient as any, 'entity-1', 'agent-1');
+    const cfg = resolveConfig();
+    registerTools(mockApi.api, mockClient as any, createEntityResolver('entity-1', cfg), 'agent-1');
   });
 
   it('registers 7 tools', () => {
@@ -82,6 +85,23 @@ describe('tools', () => {
 
       expect(mockClient.search).toHaveBeenCalledWith('entity-1', 'test', { limit: 10, min_score: 0.1 });
     });
+
+    it('supports scoped entity from tool context', async () => {
+      mockClient = createMockClient();
+      mockApi = createMockApi();
+      const cfg = resolveConfig({ entityStrategy: 'per-session' });
+      registerTools(mockApi.api, mockClient as any, createEntityResolver('entity-1', cfg), 'agent-1');
+      mockClient.search.mockResolvedValue([]);
+
+      const tool = mockApi.tools['memory_search'];
+      await tool.execute('call-1', { query: 'test' }, { sessionKey: 'abc-123' });
+
+      expect(mockClient.search).toHaveBeenCalledWith(
+        'entity-1:session:abc-123',
+        'test',
+        { limit: 5, min_score: 0.1 },
+      );
+    });
   });
 
   describe('memory_store', () => {
@@ -98,6 +118,19 @@ describe('tools', () => {
       );
       expect(result.content[0].text).toContain('Stored');
       expect(result.content[0].text).toContain('dark mode');
+    });
+
+    it('skips capture in group contexts when disabled', async () => {
+      mockClient = createMockClient();
+      mockApi = createMockApi();
+      const cfg = resolveConfig({ captureInGroups: false });
+      registerTools(mockApi.api, mockClient as any, createEntityResolver('entity-1', cfg), 'agent-1');
+
+      const tool = mockApi.tools['memory_store'];
+      const result = await tool.execute('call-1', { text: 'User prefers dark mode' }, { chat_type: 'group' });
+
+      expect(result.details).toEqual({ skipped: true });
+      expect(mockClient.remember).not.toHaveBeenCalled();
     });
   });
 

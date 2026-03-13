@@ -428,6 +428,15 @@ function installPluginFiles(): void {
         heartbeat: { type: 'boolean' },
         topK: { type: 'number', minimum: 1, maximum: 20 },
         autonomy: { type: 'string', enum: ['observe', 'suggest', 'act'] },
+        entityId: { type: 'string' },
+        agentId: { type: 'string' },
+        entityStrategy: {
+          type: 'string',
+          enum: ['static', 'per-user', 'per-channel', 'per-session', 'template'],
+        },
+        entityTemplate: { type: 'string' },
+        captureInGroups: { type: 'boolean' },
+        recallInGroups: { type: 'boolean' },
       },
     },
   };

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { registerHooks } from '../src/hooks.js';
 import { resolveConfig } from '../src/config.js';
+import { createEntityResolver } from '../src/entity-resolver.js';
 import type { PluginApi } from '../src/types.js';
 
 function createMockClient() {
@@ -39,7 +40,8 @@ describe('hooks', () => {
     beforeEach(() => {
       mockClient = createMockClient();
       mockApi = createMockApi();
-      registerHooks(mockApi.api, mockClient as any, 'entity-1', 'agent-1', resolveConfig({ autoRecall: true, heartbeat: false, autoCapture: false }));
+      const cfg = resolveConfig({ autoRecall: true, heartbeat: false, autoCapture: false });
+      registerHooks(mockApi.api, mockClient as any, createEntityResolver('entity-1', cfg), 'agent-1', cfg);
     });
 
     it('registers before_prompt_build hook', () => {
@@ -78,13 +80,53 @@ describe('hooks', () => {
       expect(result).toBeUndefined();
       expect(mockApi.api.logger.warn).toHaveBeenCalled();
     });
+
+    it('supports per-session entity strategy', async () => {
+      const cfg = resolveConfig({
+        autoRecall: true,
+        heartbeat: false,
+        autoCapture: false,
+        entityStrategy: 'per-session',
+      });
+      mockApi = createMockApi();
+      registerHooks(mockApi.api, mockClient as any, createEntityResolver('entity-1', cfg), 'agent-1', cfg);
+      mockClient.search.mockResolvedValue([]);
+
+      await mockApi.hooks['before_prompt_build']({ prompt: 'What do I prefer?', sessionKey: 'sess-123' });
+
+      expect(mockClient.search).toHaveBeenCalledWith(
+        'entity-1:session:sess-123',
+        'What do I prefer?',
+        { limit: 5, min_score: 0.15 },
+      );
+    });
+
+    it('respects recallInGroups=false policy', async () => {
+      const cfg = resolveConfig({
+        autoRecall: true,
+        heartbeat: false,
+        autoCapture: false,
+        recallInGroups: false,
+      });
+      mockApi = createMockApi();
+      registerHooks(mockApi.api, mockClient as any, createEntityResolver('entity-1', cfg), 'agent-1', cfg);
+
+      const result = await mockApi.hooks['before_prompt_build']({
+        prompt: 'What do I prefer?',
+        chat_type: 'group',
+      });
+
+      expect(result).toBeUndefined();
+      expect(mockClient.search).not.toHaveBeenCalled();
+    });
   });
 
   describe('before_prompt_build (heartbeat)', () => {
     beforeEach(() => {
       mockClient = createMockClient();
       mockApi = createMockApi();
-      registerHooks(mockApi.api, mockClient as any, 'entity-1', 'agent-1', resolveConfig({ autoRecall: false, heartbeat: true, autoCapture: false }));
+      const cfg = resolveConfig({ autoRecall: false, heartbeat: true, autoCapture: false });
+      registerHooks(mockApi.api, mockClient as any, createEntityResolver('entity-1', cfg), 'agent-1', cfg);
     });
 
     it('injects heartbeat data when HEARTBEAT is in prompt', async () => {
@@ -125,11 +167,12 @@ describe('hooks', () => {
     it('does not register hooks when all disabled', () => {
       mockClient = createMockClient();
       mockApi = createMockApi();
-      registerHooks(mockApi.api, mockClient as any, 'entity-1', 'agent-1', resolveConfig({
+      const cfg = resolveConfig({
         autoRecall: false,
         heartbeat: false,
         autoCapture: false,
-      }));
+      });
+      registerHooks(mockApi.api, mockClient as any, createEntityResolver('entity-1', cfg), 'agent-1', cfg);
 
       expect(mockApi.api.on).not.toHaveBeenCalled();
     });
