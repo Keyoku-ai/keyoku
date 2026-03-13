@@ -1126,18 +1126,8 @@ export async function init(): Promise<void> {
   }
   console.log('');
   console.log(`  ${c.gray}2.${c.reset} Your agent now has persistent memory + heartbeat awareness`);
-  console.log(
-    `     ${c.dim}openclaw memory status${c.reset}    ${c.dim}check memory index status${c.reset}`,
-  );
-  console.log(
-    `     ${c.dim}openclaw memory search${c.reset}    ${c.dim}search stored memories${c.reset}`,
-  );
-  console.log('');
-  console.log(`  ${c.gray}3.${c.reset} ${c.yellow}Heartbeat is managed by Keyoku${c.reset}`);
-  console.log(`     ${c.dim}Keyoku's watcher handles heartbeat ticks and delivery automatically.${c.reset}`);
-  console.log(
-    `     ${c.dim}Configure delivery via KEYOKU_DELIVERY_* env vars or the watcher API.${c.reset}`,
-  );
+  console.log(`     ${c.dim}Keyoku handles memory storage, heartbeat, and delivery automatically.${c.reset}`);
+  console.log(`     ${c.dim}Configure via KEYOKU_DELIVERY_* env vars or the watcher API.${c.reset}`);
   console.log('');
   console.log(`  ${c.indigo}${'━'.repeat(52)}${c.reset}`);
   console.log('');
