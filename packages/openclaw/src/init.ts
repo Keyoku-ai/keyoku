@@ -423,20 +423,12 @@ function installPluginFiles(): void {
       additionalProperties: true,
       properties: {
         keyokuUrl: { type: 'string' },
+        sessionToken: { type: 'string', description: 'Keyoku server auth token (Bearer). Use when the server requires KEYOKU_SESSION_TOKEN.' },
         autoCapture: { type: 'boolean' },
         autoRecall: { type: 'boolean' },
         heartbeat: { type: 'boolean' },
         topK: { type: 'number', minimum: 1, maximum: 20 },
         autonomy: { type: 'string', enum: ['observe', 'suggest', 'act'] },
-        entityId: { type: 'string' },
-        agentId: { type: 'string' },
-        entityStrategy: {
-          type: 'string',
-          enum: ['static', 'per-user', 'per-channel', 'per-session', 'template'],
-        },
-        entityTemplate: { type: 'string' },
-        captureInGroups: { type: 'boolean' },
-        recallInGroups: { type: 'boolean' },
       },
     },
   };
@@ -504,10 +496,10 @@ function extractExistingHeartbeatRules(): HeartbeatRule[] {
  * Set up LLM provider and API keys.
  *
  * Flow:
- *   5a. Embedding provider (Gemini or OpenAI only — Anthropic has no embedding models)
- *   5b. Extraction provider (Gemini, OpenAI, or Anthropic)
+ *   5a. Embedding provider (Gemini, OpenAI, or Ollama — Anthropic has no embedding models)
+ *   5b. Extraction provider (Gemini, OpenAI, Anthropic, or Ollama)
  *   5c. Extraction model (depends on provider, shows benchmark notes)
- *   5d. API key(s) for each unique provider selected
+ *   5d. API key(s) / connection details for each unique provider selected
  */
 async function setupLlmProvider(): Promise<void> {
   // Check existing env vars
@@ -541,14 +533,27 @@ async function setupLlmProvider(): Promise<void> {
   const embeddingProvider = await choose('Embedding provider?', [
     { label: 'Gemini', value: 'gemini', desc: 'gemini-embedding-001' },
     { label: 'OpenAI', value: 'openai', desc: 'text-embedding-3-small' },
+    { label: 'Ollama', value: 'ollama', desc: 'local inference, no API key required' },
   ]);
 
   if (embeddingProvider === 'gemini') {
-    appendToEnvFile('KEYOKU_EMBEDDING_PROVIDER', 'gemini'); // engine uses "gemini"
+    appendToEnvFile('KEYOKU_EMBEDDING_PROVIDER', 'gemini');
     appendToEnvFile('KEYOKU_EMBEDDING_MODEL', 'gemini-embedding-001');
-  } else {
+  } else if (embeddingProvider === 'openai') {
     appendToEnvFile('KEYOKU_EMBEDDING_PROVIDER', 'openai');
     appendToEnvFile('KEYOKU_EMBEDDING_MODEL', 'text-embedding-3-small');
+  } else {
+    // Ollama — always prompt for embedding dims
+    appendToEnvFile('KEYOKU_EMBEDDING_PROVIDER', 'ollama');
+    const embeddingModel = await prompt('Ollama embedding model (default: nomic-embed-text):');
+    appendToEnvFile('KEYOKU_EMBEDDING_MODEL', embeddingModel || 'nomic-embed-text');
+    const embeddingDims = await choose('Embedding dimensions?', [
+      { label: '768', value: '768', desc: 'nomic-embed-text, nomic-embed-text-v2-moe' },
+      { label: '1024', value: '1024', desc: 'bge-large, qwen3-embedding:0.6b , mxbai-embed-large' },
+      { label: '1536', value: '1536', desc: 'embedding models that matches OpenAI text-embedding-3-small output size' },
+    ]);
+    appendToEnvFile('OLLAMA_EMBEDDING_DIMS', embeddingDims);
+    success(`Embedding dims → ${c.bold}${embeddingDims}${c.reset}`);
   }
   success(`Embedding → ${c.bold}${embeddingProvider}${c.reset}`);
 
@@ -561,6 +566,7 @@ async function setupLlmProvider(): Promise<void> {
       value: 'anthropic',
       desc: 'Highest quality, no embeddings (uses your embedding provider)',
     },
+    { label: 'Ollama', value: 'ollama', desc: 'Local inference, no API key required' },
   ]);
 
   appendToEnvFile('KEYOKU_EXTRACTION_PROVIDER', extractionProvider);
@@ -590,6 +596,9 @@ async function setupLlmProvider(): Promise<void> {
         desc: 'Cheapest, slightly less reliable on complex schemas',
       },
     ]);
+  } else if (extractionProvider === 'ollama') {
+    const ollamaModel = await prompt('Ollama model (default: llama3.2):');
+    extractionModel = ollamaModel || 'llama3.2';
   } else {
     // Anthropic — single model
     extractionModel = 'claude-haiku-4-5-20251001';
@@ -602,9 +611,22 @@ async function setupLlmProvider(): Promise<void> {
   success(`Extraction → ${c.bold}${extractionProvider}/${extractionModel}${c.reset}`);
   log(`${c.dim}More models coming soon — re-run init to update.${c.reset}`);
 
-  // ── 5d: API keys ────────────────────────────────────────────────────
-  // Collect the unique providers that need keys
+  // ── 5d: API keys / connection details ───────────────────────────────
   const neededProviders = new Set([embeddingProvider, extractionProvider]);
+  const ollamaConfigured = neededProviders.has('ollama');
+
+  // Ollama — base URL (shared for both embedding and extraction if both use it)
+  if (ollamaConfigured) {
+    const ollamaUrl = await prompt('Ollama base URL (default: http://localhost:11434):');
+    appendToEnvFile('OLLAMA_BASE_URL', ollamaUrl || 'http://localhost:11434');
+    success(`Ollama URL → ${c.bold}${ollamaUrl || 'http://localhost:11434'}${c.reset}`);
+
+    const ollamaKey = await prompt('Ollama API key (leave blank if not using auth middleware):');
+    if (ollamaKey) {
+      appendToEnvFile('OLLAMA_API_KEY', ollamaKey);
+      success('Ollama API key saved');
+    }
+  }
 
   for (const provider of neededProviders) {
     if (provider === 'gemini' && !hasGemini) {
