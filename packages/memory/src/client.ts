@@ -142,8 +142,39 @@ export class KeyokuClient {
     return this.request<{ status: string }>('DELETE', '/api/v1/memories', { entity_id: entityId });
   }
 
+  async seed(memories: SeedMemoryInput[]): Promise<SeedResult> {
+    return this.request<SeedResult>('POST', '/api/v1/seed', { memories });
+  }
+
+  async updateTags(id: string, tags: string[]): Promise<UpdateTagsResult> {
+    return this.request<UpdateTagsResult>('PUT', `/api/v1/memories/${id}/tags`, { tags });
+  }
+
+  async listEntities(): Promise<string[]> {
+    return this.request<string[]>('GET', '/api/v1/entities');
+  }
+
   async getStats(entityId: string): Promise<MemoryStats> {
     return this.request<MemoryStats>('GET', `/api/v1/stats/${entityId}`);
+  }
+
+  async getGlobalStats(): Promise<GlobalStats> {
+    return this.request<GlobalStats>('GET', '/api/v1/stats');
+  }
+
+  async sampleMemories(options?: {
+    entity_id?: string;
+    limit?: number;
+  }): Promise<Memory[]> {
+    const params = new URLSearchParams();
+    if (options?.entity_id) params.set('entity_id', options.entity_id);
+    if (options?.limit) params.set('limit', String(options.limit));
+    const qs = params.toString();
+    return this.request<Memory[]>('GET', `/api/v1/memories/sample${qs ? `?${qs}` : ''}`);
+  }
+
+  async consolidate(): Promise<{ status: string }> {
+    return this.request<{ status: string }>('POST', '/api/v1/consolidate');
   }
 
   // === Heartbeat ===
@@ -235,6 +266,17 @@ export class KeyokuClient {
     });
   }
 
+  async updateSchedule(
+    id: string,
+    cronTag: string,
+    newContent?: string,
+  ): Promise<Memory> {
+    return this.request<Memory>('PUT', `/api/v1/schedule/${id}`, {
+      cron_tag: cronTag,
+      ...(newContent !== undefined && { new_content: newContent }),
+    });
+  }
+
   async cancelSchedule(id: string): Promise<{ status: string; memory_id: string }> {
     return this.request<{ status: string; memory_id: string }>('DELETE', `/api/v1/schedule/${id}`);
   }
@@ -266,6 +308,124 @@ export class KeyokuClient {
     return this.request<{ status: string }>('POST', '/api/v1/watcher/stop');
   }
 
+  async watcherWatch(entityId: string): Promise<{ status: string; entity_id: string }> {
+    return this.request<{ status: string; entity_id: string }>('POST', '/api/v1/watcher/watch', {
+      entity_id: entityId,
+    });
+  }
+
+  async watcherUnwatch(entityId: string): Promise<{ status: string; entity_id: string }> {
+    return this.request<{ status: string; entity_id: string }>('POST', '/api/v1/watcher/unwatch', {
+      entity_id: entityId,
+    });
+  }
+
+  // === Teams ===
+
+  async createTeam(name: string, description: string): Promise<Team> {
+    return this.request<Team>('POST', '/api/v1/teams', { name, description });
+  }
+
+  async getTeam(id: string): Promise<Team> {
+    return this.request<Team>('GET', `/api/v1/teams/${id}`);
+  }
+
+  async deleteTeam(id: string): Promise<{ status: string }> {
+    return this.request<{ status: string }>('DELETE', `/api/v1/teams/${id}`);
+  }
+
+  async addTeamMember(
+    teamId: string,
+    agentId: string,
+  ): Promise<{ status: string; team_id: string; agent_id: string }> {
+    return this.request<{ status: string; team_id: string; agent_id: string }>(
+      'POST',
+      `/api/v1/teams/${teamId}/members`,
+      { agent_id: agentId },
+    );
+  }
+
+  async listTeamMembers(teamId: string): Promise<TeamMember[]> {
+    return this.request<TeamMember[]>('GET', `/api/v1/teams/${teamId}/members`);
+  }
+
+  async removeTeamMember(teamId: string, agentId: string): Promise<{ status: string }> {
+    return this.request<{ status: string }>(
+      'DELETE',
+      `/api/v1/teams/${teamId}/members/${agentId}`,
+    );
+  }
+
+  // === Events (SSE) ===
+
+  subscribeEvents(options?: {
+    onEvent?: (event: SSEEvent) => void;
+    onError?: (error: Error) => void;
+    signal?: AbortSignal;
+  }): () => void {
+    const url = `${this.baseUrl}/api/v1/events`;
+    const controller = new AbortController();
+    const token = this.resolveToken();
+
+    const connect = async () => {
+      try {
+        const headers: Record<string, string> = { Accept: 'text/event-stream' };
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+
+        const res = await fetch(url, {
+          headers,
+          signal: options?.signal ?? controller.signal,
+        });
+
+        if (!res.ok || !res.body) {
+          options?.onError?.(new KeyokuError(res.status, res.statusText, '/api/v1/events'));
+          return;
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let eventType = '';
+        let eventData = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
+
+          for (const line of lines) {
+            if (line.startsWith('event: ')) {
+              eventType = line.slice(7);
+            } else if (line.startsWith('data: ')) {
+              eventData = line.slice(6);
+            } else if (line === '') {
+              if (eventType && eventData) {
+                try {
+                  const parsed = JSON.parse(eventData);
+                  options?.onEvent?.({ event: eventType, ...parsed });
+                } catch {
+                  options?.onEvent?.({ event: eventType, data: eventData });
+                }
+              }
+              eventType = '';
+              eventData = '';
+            }
+          }
+        }
+      } catch (err) {
+        if ((err as Error).name !== 'AbortError') {
+          options?.onError?.(err as Error);
+        }
+      }
+    };
+
+    connect();
+    return () => controller.abort();
+  }
+
   // === Health ===
 
   async health(): Promise<{ status: string; timestamp: string; sse_clients: number }> {
@@ -274,6 +434,67 @@ export class KeyokuClient {
       '/api/v1/health',
     );
   }
+}
+
+// Seed types
+export interface SeedMemoryInput {
+  content: string;
+  type?: string;
+  importance?: number;
+  entity_id: string;
+  agent_id?: string;
+  tags?: string[];
+  expires_at?: string;
+  sentiment?: number;
+  confidence_factors?: string[];
+  created_at?: string;
+}
+
+export interface SeedResult {
+  created: number;
+  ids: string[];
+}
+
+export interface UpdateTagsResult {
+  status: string;
+  memory_id: string;
+  tags: string[];
+}
+
+export interface GlobalStats {
+  total_memories: number;
+  active_memories: number;
+  entity_count: number;
+  by_type: Record<string, number>;
+  by_state: Record<string, number>;
+}
+
+// Team types
+export interface Team {
+  id: string;
+  name: string;
+  description: string;
+  default_visibility: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TeamMember {
+  team_id: string;
+  agent_id: string;
+  role: string;
+  joined_at: string;
+}
+
+// SSE types
+export interface SSEEvent {
+  event: string;
+  type?: string;
+  entity_id?: string;
+  agent_id?: string;
+  data?: unknown;
+  timestamp?: string;
+  [key: string]: unknown;
 }
 
 // Watcher types
