@@ -1,14 +1,15 @@
 /**
- * Migration utility — imports OpenClaw's file-based memories into Keyoku.
+ * Migration utility — imports files into Keyoku.
  *
- * Reads MEMORY.md and memory/*.md files, chunks them by heading sections,
+ * Recursively discovers files (md, txt, json, yaml), chunks them by format,
  * deduplicates against existing Keyoku memories, and stores each chunk.
  *
  * Usage: `openclaw memory import --dir /path/to/workspace`
  */
 
-import { readFileSync, readdirSync, existsSync, statSync } from 'fs';
-import { join } from 'path';
+import { readFileSync, readdirSync, existsSync, statSync, lstatSync } from 'fs';
+import { join, extname, relative } from 'path';
+import yaml from 'js-yaml';
 import type { KeyokuClient } from '@keyoku/memory';
 
 export interface ImportResult {
@@ -17,10 +18,92 @@ export interface ImportResult {
   errors: number;
 }
 
-interface MemoryChunk {
+export interface MemoryChunk {
   content: string;
   source: string; // original filename
-  section?: string; // heading text
+  section?: string; // heading text or key name
+}
+
+export interface DiscoverOptions {
+  depth?: number; // max recursion depth (default: 5, 0 = no recursion, -1 = unlimited)
+  types?: string[]; // file extensions to include (default: ['.md', '.txt', '.json', '.yaml', '.yml'])
+}
+
+const DEFAULT_TYPES = ['.md', '.txt', '.json', '.yaml', '.yml'];
+const DEFAULT_DEPTH = 5;
+
+/** Directories to always skip during recursive discovery. */
+const SKIP_DIRS = new Set([
+  'node_modules',
+  '__pycache__',
+  'dist',
+  'build',
+  '.git',
+  '.svn',
+  '.hg',
+]);
+
+/**
+ * Recursively discover files matching the given extensions.
+ * Skips dotfiles/dotdirs, node_modules, symlinks, and other non-content dirs.
+ */
+export function discoverFiles(
+  dir: string,
+  options: DiscoverOptions = {},
+): { path: string; name: string }[] {
+  const maxDepth = options.depth ?? DEFAULT_DEPTH;
+  const types = options.types ?? DEFAULT_TYPES;
+  const results: { path: string; name: string }[] = [];
+
+  if (!existsSync(dir) || !statSync(dir).isDirectory()) {
+    return results;
+  }
+
+  function walk(currentDir: string, currentDepth: number): void {
+    let entries: string[];
+    try {
+      entries = readdirSync(currentDir).sort();
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      // Skip dotfiles and dotdirs
+      if (entry.startsWith('.')) continue;
+
+      const fullPath = join(currentDir, entry);
+
+      // Skip symlinks
+      try {
+        if (lstatSync(fullPath).isSymbolicLink()) continue;
+      } catch {
+        continue;
+      }
+
+      const stat = statSync(fullPath);
+
+      if (stat.isDirectory()) {
+        // Skip denied directories
+        if (SKIP_DIRS.has(entry)) continue;
+
+        // Recurse if within depth limit
+        if (maxDepth === -1 || currentDepth < maxDepth) {
+          walk(fullPath, currentDepth + 1);
+        }
+      } else if (stat.isFile()) {
+        const ext = extname(entry).toLowerCase();
+        if (types.includes(ext)) {
+          results.push({
+            path: fullPath,
+            name: relative(dir, fullPath),
+          });
+        }
+      }
+    }
+  }
+
+  walk(dir, 0);
+  return results;
 }
 
 /**
@@ -95,7 +178,7 @@ export function chunkByHeadings(content: string, maxChunkChars = 1000): MemoryCh
  * Split text by double-newline (paragraphs), merging small paragraphs
  * and splitting oversized ones.
  */
-function splitByParagraphs(text: string, maxChars = 1000): string[] {
+export function splitByParagraphs(text: string, maxChars = 1000): string[] {
   const rawParagraphs = text.split(/\n\n+/);
   const results: string[] = [];
   let buffer = '';
@@ -125,6 +208,130 @@ function splitByParagraphs(text: string, maxChars = 1000): string[] {
 }
 
 /**
+ * Chunk plain text by paragraphs.
+ */
+export function chunkPlainText(content: string, maxChunkChars = 1000): MemoryChunk[] {
+  const paragraphs = splitByParagraphs(content, maxChunkChars);
+  return paragraphs.map((p) => ({ content: p, source: '' }));
+}
+
+/**
+ * Chunk JSON content by top-level keys (object) or items (array).
+ * Returns empty array on parse failure.
+ */
+export function chunkJson(
+  content: string,
+  maxChunkChars = 1000,
+  logger?: { warn: (msg: string) => void },
+): MemoryChunk[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch (err) {
+    logger?.warn(`Invalid JSON: ${String(err)}`);
+    return [];
+  }
+
+  return chunkStructuredData(parsed, maxChunkChars);
+}
+
+/**
+ * Chunk YAML content by top-level keys. Supports multi-document YAML.
+ * Returns empty array on parse failure.
+ */
+export function chunkYaml(
+  content: string,
+  maxChunkChars = 1000,
+  logger?: { warn: (msg: string) => void },
+): MemoryChunk[] {
+  const chunks: MemoryChunk[] = [];
+
+  try {
+    const docs: unknown[] = [];
+    yaml.loadAll(content, (doc) => docs.push(doc));
+
+    for (const doc of docs) {
+      chunks.push(...chunkStructuredData(doc, maxChunkChars));
+    }
+  } catch (err) {
+    logger?.warn(`Invalid YAML: ${String(err)}`);
+    return [];
+  }
+
+  return chunks;
+}
+
+/**
+ * Chunk a parsed structured value (object or array) into MemoryChunks.
+ */
+function chunkStructuredData(data: unknown, maxChunkChars: number): MemoryChunk[] {
+  const chunks: MemoryChunk[] = [];
+
+  if (Array.isArray(data)) {
+    for (let i = 0; i < data.length; i++) {
+      const value = typeof data[i] === 'string' ? data[i] : JSON.stringify(data[i], null, 2);
+      const parts = hardSplit(value, maxChunkChars);
+      for (const part of parts) {
+        chunks.push({ content: part, source: '', section: `[${i}]` });
+      }
+    }
+  } else if (data !== null && typeof data === 'object') {
+    for (const [key, val] of Object.entries(data as Record<string, unknown>)) {
+      const value = typeof val === 'string' ? val : JSON.stringify(val, null, 2);
+      const parts = hardSplit(value, maxChunkChars);
+      for (const part of parts) {
+        chunks.push({ content: part, source: '', section: key });
+      }
+    }
+  } else if (data !== null && data !== undefined) {
+    const value = String(data);
+    if (value.length >= 10) {
+      chunks.push({ content: value, source: '' });
+    }
+  }
+
+  return chunks;
+}
+
+/**
+ * Split a string into parts of at most maxChars each.
+ * Returns the original string in a single-element array if it fits.
+ */
+function hardSplit(text: string, maxChars: number): string[] {
+  if (text.length <= maxChars) return [text];
+  const parts: string[] = [];
+  for (let i = 0; i < text.length; i += maxChars) {
+    parts.push(text.slice(i, i + maxChars));
+  }
+  return parts;
+}
+
+/**
+ * Chunk a file's content based on its extension.
+ */
+export function chunkFile(
+  content: string,
+  filePath: string,
+  maxChunkChars = 1000,
+  logger?: { warn: (msg: string) => void },
+): MemoryChunk[] {
+  const ext = extname(filePath).toLowerCase();
+
+  switch (ext) {
+    case '.md':
+      return chunkByHeadings(content, maxChunkChars);
+    case '.json':
+      return chunkJson(content, maxChunkChars, logger);
+    case '.yaml':
+    case '.yml':
+      return chunkYaml(content, maxChunkChars, logger);
+    case '.txt':
+    default:
+      return chunkPlainText(content, maxChunkChars);
+  }
+}
+
+/**
  * Small delay helper for rate limiting.
  */
 function delay(ms: number): Promise<void> {
@@ -132,7 +339,7 @@ function delay(ms: number): Promise<void> {
 }
 
 /**
- * Import OpenClaw memory files into Keyoku.
+ * Import files into Keyoku with recursive discovery and multi-format support.
  */
 export async function importMemoryFiles(params: {
   client: KeyokuClient;
@@ -140,38 +347,31 @@ export async function importMemoryFiles(params: {
   workspaceDir: string;
   agentId?: string;
   dryRun?: boolean;
+  depth?: number;
+  types?: string[];
   logger?: { info: (msg: string) => void; warn: (msg: string) => void };
 }): Promise<ImportResult> {
-  const { client, entityId, workspaceDir, agentId, dryRun = false, logger = console } = params;
+  const {
+    client,
+    entityId,
+    workspaceDir,
+    agentId,
+    dryRun = false,
+    depth,
+    types,
+    logger = console,
+  } = params;
   const result: ImportResult = { imported: 0, skipped: 0, errors: 0 };
 
-  // Discover memory files
-  const files: { path: string; name: string }[] = [];
-
-  // Check for MEMORY.md
-  const memoryMdPath = join(workspaceDir, 'MEMORY.md');
-  if (existsSync(memoryMdPath)) {
-    files.push({ path: memoryMdPath, name: 'MEMORY.md' });
-  }
-
-  // Check for memory/ directory
-  const memoryDir = join(workspaceDir, 'memory');
-  if (existsSync(memoryDir) && statSync(memoryDir).isDirectory()) {
-    const entries = readdirSync(memoryDir)
-      .filter((f) => f.endsWith('.md'))
-      .sort(); // chronological for dated files
-
-    for (const entry of entries) {
-      files.push({ path: join(memoryDir, entry), name: `memory/${entry}` });
-    }
-  }
+  // Discover files recursively
+  const files = discoverFiles(workspaceDir, { depth, types });
 
   if (files.length === 0) {
     logger.info('No memory files found in workspace.');
     return result;
   }
 
-  logger.info(`Found ${files.length} memory file(s) to import.`);
+  logger.info(`Found ${files.length} file(s) to import.`);
 
   // Process each file
   for (const file of files) {
@@ -190,7 +390,7 @@ export async function importMemoryFiles(params: {
       continue;
     }
 
-    const chunks = chunkByHeadings(content);
+    const chunks = chunkFile(content, file.path, 1000, logger);
 
     for (const chunk of chunks) {
       chunk.source = file.name;
@@ -223,7 +423,7 @@ export async function importMemoryFiles(params: {
       try {
         await client.remember(entityId, taggedContent, {
           agent_id: agentId,
-          source: 'migration',
+          source: 'import',
         });
         result.imported++;
         logger.info(`Imported: ${chunk.content.slice(0, 60)}...`);
