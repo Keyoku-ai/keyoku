@@ -8,6 +8,10 @@
   "scripts": {
     "build": "tsc"
   },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "license": "MIT",
   "engines": {
     "node": ">=20"

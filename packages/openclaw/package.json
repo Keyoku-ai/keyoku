@@ -12,8 +12,8 @@
     "build": "tsc"
   },
   "dependencies": {
-    "@keyoku/memory": "1.2.14",
-    "@keyoku/types": "1.2.14",
+    "@keyoku/memory": "1.3.4",
+    "@keyoku/types": "1.3.4",
     "@sinclair/typebox": "^0.34.0"
   },
   "peerDependencies": {
@@ -27,7 +27,8 @@
   "files": [
     "dist",
     "bin",
-    "skills"
+    "skills",
+    "README.md"
   ],
   "openclaw": {
     "extensions": [

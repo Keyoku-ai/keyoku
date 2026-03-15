@@ -5,4 +5,7 @@ export type {
   RememberResult,
   HeartbeatResult,
   MemoryStats,
+  WatcherStatus,
+  WatcherTick,
+  WatcherTickHistory,
 } from './client.js';
