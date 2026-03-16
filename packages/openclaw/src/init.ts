@@ -655,9 +655,36 @@ async function setupLlmProvider(): Promise<void> {
       }
     }
   }
+
+  // Isolate vector dimensions/index state per embedding backend.
+  // This avoids dimension/index corruption when switching providers/models
+  // (e.g. OpenAI 1536-dim → Ollama 768-dim) on the same DB file.
+  configureProviderScopedDbPath(embeddingProvider, process.env.KEYOKU_EMBEDDING_MODEL || 'default');
+
+  if (neededProviders.has('ollama')) {
+    info('If startup reports "unknown provider: ollama", update engine binary:');
+    log(`  ${c.bold}npx --yes --package @keyoku/openclaw@latest keyoku-update-engine${c.reset}`);
+  }
 }
 
 // ── Environment File Management ──────────────────────────────────────────
+
+function slugifyForPath(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'default';
+}
+
+function configureProviderScopedDbPath(embeddingProvider: string, embeddingModel: string): void {
+  const dbDir = join(HOME, '.keyoku', 'data');
+  mkdirSync(dbDir, { recursive: true });
+
+  const providerSlug = slugifyForPath(embeddingProvider);
+  const modelSlug = slugifyForPath(embeddingModel);
+  const providerDbPath = join(dbDir, `keyoku-${providerSlug}-${modelSlug}.db`);
+
+  appendToEnvFile('KEYOKU_DB_PATH', providerDbPath);
+  success(`Database → ${c.dim}${providerDbPath}${c.reset}`);
+  info(`${c.dim}Provider-scoped DB path set to avoid mixed-dimension vector indexes.${c.reset}`);
+}
 
 /**
  * Append a key=value to ~/.keyoku/.env (creates if needed).
@@ -1017,15 +1044,13 @@ export async function init(): Promise<void> {
     success(`Plugin installed → ${c.dim}${PLUGIN_INSTALL_DIR}${c.reset}`);
   }
 
-  // Step 4: DB path
+  // Step 4: Storage directory
   stepHeader('Configure Storage');
   const dbDir = join(HOME, '.keyoku', 'data');
   mkdirSync(dbDir, { recursive: true });
-  const dbPath = join(dbDir, 'keyoku.db');
-  appendToEnvFile('KEYOKU_DB_PATH', dbPath);
-  success(`Database → ${c.dim}${dbPath}${c.reset}`);
+  success(`Data directory → ${c.dim}${dbDir}${c.reset}`);
 
-  // Step 5: LLM provider
+  // Step 5: LLM provider (+ provider-scoped DB path)
   stepHeader('LLM Provider');
   await setupLlmProvider();
 
