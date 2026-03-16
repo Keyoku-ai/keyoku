@@ -49,7 +49,7 @@ export default function keyokuMemory(config?: KeyokuConfig) {
         timeout: 60000,
       });
 
-      api.logger.info(
+      api.logger.debug?.(
         `keyoku: plugin registered (url: ${cfg.keyokuUrl}, entityBase: ${entityId}, strategy: ${cfg.entityStrategy})`,
       );
 
