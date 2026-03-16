@@ -6,7 +6,8 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "keyoku-init": "bin/init.js"
+    "keyoku-init": "bin/init.js",
+    "keyoku-update-engine": "bin/update-engine.js"
   },
   "scripts": {
     "build": "tsc"
