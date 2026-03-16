@@ -28,6 +28,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import { pipeline } from 'node:stream/promises';
+import { spawnSync } from 'node:child_process';
 import { KeyokuClient } from '@keyoku/memory';
 import { importMemoryFiles } from './migration.js';
 import { migrateAllVectorStores, discoverVectorDbs } from './migrate-vector-store.js';
@@ -37,6 +38,7 @@ import {
   type HeartbeatRule,
 } from './heartbeat-migration.js';
 import { findKeyokuBinary, loadKeyokuEnv, waitForHealthy } from './service.js';
+import { updateEngine } from './update-engine.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -47,6 +49,10 @@ const KEYOKU_BIN_PATH = join(KEYOKU_BIN_DIR, 'keyoku');
 const OPENCLAW_MEMORY_DIR = join(HOME, '.openclaw', 'memory');
 const OPENCLAW_EXTENSIONS_DIR = join(HOME, '.openclaw', 'extensions');
 const PLUGIN_INSTALL_DIR = join(OPENCLAW_EXTENSIONS_DIR, 'keyoku-memory');
+const KEYOKU_ENGINE_REPO = 'github.com/keyoku-ai/keyoku-engine';
+const MIN_ENGINE_VERSION_BY_PROVIDER: Partial<Record<string, string>> = {
+  ollama: '0.4.0',
+};
 
 interface AgentHeartbeatConfig {
   every?: string;
@@ -88,7 +94,7 @@ const c = {
 // ── Output Helpers ───────────────────────────────────────────────────────
 
 let currentStep = 0;
-const totalSteps = 11;
+const totalSteps = 12;
 
 function stepHeader(label: string): void {
   currentStep++;
@@ -501,7 +507,7 @@ function extractExistingHeartbeatRules(): HeartbeatRule[] {
  *   5c. Extraction model (depends on provider, shows benchmark notes)
  *   5d. API key(s) / connection details for each unique provider selected
  */
-async function setupLlmProvider(): Promise<void> {
+async function setupLlmProvider(): Promise<{ embeddingProvider: string; extractionProvider: string }> {
   // Check existing env vars
   const hasOpenAI = !!process.env.OPENAI_API_KEY;
   const hasGemini = !!process.env.GEMINI_API_KEY;
@@ -664,6 +670,178 @@ async function setupLlmProvider(): Promise<void> {
   if (neededProviders.has('ollama')) {
     info('If startup reports "unknown provider: ollama", update engine binary:');
     log(`  ${c.bold}npx --yes --package @keyoku/openclaw@latest keyoku-update-engine${c.reset}`);
+  }
+
+  return { embeddingProvider, extractionProvider };
+}
+
+// ── Engine Compatibility ────────────────────────────────────────────────
+
+function normalizeVersion(input: string): string | null {
+  const match = input.match(/v?(\d+\.\d+\.\d+)/);
+  return match ? match[1] : null;
+}
+
+function compareVersions(a: string, b: string): number {
+  const ap = a.split('.').map((x) => parseInt(x, 10));
+  const bp = b.split('.').map((x) => parseInt(x, 10));
+  const max = Math.max(ap.length, bp.length);
+  for (let i = 0; i < max; i++) {
+    const av = ap[i] ?? 0;
+    const bv = bp[i] ?? 0;
+    if (av > bv) return 1;
+    if (av < bv) return -1;
+  }
+  return 0;
+}
+
+function detectInstalledEngineVersion(binaryPath: string): string | null {
+  const tryExtract = (text: string): string | null => {
+    if (!text) return null;
+
+    // Preferred: parse Go module metadata line if present.
+    // Example: mod github.com/keyoku-ai/keyoku-engine v0.4.1-0.202603...
+    const moduleLine = text
+      .split('\n')
+      .find((line) => line.includes(`mod\t${KEYOKU_ENGINE_REPO}`) || line.includes(`${KEYOKU_ENGINE_REPO}\tv`));
+    if (moduleLine) {
+      const moduleVersion = normalizeVersion(moduleLine);
+      if (moduleVersion) return moduleVersion;
+    }
+
+    // Fallback: first semantic version token in output.
+    const generic = text.match(/\bv?(\d+\.\d+\.\d+)(?:[-+][0-9A-Za-z.-]+)?\b/);
+    return generic ? generic[1] : null;
+  };
+
+  // 1) Fast path for future binaries that support --version.
+  try {
+    const versionCmd = spawnSync(binaryPath, ['--version'], {
+      encoding: 'utf-8',
+      timeout: 1500,
+    });
+    const detected = tryExtract(`${versionCmd.stdout ?? ''}\n${versionCmd.stderr ?? ''}`);
+    if (detected) return detected;
+  } catch {
+    // ignore and fall through
+  }
+
+  // 2) Prefer deterministic Go metadata if `go` is available.
+  try {
+    const goMeta = spawnSync('go', ['version', '-m', binaryPath], {
+      encoding: 'utf-8',
+      timeout: 2000,
+    });
+    if (goMeta.status === 0) {
+      const detected = tryExtract(`${goMeta.stdout ?? ''}\n${goMeta.stderr ?? ''}`);
+      if (detected) return detected;
+    }
+  } catch {
+    // ignore and fall through
+  }
+
+  // 3) Last resort: scan binary strings for module version.
+  try {
+    const stringsOut = spawnSync('strings', [binaryPath], {
+      encoding: 'utf-8',
+      timeout: 2500,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    const detected = tryExtract(`${stringsOut.stdout ?? ''}\n${stringsOut.stderr ?? ''}`);
+    if (detected) return detected;
+  } catch {
+    // ignore
+  }
+
+  return null;
+}
+
+async function verifyEngineHealthAfterUpgrade(): Promise<boolean> {
+  const cleanup = await startKeyokuForMigration();
+  try {
+    return await healthCheck();
+  } finally {
+    cleanup();
+  }
+}
+
+async function ensureEngineCompatibility(providers: string[]): Promise<void> {
+  const requiredVersion = providers
+    .map((provider) => MIN_ENGINE_VERSION_BY_PROVIDER[provider])
+    .filter((v): v is string => !!v)
+    .sort(compareVersions)
+    .at(-1);
+
+  if (!requiredVersion) return;
+
+  if (!existsSync(KEYOKU_BIN_PATH)) {
+    warn(`Engine binary missing at ${KEYOKU_BIN_PATH}`);
+    const installNow = await choose('Install latest engine now?', [
+      { label: 'Yes', value: 'yes', desc: 'recommended' },
+      { label: 'No', value: 'no', desc: 'exit setup and install manually' },
+    ]);
+
+    if (installNow !== 'yes') {
+      fail(`Cannot continue: selected providers require engine >= v${requiredVersion}`);
+      process.exit(1);
+    }
+
+    await updateEngine();
+    const healthy = await verifyEngineHealthAfterUpgrade();
+    if (!healthy) {
+      fail('Engine installed, but health check failed after upgrade');
+      fail('Please run `keyoku-update-engine` manually and retry init');
+      process.exit(1);
+    }
+    return;
+  }
+
+  const installedVersion = detectInstalledEngineVersion(KEYOKU_BIN_PATH);
+  if (installedVersion) {
+    info(`Detected engine version ${c.bold}v${installedVersion}${c.reset}`);
+  } else {
+    warn('Could not detect installed engine version');
+  }
+
+  const isOutdated = !installedVersion || compareVersions(installedVersion, requiredVersion) < 0;
+  if (!isOutdated) {
+    success(`Engine compatibility OK (requires >= v${requiredVersion})`);
+    return;
+  }
+
+  warn(`Selected providers require engine >= ${c.bold}v${requiredVersion}${c.reset}`);
+  if (installedVersion) {
+    warn(`Installed engine appears to be ${c.bold}v${installedVersion}${c.reset}`);
+  }
+
+  const updateNow = await choose('Run keyoku-update-engine now?', [
+    { label: 'Yes', value: 'yes', desc: 'download latest and continue setup' },
+    { label: 'No', value: 'no', desc: 'stop setup and update manually' },
+  ]);
+
+  if (updateNow !== 'yes') {
+    fail('Setup blocked until engine is upgraded');
+    log(`Run: ${c.bold}npx --yes --package @keyoku/openclaw@latest keyoku-update-engine${c.reset}`);
+    process.exit(1);
+  }
+
+  await updateEngine();
+
+  const upgradedVersion = detectInstalledEngineVersion(KEYOKU_BIN_PATH);
+  if (upgradedVersion && compareVersions(upgradedVersion, requiredVersion) < 0) {
+    fail(`Engine is still below required version after update (v${upgradedVersion} < v${requiredVersion})`);
+    process.exit(1);
+  }
+
+  if (upgradedVersion) {
+    success(`Engine upgraded to ${c.bold}v${upgradedVersion}${c.reset}`);
+  }
+
+  const healthy = await verifyEngineHealthAfterUpgrade();
+  if (!healthy) {
+    fail('Engine upgrade completed, but health check failed');
+    fail('Please verify KEYOKU_* env config and rerun init');
+    process.exit(1);
   }
 }
 
@@ -1052,28 +1230,32 @@ export async function init(): Promise<void> {
 
   // Step 5: LLM provider (+ provider-scoped DB path)
   stepHeader('LLM Provider');
-  await setupLlmProvider();
+  const { embeddingProvider, extractionProvider } = await setupLlmProvider();
 
-  // Step 6: Autonomy level
+  // Step 6: Engine compatibility check + auto-upgrade path
+  stepHeader('Engine Compatibility');
+  await ensureEngineCompatibility([embeddingProvider, extractionProvider]);
+
+  // Step 7: Autonomy level
   stepHeader('Autonomy');
   await setupAutonomy(config);
 
-  // Step 7: Timezone & quiet hours
+  // Step 8: Timezone & quiet hours
   stepHeader('Timezone & Quiet Hours');
   await setupTimezoneAndQuietHours();
 
-  // Step 8: Disable OpenClaw's heartbeat (keyoku's watcher handles it now)
+  // Step 9: Disable OpenClaw's heartbeat (keyoku's watcher handles it now)
   stepHeader('Heartbeat');
   disableOpenClawHeartbeat(config);
 
-  // Step 9: SKILL.md
+  // Step 10: SKILL.md
   stepHeader('Install Skill Guide');
   installSkill();
 
-  // Step 9b: Extract existing heartbeat rules for migration (keyoku's watcher owns heartbeat now)
+  // Step 10b: Extract existing heartbeat rules for migration (keyoku's watcher owns heartbeat now)
   const heartbeatRules = extractExistingHeartbeatRules();
 
-  // Step 10: Migration
+  // Step 11: Migration
   const memoryMdPath = join(HOME, '.openclaw', 'MEMORY.md');
   const hasMemoryMd = existsSync(memoryMdPath);
   const vectorDbs = discoverVectorDbs(OPENCLAW_MEMORY_DIR);
@@ -1162,7 +1344,7 @@ export async function init(): Promise<void> {
     log('No existing memories found — nothing to migrate');
   }
 
-  // Step 11: Health check
+  // Step 12: Health check
   stepHeader('Health Check');
   await healthCheck();
 
