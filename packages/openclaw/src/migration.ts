@@ -31,6 +31,7 @@ export interface DiscoverOptions {
 
 const DEFAULT_TYPES = ['.md', '.txt', '.json', '.yaml', '.yml'];
 const DEFAULT_DEPTH = 5;
+const SKIP_FILES = new Set(['SOUL.md', 'IDENTITY.md']);
 
 /** Directories to always skip during recursive discovery. */
 const SKIP_DIRS = new Set([
@@ -57,6 +58,16 @@ export function discoverFiles(
 
   if (!existsSync(dir) || !statSync(dir).isDirectory()) {
     return results;
+  }
+
+  function normalizeRelPath(relPath: string): string {
+    return relPath.replace(/\\/g, '/');
+  }
+
+  function shouldExclude(relPath: string): boolean {
+    if (SKIP_FILES.has(relPath)) return true;
+    if (relPath.startsWith('skills/') && relPath.endsWith('/SKILL.md')) return true;
+    return false;
   }
 
   function walk(currentDir: string, currentDepth: number): void {
@@ -93,9 +104,11 @@ export function discoverFiles(
       } else if (stat.isFile()) {
         const ext = extname(entry).toLowerCase();
         if (types.includes(ext)) {
+          const relPath = normalizeRelPath(relative(dir, fullPath));
+          if (shouldExclude(relPath)) continue;
           results.push({
             path: fullPath,
-            name: relative(dir, fullPath),
+            name: relPath,
           });
         }
       }

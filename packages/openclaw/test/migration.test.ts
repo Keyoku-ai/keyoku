@@ -17,6 +17,10 @@ function tmpDir(): string {
   return mkdtempSync(join(process.env.TMPDIR || '/tmp', 'keyoku-test-'));
 }
 
+function normRel(p: string): string {
+  return p.replace(/\\/g, '/');
+}
+
 function createMockClient() {
   return {
     search: vi.fn().mockResolvedValue([]),
@@ -111,7 +115,7 @@ describe('discoverFiles', () => {
 
       const files = discoverFiles(dir);
       expect(files).toHaveLength(2);
-      expect(files.map((f) => f.name)).toContain(join('sub', 'nested.md'));
+      expect(files.map((f) => f.name)).toContain(normRel(join('sub', 'nested.md')));
     } finally {
       rmSync(dir, { recursive: true });
     }
@@ -129,8 +133,8 @@ describe('discoverFiles', () => {
       const files = discoverFiles(dir, { depth: 1 });
       const names = files.map((f) => f.name);
       expect(names).toContain('root.md');
-      expect(names).toContain(join('a', 'level1.md'));
-      expect(names).not.toContain(join('a', 'b', 'level2.md'));
+      expect(names).toContain(normRel(join('a', 'level1.md')));
+      expect(names).not.toContain(normRel(join('a', 'b', 'level2.md')));
     } finally {
       rmSync(dir, { recursive: true });
     }
@@ -159,7 +163,7 @@ describe('discoverFiles', () => {
 
       const files = discoverFiles(dir, { depth: -1 });
       expect(files).toHaveLength(1);
-      expect(files[0].name).toBe(join('a', 'b', 'c', 'd', 'deep.md'));
+      expect(files[0].name).toBe(normRel(join('a', 'b', 'c', 'd', 'deep.md')));
     } finally {
       rmSync(dir, { recursive: true });
     }
@@ -205,6 +209,51 @@ describe('discoverFiles', () => {
       const files = discoverFiles(dir);
       expect(files).toHaveLength(1);
       expect(files[0].name).toBe('real.md');
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
+
+  it('excludes root SOUL.md and IDENTITY.md', () => {
+    const dir = tmpDir();
+    try {
+      writeFileSync(join(dir, 'SOUL.md'), 'soul');
+      writeFileSync(join(dir, 'IDENTITY.md'), 'identity');
+      writeFileSync(join(dir, 'notes.md'), 'notes');
+
+      const files = discoverFiles(dir);
+      const names = files.map((f) => f.name);
+      expect(names).toContain('notes.md');
+      expect(names).not.toContain('SOUL.md');
+      expect(names).not.toContain('IDENTITY.md');
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
+
+  it('excludes skills/**/SKILL.md', () => {
+    const dir = tmpDir();
+    try {
+      mkdirSync(join(dir, 'skills', 'foo'), { recursive: true });
+      writeFileSync(join(dir, 'skills', 'foo', 'SKILL.md'), 'skill');
+      writeFileSync(join(dir, 'skills', 'foo', 'readme.md'), 'readme');
+
+      const files = discoverFiles(dir);
+      const names = files.map((f) => f.name);
+      expect(names).toContain(normRel(join('skills', 'foo', 'readme.md')));
+      expect(names).not.toContain(normRel(join('skills', 'foo', 'SKILL.md')));
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
+
+  it('still includes HEARTBEAT.md', () => {
+    const dir = tmpDir();
+    try {
+      writeFileSync(join(dir, 'HEARTBEAT.md'), 'pulse');
+
+      const files = discoverFiles(dir);
+      expect(files.map((f) => f.name)).toContain('HEARTBEAT.md');
     } finally {
       rmSync(dir, { recursive: true });
     }
