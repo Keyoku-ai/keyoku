@@ -24,7 +24,52 @@ import type { PluginApi } from './types.js';
 export type { KeyokuConfig } from './config.js';
 export { KeyokuClient } from '@keyoku/memory';
 
-export default function keyokuMemory(config?: KeyokuConfig) {
+type KeyokuMemoryPlugin = ReturnType<typeof createKeyokuMemoryPlugin>;
+
+function registerKeyokuMemory(api: PluginApi, config?: KeyokuConfig): void {
+  const cfg = resolveConfig(config ?? (api.pluginConfig as KeyokuConfig | undefined));
+
+  // Resolve entity/agent IDs
+  // entityId = base memory namespace; resolver can derive dynamic child scopes per event
+  // agentId = attribution marker for writes
+  const entityId = cfg.entityId || 'default';
+  const agentId = cfg.agentId || 'default';
+  const resolver = createEntityResolver(entityId, cfg, api.logger);
+
+  // Token resolved lazily — the service generates it at startup, after register()
+  // 60s timeout: remember calls LLM extraction, heartbeatContext does analysis
+  const client = new KeyokuClient({
+    baseUrl: cfg.keyokuUrl,
+    token: () => process.env.KEYOKU_SESSION_TOKEN,
+    timeout: 60000,
+  });
+
+  api.logger.debug?.(
+    `keyoku: plugin registered (url: ${cfg.keyokuUrl}, entityBase: ${entityId}, strategy: ${cfg.entityStrategy})`,
+  );
+  api.logger.info(
+    `keyoku: TEMP capture diagnostics enabled (plugin=keyoku-memory incrementalCapture=${cfg.incrementalCapture} url=${cfg.keyokuUrl} entityBase=${entityId} strategy=${cfg.entityStrategy})`,
+  );
+
+  // Register 6 memory/schedule tools
+  registerTools(api, client, resolver, agentId);
+
+  // Register lifecycle hooks (auto-recall, heartbeat, auto-capture)
+  registerHooks(api, client, resolver, agentId, cfg);
+
+  // Register Keyoku binary lifecycle service
+  registerService(api, cfg.keyokuUrl);
+
+  // Register CLI subcommands
+  registerCli(api, client, entityId);
+
+  // Register incremental per-message capture
+  if (cfg.incrementalCapture) {
+    registerIncrementalCapture(api, client, resolver, agentId, cfg);
+  }
+}
+
+function createKeyokuMemoryPlugin(config?: KeyokuConfig) {
   return {
     id: 'keyoku-memory',
     name: 'Keyoku Memory',
@@ -32,46 +77,29 @@ export default function keyokuMemory(config?: KeyokuConfig) {
     kind: 'memory' as const,
 
     register(api: PluginApi) {
-      const cfg = resolveConfig(config);
-
-      // Resolve entity/agent IDs
-      // entityId = base memory namespace; resolver can derive dynamic child scopes per event
-      // agentId = attribution marker for writes
-      const entityId = cfg.entityId || 'default';
-      const agentId = cfg.agentId || 'default';
-      const resolver = createEntityResolver(entityId, cfg, api.logger);
-
-      // Token resolved lazily — the service generates it at startup, after register()
-      // 60s timeout: remember calls LLM extraction, heartbeatContext does analysis
-      const client = new KeyokuClient({
-        baseUrl: cfg.keyokuUrl,
-        token: () => process.env.KEYOKU_SESSION_TOKEN,
-        timeout: 60000,
-      });
-
-      api.logger.debug?.(
-        `keyoku: plugin registered (url: ${cfg.keyokuUrl}, entityBase: ${entityId}, strategy: ${cfg.entityStrategy})`,
-      );
-      api.logger.info(
-        `keyoku: TEMP capture diagnostics enabled (plugin=keyoku-memory incrementalCapture=${cfg.incrementalCapture} url=${cfg.keyokuUrl} entityBase=${entityId} strategy=${cfg.entityStrategy})`,
-      );
-
-      // Register 6 memory/schedule tools
-      registerTools(api, client, resolver, agentId);
-
-      // Register lifecycle hooks (auto-recall, heartbeat, auto-capture)
-      registerHooks(api, client, resolver, agentId, cfg);
-
-      // Register Keyoku binary lifecycle service
-      registerService(api, cfg.keyokuUrl);
-
-      // Register CLI subcommands
-      registerCli(api, client, entityId);
-
-      // Register incremental per-message capture
-      if (cfg.incrementalCapture) {
-        registerIncrementalCapture(api, client, resolver, agentId, cfg);
-      }
+      registerKeyokuMemory(api, config);
     },
   };
+}
+
+function isPluginApi(value: KeyokuConfig | PluginApi | undefined): value is PluginApi {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Partial<PluginApi>;
+  return (
+    typeof candidate.registerTool === 'function' &&
+    typeof candidate.registerCli === 'function' &&
+    typeof candidate.registerService === 'function' &&
+    typeof candidate.resolvePath === 'function' &&
+    typeof candidate.on === 'function'
+  );
+}
+
+export { createKeyokuMemoryPlugin };
+
+export default function keyokuMemory(configOrApi?: KeyokuConfig | PluginApi): KeyokuMemoryPlugin | void {
+  if (isPluginApi(configOrApi)) {
+    registerKeyokuMemory(configOrApi);
+    return;
+  }
+  return createKeyokuMemoryPlugin(configOrApi);
 }
