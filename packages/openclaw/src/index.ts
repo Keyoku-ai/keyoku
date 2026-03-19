@@ -52,6 +52,9 @@ export default function keyokuMemory(config?: KeyokuConfig) {
       api.logger.debug?.(
         `keyoku: plugin registered (url: ${cfg.keyokuUrl}, entityBase: ${entityId}, strategy: ${cfg.entityStrategy})`,
       );
+      api.logger.info(
+        `keyoku: TEMP capture diagnostics enabled (plugin=keyoku-memory incrementalCapture=${cfg.incrementalCapture} url=${cfg.keyokuUrl} entityBase=${entityId} strategy=${cfg.entityStrategy})`,
+      );
 
       // Register 6 memory/schedule tools
       registerTools(api, client, resolver, agentId);
@@ -69,7 +72,6 @@ export default function keyokuMemory(config?: KeyokuConfig) {
       if (cfg.incrementalCapture) {
         registerIncrementalCapture(api, client, resolver, agentId, cfg);
       }
-
     },
   };
 }
