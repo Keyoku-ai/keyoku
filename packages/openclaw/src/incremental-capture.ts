@@ -35,6 +35,19 @@ type BeforePromptBuildEvent = {
   messages?: OpenClawMessage[];
 };
 
+function logCaptureDiagnostic(
+  api: PluginApi,
+  eventName: 'before_prompt_build' | 'agent_end',
+  fields: Record<string, string | number | boolean | null | undefined>,
+): void {
+  const parts = Object.entries(fields)
+    .filter(([, value]) => value !== undefined)
+    .map(([key, value]) => `${key}=${String(value)}`);
+  api.logger.info(
+    `keyoku: TEMP capture_diag event=${eventName}${parts.length ? ` ${parts.join(' ')}` : ''}`,
+  );
+}
+
 function stripInjectedBlocks(text: string): string {
   return text
     .replace(/<your-memories>[\s\S]*?<\/your-memories>/gi, '')
@@ -42,9 +55,7 @@ function stripInjectedBlocks(text: string): string {
     .replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>/gi, '');
 }
 
-function readContentText(
-  content?: string | Array<{ type?: string; text?: string }>,
-): string {
+function readContentText(content?: string | Array<{ type?: string; text?: string }>): string {
   if (!content) return '';
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -79,6 +90,10 @@ export function registerIncrementalCapture(
   agentId: string,
   config: Required<KeyokuConfig>,
 ): void {
+  api.logger.info(
+    `keyoku: TEMP capture diagnostics registered (hook=incremental entityBase=${config.entityId || 'default'} agentId=${agentId} captureMaxChars=${config.captureMaxChars})`,
+  );
+
   // Stash for the most recent user prompt, paired with the next assistant response
   let pendingUserPrompt: string | null = null;
   let pendingEntityId: string | null = null;
@@ -92,43 +107,108 @@ export function registerIncrementalCapture(
     'before_prompt_build',
     async (event: unknown) => {
       const ev = event as BeforePromptBuildEvent;
+      logCaptureDiagnostic(api, 'before_prompt_build', {
+        fired: true,
+        messages: ev.messages?.length ?? 0,
+        prompt_len: ev.prompt?.length ?? 0,
+      });
       if (!ev.prompt && (!ev.messages || ev.messages.length === 0)) {
         clearPending();
+        logCaptureDiagnostic(api, 'before_prompt_build', {
+          skipped: true,
+          reason: 'empty_event',
+          remember: 'no',
+        });
         return;
       }
 
       if (!resolver.isAllowed(ev, 'capture')) {
         clearPending();
+        logCaptureDiagnostic(api, 'before_prompt_build', {
+          skipped: true,
+          reason: 'capture_not_allowed',
+          remember: 'no',
+        });
         return;
       }
 
-      const userContent =
-        extractLatestUserMessage(ev.messages).trim() || cleanPromptForCapture(ev.prompt ?? '');
+      const userMessage = extractLatestUserMessage(ev.messages).trim();
+      const promptFallback = cleanPromptForCapture(ev.prompt ?? '');
+      const userContent = userMessage || promptFallback;
+      const source = userMessage ? 'messages' : 'prompt_fallback';
+      logCaptureDiagnostic(api, 'before_prompt_build', {
+        source,
+        user_len: userContent.length,
+      });
       if (!userContent || userContent.length < 10) {
         clearPending();
+        logCaptureDiagnostic(api, 'before_prompt_build', {
+          skipped: true,
+          reason: !userContent ? 'empty_user_content' : 'user_content_too_short',
+          source,
+          user_len: userContent.length,
+          remember: 'no',
+        });
         return;
       }
 
       // Don't stash heartbeat prompts or injected blocks
       if (userContent.includes('HEARTBEAT')) {
         clearPending();
+        logCaptureDiagnostic(api, 'before_prompt_build', {
+          skipped: true,
+          reason: 'heartbeat_prompt',
+          source,
+          user_len: userContent.length,
+          remember: 'no',
+        });
         return;
       }
       if (userContent.includes('<your-memories>') || userContent.includes('<heartbeat-signals>')) {
         clearPending();
+        logCaptureDiagnostic(api, 'before_prompt_build', {
+          skipped: true,
+          reason: 'injected_memory_or_heartbeat_block',
+          source,
+          user_len: userContent.length,
+          remember: 'no',
+        });
         return;
       }
       if (userContent.length > config.captureMaxChars) {
         clearPending();
+        logCaptureDiagnostic(api, 'before_prompt_build', {
+          skipped: true,
+          reason: 'user_content_too_long',
+          source,
+          user_len: userContent.length,
+          max_len: config.captureMaxChars,
+          remember: 'no',
+        });
         return;
       }
       if (looksLikePromptInjection(userContent)) {
         clearPending();
+        logCaptureDiagnostic(api, 'before_prompt_build', {
+          skipped: true,
+          reason: 'prompt_injection_detected',
+          source,
+          user_len: userContent.length,
+          remember: 'no',
+        });
         return;
       }
 
       pendingUserPrompt = userContent;
       pendingEntityId = resolver.resolve(ev, 'capture');
+      logCaptureDiagnostic(api, 'before_prompt_build', {
+        skipped: false,
+        pending: true,
+        source,
+        user_len: userContent.length,
+        entity_id: pendingEntityId,
+        remember: 'no',
+      });
     },
     { priority: -10 },
   ); // Low priority — runs after auto-recall
@@ -143,13 +223,21 @@ export function registerIncrementalCapture(
       output?: string;
       success?: boolean;
     };
+    logCaptureDiagnostic(api, 'agent_end', {
+      fired: true,
+      messages: ev.messages?.length ?? 0,
+      output_len: ev.output?.length ?? 0,
+      pending_user: Boolean(pendingUserPrompt),
+    });
 
     // Extract assistant response from the event
     let assistantContent = '';
+    let assistantSource: 'output' | 'messages' | 'none' = 'none';
 
     // Try output first (some agent modes provide this)
     if (ev.output) {
       assistantContent = ev.output;
+      assistantSource = 'output';
     }
 
     // Fall back to last assistant message
@@ -166,23 +254,47 @@ export function registerIncrementalCapture(
             .map((b) => b.text!)
             .join(' ');
         }
-        if (assistantContent) break;
+        if (assistantContent) {
+          assistantSource = 'messages';
+          break;
+        }
       }
     }
 
     if (!assistantContent || assistantContent.length < 20) {
       clearPending();
+      logCaptureDiagnostic(api, 'agent_end', {
+        skipped: true,
+        reason: !assistantContent ? 'empty_assistant_content' : 'assistant_content_too_short',
+        assistant_source: assistantSource,
+        assistant_len: assistantContent.length,
+        remember: 'no',
+      });
       return;
     }
 
     if (!resolver.isAllowed(ev, 'capture')) {
       clearPending();
+      logCaptureDiagnostic(api, 'agent_end', {
+        skipped: true,
+        reason: 'capture_not_allowed',
+        assistant_source: assistantSource,
+        assistant_len: assistantContent.length,
+        remember: 'no',
+      });
       return;
     }
 
     // Skip heartbeat/memory noise
     if (assistantContent === 'HEARTBEAT_OK' || assistantContent === 'NO_REPLY') {
       clearPending();
+      logCaptureDiagnostic(api, 'agent_end', {
+        skipped: true,
+        reason: 'heartbeat_or_no_reply',
+        assistant_source: assistantSource,
+        assistant_len: assistantContent.length,
+        remember: 'no',
+      });
       return;
     }
     if (
@@ -190,15 +302,30 @@ export function registerIncrementalCapture(
       assistantContent.includes('<your-memories>')
     ) {
       clearPending();
+      logCaptureDiagnostic(api, 'agent_end', {
+        skipped: true,
+        reason: 'assistant_contains_injected_blocks',
+        assistant_source: assistantSource,
+        assistant_len: assistantContent.length,
+        remember: 'no',
+      });
       return;
     }
     if (looksLikePromptInjection(assistantContent)) {
       clearPending();
+      logCaptureDiagnostic(api, 'agent_end', {
+        skipped: true,
+        reason: 'prompt_injection_detected',
+        assistant_source: assistantSource,
+        assistant_len: assistantContent.length,
+        remember: 'no',
+      });
       return;
     }
 
     // Build the exchange: user prompt + assistant response
     let exchange: string;
+    const mode = pendingUserPrompt ? 'paired' : 'assistant-only';
     if (pendingUserPrompt) {
       exchange = `User: ${pendingUserPrompt}\n\nAssistant: ${assistantContent}`;
       pendingUserPrompt = null; // consumed
@@ -214,15 +341,31 @@ export function registerIncrementalCapture(
 
     const resolvedEntityId = pendingEntityId ?? resolver.resolve(ev, 'capture');
     pendingEntityId = null;
+    logCaptureDiagnostic(api, 'agent_end', {
+      skipped: false,
+      mode,
+      entity_id: resolvedEntityId,
+      assistant_source: assistantSource,
+      assistant_len: assistantContent.length,
+      exchange_len: exchange.length,
+      remember: 'call',
+    });
 
     try {
       await client.remember(resolvedEntityId, exchange, {
         agent_id: agentId,
         source: 'conversation',
       });
-      api.logger.debug?.(`keyoku: captured exchange (${exchange.length} chars)`);
+      logCaptureDiagnostic(api, 'agent_end', {
+        mode,
+        entity_id: resolvedEntityId,
+        exchange_len: exchange.length,
+        remember: 'success',
+      });
     } catch (err) {
-      api.logger.warn(`keyoku: capture failed: ${String(err)}`);
+      api.logger.warn(
+        `keyoku: TEMP capture_diag event=agent_end mode=${mode} entity_id=${resolvedEntityId} exchange_len=${exchange.length} remember=failed error=${String(err)}`,
+      );
     }
   });
 }
