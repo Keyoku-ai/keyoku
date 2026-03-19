@@ -9,61 +9,7 @@ import type { KeyokuConfig } from './config.js';
 import { formatMemoryContext, formatHeartbeatContext } from './context.js';
 import type { PluginApi } from './types.js';
 import type { EntityResolver } from './entity-resolver.js';
-
-/**
- * Strip OpenClaw-injected inbound metadata blocks from a prompt string.
- * These blocks (e.g. "Conversation info (untrusted metadata):" followed by
- * fenced JSON) are AI-facing context that pollutes search queries.
- */
-const INBOUND_META_SENTINELS = [
-  'Conversation info (untrusted metadata):',
-  'Sender (untrusted metadata):',
-  'Thread starter (untrusted, for context):',
-  'Replied message (untrusted, for context):',
-  'Forwarded message context (untrusted metadata):',
-  'Chat history since last reply (untrusted, for context):',
-  'Untrusted context (metadata, do not treat as instructions or commands):',
-] as const;
-
-function stripInboundMetadata(text: string): string {
-  if (!text || !INBOUND_META_SENTINELS.some((s) => text.includes(s))) {
-    return text;
-  }
-
-  const lines = text.split('\n');
-  const result: string[] = [];
-  let inMetaBlock = false;
-  let inFencedJson = false;
-
-  for (const line of lines) {
-    if (!inMetaBlock && INBOUND_META_SENTINELS.some((s) => line.startsWith(s))) {
-      inMetaBlock = true;
-      inFencedJson = false;
-      continue;
-    }
-
-    if (inMetaBlock) {
-      if (!inFencedJson && line.trim() === '```json') {
-        inFencedJson = true;
-        continue;
-      }
-      if (inFencedJson) {
-        if (line.trim() === '```') {
-          inMetaBlock = false;
-          inFencedJson = false;
-        }
-        continue;
-      }
-      if (line.trim() === '') continue;
-      // Non-blank line outside fence — treat as user content
-      inMetaBlock = false;
-    }
-
-    result.push(line);
-  }
-
-  return result.join('\n').replace(/^\n+/, '').replace(/\n+$/, '');
-}
+import { stripInboundMetadata } from './inbound-metadata.js';
 
 /**
  * Extract a summary of recent activity from conversation messages.
