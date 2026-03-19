@@ -1,6 +1,6 @@
 {
   "name": "@keyoku/types",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "Shared type definitions for Keyoku memory engine",
   "type": "module",
   "main": "dist/index.js",
