@@ -23,6 +23,54 @@ import type { KeyokuConfig } from './config.js';
 import { looksLikePromptInjection } from './capture.js';
 import type { PluginApi } from './types.js';
 import type { EntityResolver } from './entity-resolver.js';
+import { stripInboundMetadata } from './inbound-metadata.js';
+
+type OpenClawMessage = {
+  role?: string;
+  content?: string | Array<{ type?: string; text?: string }>;
+};
+
+type BeforePromptBuildEvent = {
+  prompt?: string;
+  messages?: OpenClawMessage[];
+};
+
+function stripInjectedBlocks(text: string): string {
+  return text
+    .replace(/<your-memories>[\s\S]*?<\/your-memories>/gi, '')
+    .replace(/<heartbeat-signals>[\s\S]*?<\/heartbeat-signals>/gi, '')
+    .replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>/gi, '');
+}
+
+function readContentText(
+  content?: string | Array<{ type?: string; text?: string }>,
+): string {
+  if (!content) return '';
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter((b) => b.type === 'text' && b.text)
+    .map((b) => b.text!)
+    .join(' ');
+}
+
+function extractLatestUserMessage(messages?: OpenClawMessage[]): string {
+  if (!Array.isArray(messages)) return '';
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role !== 'user') continue;
+    const text = readContentText(msg.content);
+    if (text) return text;
+  }
+  return '';
+}
+
+function cleanPromptForCapture(prompt: string): string {
+  if (!prompt) return '';
+  const withoutMeta = stripInboundMetadata(prompt);
+  const withoutInjected = stripInjectedBlocks(withoutMeta);
+  return withoutInjected.replace(/\n{3,}/g, '\n\n').trim();
+}
 
 export function registerIncrementalCapture(
   api: PluginApi,
@@ -34,28 +82,52 @@ export function registerIncrementalCapture(
   // Stash for the most recent user prompt, paired with the next assistant response
   let pendingUserPrompt: string | null = null;
   let pendingEntityId: string | null = null;
+  const clearPending = () => {
+    pendingUserPrompt = null;
+    pendingEntityId = null;
+  };
 
   // Step 1: Stash user prompt (no API call yet)
   api.on(
     'before_prompt_build',
     async (event: unknown) => {
-      const ev = event as { prompt?: string };
-      if (!ev.prompt || ev.prompt.length < 10) return;
+      const ev = event as BeforePromptBuildEvent;
+      if (!ev.prompt && (!ev.messages || ev.messages.length === 0)) {
+        clearPending();
+        return;
+      }
 
       if (!resolver.isAllowed(ev, 'capture')) {
-        pendingUserPrompt = null;
-        pendingEntityId = null;
+        clearPending();
+        return;
+      }
+
+      const userContent =
+        extractLatestUserMessage(ev.messages).trim() || cleanPromptForCapture(ev.prompt ?? '');
+      if (!userContent || userContent.length < 10) {
+        clearPending();
         return;
       }
 
       // Don't stash heartbeat prompts or injected blocks
-      if (ev.prompt.includes('HEARTBEAT')) return;
-      if (ev.prompt.includes('<your-memories>') || ev.prompt.includes('<heartbeat-signals>'))
+      if (userContent.includes('HEARTBEAT')) {
+        clearPending();
         return;
-      if (ev.prompt.length > config.captureMaxChars) return;
-      if (looksLikePromptInjection(ev.prompt)) return;
+      }
+      if (userContent.includes('<your-memories>') || userContent.includes('<heartbeat-signals>')) {
+        clearPending();
+        return;
+      }
+      if (userContent.length > config.captureMaxChars) {
+        clearPending();
+        return;
+      }
+      if (looksLikePromptInjection(userContent)) {
+        clearPending();
+        return;
+      }
 
-      pendingUserPrompt = ev.prompt;
+      pendingUserPrompt = userContent;
       pendingEntityId = resolver.resolve(ev, 'capture');
     },
     { priority: -10 },
@@ -98,22 +170,32 @@ export function registerIncrementalCapture(
       }
     }
 
-    if (!assistantContent || assistantContent.length < 20) return;
+    if (!assistantContent || assistantContent.length < 20) {
+      clearPending();
+      return;
+    }
 
     if (!resolver.isAllowed(ev, 'capture')) {
-      pendingUserPrompt = null;
-      pendingEntityId = null;
+      clearPending();
       return;
     }
 
     // Skip heartbeat/memory noise
-    if (assistantContent === 'HEARTBEAT_OK' || assistantContent === 'NO_REPLY') return;
+    if (assistantContent === 'HEARTBEAT_OK' || assistantContent === 'NO_REPLY') {
+      clearPending();
+      return;
+    }
     if (
       assistantContent.includes('<heartbeat-signals>') ||
       assistantContent.includes('<your-memories>')
-    )
+    ) {
+      clearPending();
       return;
-    if (looksLikePromptInjection(assistantContent)) return;
+    }
+    if (looksLikePromptInjection(assistantContent)) {
+      clearPending();
+      return;
+    }
 
     // Build the exchange: user prompt + assistant response
     let exchange: string;
