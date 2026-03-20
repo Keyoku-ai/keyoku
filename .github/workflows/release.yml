@@ -48,3 +48,20 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+
+      - name: Trigger keyoku-git deploy
+        if: ${{ success() }}
+        env:
+          GH_TOKEN: ${{ secrets.KEYOKU_GIT_WORKFLOW_TOKEN }}
+        run: |
+          set -eu
+
+          version="${GITHUB_REF_NAME#v}"
+          echo "Release publish succeeded; triggering keyoku-git Deploy to VPS for @keyoku/openclaw ${version}."
+
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            "repos/Keyoku-ai/keyoku-git/actions/workflows/deploy.yml/dispatches" \
+            -f ref=main \
+            -f inputs[expected_keyoku_openclaw_version]="$version"
