@@ -41,12 +41,12 @@ OpenClaw cron timer fires
 
 ## Example: Daily Review
 
-A user tells their agent: "Every morning, review my PRs and summarize what needs attention."
+A user tells their agent: "Every morning, review my inbox and summarize what needs attention."
 
 This uses **both** systems:
 1. **OpenClaw cron** — configured to spawn the agent session at 9:00 AM daily
-2. **Keyoku schedule** — stores the memory "Review user's PRs and summarize" with a `cron:0 9 * * *` tag
-3. When the cron fires → agent session starts → heartbeat runs → Keyoku surfaces the "review PRs" memory → agent acts on it
+2. **Keyoku schedule** — stores the memory "Review user's inbox and summarize" with a `cron:0 9 * * *` tag
+3. When the cron fires → agent session starts → heartbeat runs → Keyoku surfaces the "review inbox" memory → agent acts on it
 
 Without OpenClaw cron, there's no session to run in. Without Keyoku scheduling, the agent wouldn't know *what* to do when it wakes up.
 

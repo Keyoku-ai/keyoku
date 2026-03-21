@@ -137,7 +137,7 @@ Even with the LanceDB extension enabled, OpenClaw's memory is **store-and-retrie
 
 #### No memory intelligence
 
-- **No deduplication.** "Prefers TypeScript" and "likes TS" get stored as two separate memories. Over time, your memory fills with redundant facts.
+- **No deduplication.** "Prefers morning meetings" and "likes early standups" get stored as two separate memories. Over time, your memory fills with redundant facts.
 - **No conflict detection.** You changed your mind? Both the old preference and the new one sit in memory. The agent might surface the wrong one.
 - **No decay.** A preference from 6 months ago is treated the same as one from yesterday. Stale information never fades.
 - **Capped results.** Built-in search returns max 6 snippets at ~700 characters each. The LanceDB extension injects 3 memories. If the answer is buried deeper, it's invisible.
@@ -167,7 +167,7 @@ Keyoku replaces OpenClaw's memory slot with a **full cognitive engine**:
 - **12 signal heartbeat** — not a file read. 12 SQL-driven checks against your actual memory store, every tick: scheduled tasks, deadlines, pending work, conflicts, goal progress, session continuity, sentiment trends, relationship alerts, knowledge gaps, behavioral patterns, stale monitors, and decaying memories.
 - **LLM analysis** — when signals fire, an LLM evaluates the situation with knowledge graph context and generates structured action briefs
 - **Three autonomy levels** — `observe` (log only), `suggest` (recommend to user), `act` (execute immediately)
-- **Idle check-ins** — personalized nudges based on what it knows you're working on. Not "how are you?" but "Hey, how did that API migration go?"
+- **Idle check-ins** — personalized nudges based on what it knows you're working on. Not "how are you?" but "Hey, how did that product launch go?"
 
 ### Side-by-side
 
@@ -325,7 +325,7 @@ The heartbeat isn't just a signal scanner — it's a decision engine that uses y
 
 - **Notices when things improve.** If a goal goes from "at risk" to "on track," or someone you lost touch with messages again, the brain surfaces it. Agents that only nag feel robotic. Agents that acknowledge progress feel human.
 
-- **Matches your patterns.** If you always do code reviews on Tuesdays, the brain knows. It'll surface relevant plans and memories on the right day instead of generic check-ins.
+- **Matches your patterns.** If you always do weekly reviews on Tuesdays, the brain knows. It'll surface relevant plans and memories on the right day instead of generic check-ins.
 
 - **Uses the knowledge graph.** Before asking the LLM what to say, the brain enriches every signal with entity relationships — so the LLM knows that "Alice" is a person who works at ClientCo and is connected to the Q3 launch plan, not just a name in a memory.
 
@@ -341,26 +341,26 @@ Keyoku injects **real, structured signals** directly into the agent's context:
 The user has a project deadline in 2 days and hasn't mentioned it recently.
 
 ## Suggested Actions
-- Remind the user about the Friday deadline for the API migration
+- Remind the user about the Friday deadline for the product launch
 - Ask if they need help prioritizing remaining tasks
 
 ## Tell the User
-Hey — just a heads up, your API migration deadline is this Friday.
+Hey — just a heads up, your product launch deadline is this Friday.
 Looks like there are still 3 open tasks. Want me to help prioritize?
 
 ## Knowledge Graph Context
 - Alice (person) -[works_at]-> ClientCo (org)
-- API Migration (project) -[assigned_to]-> Alice (person)
-- API Migration (project) -[blocked_by]-> Auth Refactor (project)
+- Product Launch (project) -[assigned_to]-> Alice (person)
+- Product Launch (project) -[blocked_by]-> Partner Agreement (task)
 
 ## What You Know
-- User is working on API migration from REST to GraphQL
+- User is working on the Q2 product launch
 - Deadline is Friday March 14th
 - Prefers to tackle hardest tasks first
 - Last mentioned the project 4 days ago
 
 ## Positive Changes
-- [goal_improved] "Auth Refactor" moved from at_risk to on_track
+- [goal_improved] "Partner Agreement" moved from at_risk to on_track
 
 Urgency: soon | Mode: suggest
 </heartbeat-signals>
@@ -370,7 +370,7 @@ The agent gets what's happening, what to do about it, who's involved, what's imp
 
 ### Idle check-ins
 
-When nothing is urgent, Keyoku notices the silence. After a few quiet ticks, it triggers a personalized check-in — matched to your behavioral patterns and what it knows you're working on. Not "how are you?" but "Hey, how did that API migration go?"
+When nothing is urgent, Keyoku notices the silence. After a few quiet ticks, it triggers a personalized check-in — matched to your behavioral patterns and what it knows you're working on. Not "how are you?" but "Hey, how did that product launch go?"
 
 ---
 
@@ -467,7 +467,7 @@ Everything works out of the box with defaults. Customize only what you need in `
 
 ---
 
-## For Developers: Standalone Memory Client
+## Standalone Memory Client
 
 Building a custom agent without OpenClaw? Use `@keyoku/memory` directly for full programmatic access to the memory engine.
 
@@ -481,7 +481,7 @@ import { KeyokuClient } from '@keyoku/memory';
 const keyoku = new KeyokuClient();
 
 // Store a memory
-await keyoku.remember('user-123', 'Prefers dark mode and TypeScript');
+await keyoku.remember('user-123', 'Prefers dark mode and concise responses');
 
 // Semantic search
 const results = await keyoku.search('user-123', 'UI preferences');
@@ -497,7 +497,7 @@ if (heartbeat.should_act) {
 const ctx = await keyoku.heartbeatContext('user-123', {
   analyze: true,
   autonomy: 'suggest',
-  activity_summary: 'User was working on API migration',
+  activity_summary: 'User was working on the product launch',
 });
 
 // Scheduling
@@ -538,7 +538,7 @@ const client = new KeyokuClient({ baseUrl?: string, timeout?: number });
 | Package | Description | npm |
 |---------|-------------|-----|
 | [`@keyoku/openclaw`](packages/openclaw) | **OpenClaw plugin** — the main package. Auto-recall, auto-capture, heartbeat, tools, CLI | [![npm](https://img.shields.io/npm/v/@keyoku/openclaw?style=flat-square&color=6366f1)](https://www.npmjs.com/package/@keyoku/openclaw) |
-| [`@keyoku/memory`](packages/memory) | Standalone HTTP client for developers building custom agents | [![npm](https://img.shields.io/npm/v/@keyoku/memory?style=flat-square&color=6366f1)](https://www.npmjs.com/package/@keyoku/memory) |
+| [`@keyoku/memory`](packages/memory) | Standalone HTTP client for building custom agents | [![npm](https://img.shields.io/npm/v/@keyoku/memory?style=flat-square&color=6366f1)](https://www.npmjs.com/package/@keyoku/memory) |
 | [`@keyoku/types`](packages/types) | Shared TypeScript type definitions | [![npm](https://img.shields.io/npm/v/@keyoku/types?style=flat-square&color=6366f1)](https://www.npmjs.com/package/@keyoku/types) |
 
 ## How It Works
