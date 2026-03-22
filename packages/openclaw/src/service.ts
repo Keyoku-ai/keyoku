@@ -89,6 +89,43 @@ export function loadKeyokuEnv(): Record<string, string> {
   return vars;
 }
 
+/**
+ * Non-blocking check: compare running engine version against latest GitHub release.
+ */
+async function checkForUpdate(
+  url: string,
+  logger: PluginApi['logger'],
+): Promise<void> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+
+    const healthRes = await fetch(`${url}/api/v1/health`, { signal: controller.signal });
+    if (!healthRes.ok) return;
+    const health = (await healthRes.json()) as { version?: string };
+    const current = health.version;
+    if (!current || current === 'dev') return;
+
+    const ghRes = await fetch(
+      'https://api.github.com/repos/keyoku-ai/keyoku-engine/releases/latest',
+      { signal: controller.signal, headers: { Accept: 'application/vnd.github.v3+json' } },
+    );
+    clearTimeout(timer);
+    if (!ghRes.ok) return;
+    const release = (await ghRes.json()) as { tag_name: string };
+    const latest = release.tag_name.replace(/^v/, '');
+    const currentClean = current.replace(/^v/, '');
+
+    if (currentClean !== latest) {
+      logger.info(
+        `keyoku: Update available: ${current} → ${latest}. Run: npx @keyoku/openclaw update-engine`,
+      );
+    }
+  } catch {
+    // Silently ignore — never block startup
+  }
+}
+
 export function registerService(api: PluginApi, keyokuUrl: string): void {
   api.registerService({
     id: 'keyoku-engine',
@@ -97,6 +134,7 @@ export function registerService(api: PluginApi, keyokuUrl: string): void {
       // Skip if already running
       if (await isKeyokuRunning(keyokuUrl)) {
         api.logger.info('keyoku: Keyoku already running');
+        checkForUpdate(keyokuUrl, api.logger).catch(() => {});
         return;
       }
 
@@ -155,6 +193,8 @@ export function registerService(api: PluginApi, keyokuUrl: string): void {
         // Wait for health check with retry
         if (await waitForHealthy(keyokuUrl)) {
           api.logger.info('keyoku: Keyoku started successfully');
+          // Fire-and-forget version check
+          checkForUpdate(keyokuUrl, api.logger).catch(() => {});
         } else {
           api.logger.warn(
             'keyoku: Keyoku started but health check failed — it may still be initializing',
