@@ -172,6 +172,32 @@ describe('KeyokuClient', () => {
     });
   });
 
+  describe('heartbeatContext', () => {
+    it('includes signals_only in the POST body when enabled', async () => {
+      mockFetch.mockResolvedValue(jsonResponse({
+        should_act: false,
+        pending_work: [],
+        deadlines: [],
+        scheduled: [],
+        conflicts: [],
+        relevant_memories: [],
+        goal_progress: [],
+      }));
+
+      await client.heartbeatContext('entity-1', {
+        query: 'recent priorities',
+        signals_only: true,
+        analyze: true,
+      });
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.entity_id).toBe('entity-1');
+      expect(body.query).toBe('recent priorities');
+      expect(body.signals_only).toBe(true);
+      expect(body.analyze).toBe(true);
+    });
+  });
+
   describe('schedules', () => {
     it('createSchedule sends correct body', async () => {
       mockFetch.mockResolvedValue(jsonResponse({ id: 's1' }));

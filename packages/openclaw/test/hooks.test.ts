@@ -148,6 +148,7 @@ describe('hooks', () => {
         agent_id: 'agent-1',
         max_results: 10,
         analyze: true,
+        signals_only: true,
       }));
       expect(result).toHaveProperty('prependContext');
       expect((result as { prependContext: string }).prependContext).toContain('Report due');

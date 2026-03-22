@@ -57,13 +57,15 @@ function registerKeyokuMemory(api: PluginApi, config?: KeyokuConfig): void {
     defaults.heartbeat = heartbeat;
     agents.defaults = defaults;
     ocConfig.agents = agents;
-    api.logger.info('keyoku: disabled OpenClaw heartbeat runner (keyoku engine watcher handles heartbeats)');
+    api.logger.debug?.(
+      'keyoku: disabled OpenClaw heartbeat runner (keyoku engine watcher handles heartbeats)',
+    );
   }
 
   api.logger.debug?.(
     `keyoku: plugin registered (url: ${cfg.keyokuUrl}, entityBase: ${entityId}, strategy: ${cfg.entityStrategy})`,
   );
-  api.logger.info(
+  api.logger.debug?.(
     `keyoku: TEMP capture diagnostics enabled (plugin=keyoku-memory incrementalCapture=${cfg.incrementalCapture} url=${cfg.keyokuUrl} entityBase=${entityId} strategy=${cfg.entityStrategy})`,
   );
 
