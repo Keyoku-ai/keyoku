@@ -8,6 +8,7 @@ import type {
   RememberResult,
   HeartbeatResult,
   HeartbeatContextResult,
+  HeartbeatVerbosity,
   MemoryStats,
 } from '@keyoku/types';
 
@@ -17,6 +18,7 @@ export {
   type RememberResult,
   type HeartbeatResult,
   type HeartbeatContextResult,
+  type HeartbeatVerbosity,
   type MemoryStats,
 } from '@keyoku/types';
 
@@ -212,6 +214,7 @@ export class KeyokuClient {
       autonomy?: 'observe' | 'suggest' | 'act';
       in_conversation?: boolean;
       signals_only?: boolean;
+      verbosity?: HeartbeatVerbosity;
     },
   ): Promise<HeartbeatContextResult> {
     return this.request<HeartbeatContextResult>('POST', '/api/v1/heartbeat/context', {

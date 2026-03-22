@@ -209,7 +209,7 @@ describe('context', () => {
         },
       };
 
-      const ctx = formatHeartbeatContext(hb);
+      const ctx = formatHeartbeatContext(hb, 'standard');
       expect(ctx).toContain('<heartbeat-signals>');
       expect(ctx).toContain('User has a meeting in 10 minutes');
       expect(ctx).toContain('Key message: You have a meeting coming up soon!');
