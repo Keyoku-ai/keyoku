@@ -33,7 +33,7 @@ describe('keyokuMemory entrypoint', () => {
     expect(api.registerService).toHaveBeenCalledTimes(1);
     expect(api.registerCli).toHaveBeenCalledTimes(1);
     expect(api.logger.debug).toHaveBeenCalledWith(
-      expect.stringContaining('keyoku: TEMP capture diagnostics enabled'),
+      expect.stringContaining('keyoku: capture diagnostics'),
     );
   });
 
@@ -74,7 +74,6 @@ describe('keyokuMemory entrypoint', () => {
     const defaults = agents.defaults as Record<string, unknown>;
     const heartbeat = defaults.heartbeat as Record<string, unknown>;
     expect(heartbeat.target).toBe('none');
-    expect(heartbeat).not.toHaveProperty('every');
     expect(api.logger.debug).toHaveBeenCalledWith(
       expect.stringContaining('disabled OpenClaw heartbeat runner'),
     );

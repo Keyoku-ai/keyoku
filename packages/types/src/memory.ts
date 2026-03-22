@@ -157,7 +157,7 @@ export interface HeartbeatContextResult {
   graph_context?: string[];
   recent_messages?: string[]; // last N heartbeat messages for dedup
 
-  // v5: Developer trace (debug/detailed verbosity only)
+  // v5: Developer trace (debug verbosity only)
   developer_trace?: DeveloperTrace;
 }
 

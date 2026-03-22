@@ -104,12 +104,12 @@ export function formatHeartbeatContext(
       }
       if (a.linked_entities && a.linked_entities.length > 0) {
         lines.push('');
-        lines.push(`Linked entities: ${a.linked_entities.join(', ')}`);
+        lines.push(`Linked entities: ${a.linked_entities.map(e => escapeMemoryText(e)).join(', ')}`);
       }
       if (verbosity === 'debug' && ctx.developer_trace) {
         lines.push('');
         lines.push('<heartbeat-debug>');
-        lines.push(JSON.stringify(ctx.developer_trace, null, 2));
+        lines.push(escapeMemoryText(JSON.stringify(ctx.developer_trace, null, 2)));
         lines.push('</heartbeat-debug>');
       }
     }

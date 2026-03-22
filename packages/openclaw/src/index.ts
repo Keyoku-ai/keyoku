@@ -66,7 +66,7 @@ function registerKeyokuMemory(api: PluginApi, config?: KeyokuConfig): void {
     `keyoku: plugin registered (url: ${cfg.keyokuUrl}, entityBase: ${entityId}, strategy: ${cfg.entityStrategy})`,
   );
   api.logger.debug?.(
-    `keyoku: TEMP capture diagnostics enabled (plugin=keyoku-memory incrementalCapture=${cfg.incrementalCapture} url=${cfg.keyokuUrl} entityBase=${entityId} strategy=${cfg.entityStrategy})`,
+    `keyoku: capture diagnostics (plugin=keyoku-memory incrementalCapture=${cfg.incrementalCapture} url=${cfg.keyokuUrl} entityBase=${entityId} strategy=${cfg.entityStrategy})`,
   );
 
   // Register 6 memory/schedule tools
