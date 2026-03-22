@@ -38,6 +38,8 @@ export interface KeyokuConfig {
   captureInGroups?: boolean;
   /** Allow memory recall in group chats/channels (default: true) */
   recallInGroups?: boolean;
+  /** Heartbeat verbosity level (default: 'conversational') */
+  verbosity?: 'conversational' | 'standard' | 'detailed' | 'debug';
 }
 
 export const DEFAULT_CONFIG: Required<KeyokuConfig> = {
@@ -55,6 +57,7 @@ export const DEFAULT_CONFIG: Required<KeyokuConfig> = {
   entityTemplate: '{base}',
   captureInGroups: true,
   recallInGroups: true,
+  verbosity: 'conversational',
 };
 
 export function resolveConfig(config?: KeyokuConfig): Required<KeyokuConfig> {

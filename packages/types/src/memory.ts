@@ -49,6 +49,8 @@ export interface HeartbeatResult {
   urgency?: 'immediate' | 'soon' | 'can_wait';
 }
 
+export type HeartbeatVerbosity = 'conversational' | 'standard' | 'detailed' | 'debug';
+
 export interface HeartbeatAnalysis {
   should_act: boolean;
   action_brief: string;
@@ -57,6 +59,23 @@ export interface HeartbeatAnalysis {
   reasoning: string;
   autonomy: 'observe' | 'suggest' | 'act';
   user_facing: string;
+  evidence?: string[];
+  linked_entities?: string[];
+}
+
+export interface DeveloperTrace {
+  signal_fingerprint: string;
+  signal_classification?: Record<string, string>;
+  decision_reason: string;
+  cooldown_state?: string;
+  confluence_score: number;
+  confluence_threshold: number;
+  response_rate: number;
+  time_period: string;
+  escalation_level: number;
+  memory_velocity: number;
+  llm_latency_ms: number;
+  raw_prompt?: string;
 }
 
 export interface GoalProgress {
@@ -137,6 +156,9 @@ export interface HeartbeatContextResult {
   positive_deltas?: PositiveDelta[];
   graph_context?: string[];
   recent_messages?: string[]; // last N heartbeat messages for dedup
+
+  // v5: Developer trace (debug/detailed verbosity only)
+  developer_trace?: DeveloperTrace;
 }
 
 export interface PositiveDelta {

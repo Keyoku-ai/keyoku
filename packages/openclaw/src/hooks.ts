@@ -140,6 +140,7 @@ export function registerHooks(
             autonomy: config.autonomy,
             in_conversation: hasUserMessages,
             signals_only: true, // Watcher already decided; just get fresh signals without re-evaluating cooldowns
+            verbosity: config.verbosity,
           });
 
           const memories = ctx.relevant_memories ?? [];
@@ -147,7 +148,7 @@ export function registerHooks(
 
           // Engine decides — plugin just logs and passes through
           if (ctx.should_act) {
-            const formatted = formatHeartbeatContext(ctx);
+            const formatted = formatHeartbeatContext(ctx, config.verbosity);
             if (formatted) {
               const analysis = ctx.analysis;
               const analyzed = analysis ? ` [${analysis.autonomy}/${analysis.urgency}]` : '';

@@ -2,7 +2,12 @@
  * Builds formatted memory context strings for prompt injection
  */
 
-import type { SearchResult, HeartbeatContextResult, Memory } from '@keyoku/types';
+import type {
+  SearchResult,
+  HeartbeatContextResult,
+  HeartbeatVerbosity,
+  Memory,
+} from '@keyoku/types';
 
 /**
  * Escape potentially unsafe characters in memory text to prevent prompt injection.
@@ -28,7 +33,15 @@ export function formatMemoryContext(results: SearchResult[]): string {
  * Format combined heartbeat context (signals + relevant memories) into natural language.
  * Replaces structured data dump with a briefing the AI can act on naturally.
  */
-export function formatHeartbeatContext(ctx: HeartbeatContextResult): string {
+export function formatHeartbeatContext(
+  ctx: HeartbeatContextResult,
+  verbosity: HeartbeatVerbosity = 'conversational',
+): string {
+  // Conversational: just the user_facing message or one-line summary
+  if (verbosity === 'conversational' && ctx.analysis?.user_facing) {
+    return wrapSignals([escapeMemoryText(ctx.analysis.user_facing)]);
+  }
+
   const lines: string[] = [];
 
   // First-contact mode
@@ -79,6 +92,27 @@ export function formatHeartbeatContext(ctx: HeartbeatContextResult): string {
     appendRecentMessages(lines, ctx);
     appendTimePeriod(lines, ctx);
     appendSentiment(lines, ctx);
+
+    // Detailed/debug: append evidence, linked entities, and developer trace
+    if (verbosity === 'detailed' || verbosity === 'debug') {
+      if (a.evidence && a.evidence.length > 0) {
+        lines.push('');
+        lines.push('Evidence:');
+        for (const e of a.evidence) {
+          lines.push(`- ${escapeMemoryText(e)}`);
+        }
+      }
+      if (a.linked_entities && a.linked_entities.length > 0) {
+        lines.push('');
+        lines.push(`Linked entities: ${a.linked_entities.join(', ')}`);
+      }
+      if (verbosity === 'debug' && ctx.developer_trace) {
+        lines.push('');
+        lines.push('<heartbeat-debug>');
+        lines.push(JSON.stringify(ctx.developer_trace, null, 2));
+        lines.push('</heartbeat-debug>');
+      }
+    }
 
     return wrapSignals(lines);
   }

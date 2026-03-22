@@ -212,6 +212,7 @@ export class KeyokuClient {
       autonomy?: 'observe' | 'suggest' | 'act';
       in_conversation?: boolean;
       signals_only?: boolean;
+      verbosity?: 'conversational' | 'standard' | 'detailed' | 'debug';
     },
   ): Promise<HeartbeatContextResult> {
     return this.request<HeartbeatContextResult>('POST', '/api/v1/heartbeat/context', {
