@@ -32,7 +32,7 @@ describe('keyokuMemory entrypoint', () => {
     expect(api.on).toHaveBeenCalled();
     expect(api.registerService).toHaveBeenCalledTimes(1);
     expect(api.registerCli).toHaveBeenCalledTimes(1);
-    expect(api.logger.info).toHaveBeenCalledWith(
+    expect(api.logger.debug).toHaveBeenCalledWith(
       expect.stringContaining('keyoku: TEMP capture diagnostics enabled'),
     );
   });
@@ -61,5 +61,31 @@ describe('keyokuMemory entrypoint', () => {
       kind: 'memory',
       register: expect.any(Function),
     });
+  });
+
+  it('disables OpenClaw heartbeat runner via target: "none" when heartbeat is enabled', () => {
+    const api = createMockApi({ heartbeat: true });
+
+    keyokuMemory(api);
+
+    // Verify the canonical disable mechanism is used (target: "none", not every: "0")
+    const config = api.config as Record<string, unknown>;
+    const agents = config.agents as Record<string, unknown>;
+    const defaults = agents.defaults as Record<string, unknown>;
+    const heartbeat = defaults.heartbeat as Record<string, unknown>;
+    expect(heartbeat.target).toBe('none');
+    expect(heartbeat).not.toHaveProperty('every');
+    expect(api.logger.debug).toHaveBeenCalledWith(
+      expect.stringContaining('disabled OpenClaw heartbeat runner'),
+    );
+  });
+
+  it('does not disable OpenClaw heartbeat runner when heartbeat is false', () => {
+    const api = createMockApi({ heartbeat: false });
+
+    keyokuMemory(api);
+
+    const config = api.config as Record<string, unknown>;
+    expect(config.agents).toBeUndefined();
   });
 });

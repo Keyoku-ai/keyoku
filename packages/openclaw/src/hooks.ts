@@ -139,6 +139,7 @@ export function registerHooks(
             activity_summary: activitySummary || undefined,
             autonomy: config.autonomy,
             in_conversation: hasUserMessages,
+            signals_only: true, // Watcher already decided; just get fresh signals without re-evaluating cooldowns
           });
 
           const memories = ctx.relevant_memories ?? [];

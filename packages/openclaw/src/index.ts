@@ -44,10 +44,28 @@ function registerKeyokuMemory(api: PluginApi, config?: KeyokuConfig): void {
     timeout: 60000,
   });
 
+  // When keyoku heartbeat is enabled, disable OpenClaw's built-in heartbeat runner.
+  // The keyoku engine watcher handles heartbeat cycles with smart adaptive intervals;
+  // OpenClaw's runner would fire redundantly every 30m, wasting LLM tokens.
+  // Uses target: "none" — the canonical disable mechanism used by disableOpenClawHeartbeat() in init.
+  if (cfg.heartbeat && api.config) {
+    const ocConfig = api.config as Record<string, unknown>;
+    const agents = (ocConfig.agents ?? {}) as Record<string, unknown>;
+    const defaults = (agents.defaults ?? {}) as Record<string, unknown>;
+    const heartbeat = (defaults.heartbeat ?? {}) as Record<string, unknown>;
+    heartbeat.target = 'none';
+    defaults.heartbeat = heartbeat;
+    agents.defaults = defaults;
+    ocConfig.agents = agents;
+    api.logger.debug?.(
+      'keyoku: disabled OpenClaw heartbeat runner (keyoku engine watcher handles heartbeats)',
+    );
+  }
+
   api.logger.debug?.(
     `keyoku: plugin registered (url: ${cfg.keyokuUrl}, entityBase: ${entityId}, strategy: ${cfg.entityStrategy})`,
   );
-  api.logger.info(
+  api.logger.debug?.(
     `keyoku: TEMP capture diagnostics enabled (plugin=keyoku-memory incrementalCapture=${cfg.incrementalCapture} url=${cfg.keyokuUrl} entityBase=${entityId} strategy=${cfg.entityStrategy})`,
   );
 
