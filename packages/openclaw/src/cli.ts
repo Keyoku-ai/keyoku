@@ -79,15 +79,20 @@ export function registerCli(api: PluginApi, client: KeyokuClient, entityId: stri
 
       memory
         .command('import')
-        .description('Import OpenClaw memory files (MEMORY.md, memory/*.md) into Keyoku')
-        .option('--dir <path>', 'Workspace directory containing memory files', '.')
+        .description('Import files into Keyoku (md, txt, json, yaml — recursive)')
+        .option('--dir <path>', 'Root directory to scan', '.')
+        .option('--depth <n>', 'Max recursion depth (-1 = unlimited, 0 = no recursion)', '5')
+        .option('--types <list>', 'Comma-separated file extensions', 'md,txt,json,yaml,yml')
         .option('--dry-run', 'Show what would be imported without storing')
         .action(async (opts: unknown) => {
-          const options = opts as { dir: string; dryRun?: boolean };
+          const options = opts as { dir: string; depth: string; types: string; dryRun?: boolean };
+          const types = options.types.split(',').map((t) => (t.startsWith('.') ? t : `.${t}`));
           const result = await importMemoryFiles({
             client,
             entityId,
             workspaceDir: options.dir,
+            depth: parseInt(options.depth, 10),
+            types,
             dryRun: options.dryRun,
             logger: console,
           });
