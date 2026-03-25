@@ -9,6 +9,8 @@ function createMockClient() {
     search: vi.fn(),
     remember: vi.fn(),
     heartbeatContext: vi.fn(),
+    ackSchedule: vi.fn(),
+    recordHeartbeatMessage: vi.fn(),
   };
 }
 
@@ -149,6 +151,7 @@ describe('hooks', () => {
         max_results: 10,
         analyze: true,
         signals_only: true,
+        auto_ack_scheduled: false,
       }));
       expect(result).toHaveProperty('prependContext');
       expect((result as { prependContext: string }).prependContext).toContain('Report due');
@@ -161,6 +164,43 @@ describe('hooks', () => {
 
       expect(mockClient.heartbeatContext).not.toHaveBeenCalled();
       expect(result).toBeUndefined();
+    });
+
+    it('acknowledges due schedules only after a real heartbeat response', async () => {
+      mockClient.heartbeatContext.mockResolvedValue({
+        should_act: true,
+        pending_work: [],
+        deadlines: [],
+        scheduled: [
+          { id: 'sched-1', content: 'Check PRs' },
+          { id: 'sched-2', content: 'Review backlog' },
+        ],
+        conflicts: [],
+        relevant_memories: [],
+      });
+      mockClient.ackSchedule.mockResolvedValue({ status: 'acknowledged' });
+      mockClient.recordHeartbeatMessage.mockResolvedValue({ status: 'ok', id: 'hb-1' });
+
+      await mockApi.hooks['before_prompt_build']({
+        prompt: 'Read HEARTBEAT.md and follow instructions',
+      });
+
+      await mockApi.hooks['agent_end']({
+        messages: [
+          { role: 'user', content: 'HEARTBEAT poll' },
+          { role: 'assistant', content: 'You should check PR #94 today.' },
+        ],
+        output: 'You should check PR #94 today.',
+      });
+
+      expect(mockClient.ackSchedule).toHaveBeenCalledTimes(2);
+      expect(mockClient.ackSchedule).toHaveBeenNthCalledWith(1, 'sched-1');
+      expect(mockClient.ackSchedule).toHaveBeenNthCalledWith(2, 'sched-2');
+      expect(mockClient.recordHeartbeatMessage).toHaveBeenCalledWith(
+        'entity-1',
+        'You should check PR #94 today.',
+        { agent_id: 'agent-1' },
+      );
     });
   });
 

@@ -59,6 +59,9 @@ export function registerHooks(
   agentId: string,
   config: Required<KeyokuConfig>,
 ): void {
+  // Due schedules waiting for post-delivery acknowledgment, keyed by entity.
+  const pendingScheduleAcks = new Map<string, Set<string>>();
+
   // before_prompt_build: auto-recall + heartbeat context injection
   if (config.autoRecall || config.heartbeat) {
     api.on('before_prompt_build', async (event: unknown) => {
@@ -141,6 +144,7 @@ export function registerHooks(
             in_conversation: hasUserMessages,
             signals_only: true, // Watcher already decided; just get fresh signals without re-evaluating cooldowns
             verbosity: config.verbosity,
+            auto_ack_scheduled: false,
           });
 
           const memories = ctx.relevant_memories ?? [];
@@ -150,15 +154,25 @@ export function registerHooks(
           if (ctx.should_act) {
             const formatted = formatHeartbeatContext(ctx, config.verbosity);
             if (formatted) {
+              const dueScheduleIds = (ctx.scheduled ?? [])
+                .map((m) => m?.id)
+                .filter((id): id is string => Boolean(id));
+              if (dueScheduleIds.length > 0) {
+                pendingScheduleAcks.set(entityId, new Set(dueScheduleIds));
+              } else {
+                pendingScheduleAcks.delete(entityId);
+              }
+
               const analysis = ctx.analysis;
               const analyzed = analysis ? ` [${analysis.autonomy}/${analysis.urgency}]` : '';
               api.logger.info?.(
-                `keyoku: heartbeat ${decision} (memories: ${memories.length}, tier: ${ctx.highest_urgency_tier ?? 'n/a'}${analyzed})`,
+                `keyoku: heartbeat ${decision} (memories: ${memories.length}, tier: ${ctx.highest_urgency_tier ?? 'n/a'}${analyzed}, dueSchedules: ${dueScheduleIds.length})`,
               );
               return { prependContext: formatted };
             }
           }
 
+          pendingScheduleAcks.delete(entityId);
           api.logger.info?.(
             `keyoku: heartbeat ${decision} (should_act: false, memories: ${memories.length})`,
           );
@@ -243,7 +257,7 @@ export function registerHooks(
         }
       }
 
-      // Don't record non-messages
+      // Don't record/ack non-messages
       if (
         !response ||
         response === 'HEARTBEAT_OK' ||
@@ -254,9 +268,25 @@ export function registerHooks(
 
       try {
         const entityId = resolver.resolve(ev, 'heartbeat');
+
+        // Post-delivery ack: acknowledge due schedules only after a real
+        // heartbeat message was produced (not HEARTBEAT_OK / NO_REPLY).
+        const pending = pendingScheduleAcks.get(entityId);
+        if (pending && pending.size > 0) {
+          const ids = Array.from(pending);
+          for (const id of ids) {
+            await client.ackSchedule(id);
+            pending.delete(id);
+          }
+          if (pending.size === 0) {
+            pendingScheduleAcks.delete(entityId);
+          }
+          api.logger.info?.(`keyoku: acknowledged ${ids.length} due schedule(s) after heartbeat delivery`);
+        }
+
         await client.recordHeartbeatMessage(entityId, response, { agent_id: agentId });
       } catch (err) {
-        api.logger.warn(`keyoku: failed to record heartbeat message: ${String(err)}`);
+        api.logger.warn(`keyoku: failed to finalize heartbeat delivery: ${String(err)}`);
       }
     });
   }
