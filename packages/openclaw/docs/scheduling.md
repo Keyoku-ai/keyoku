@@ -18,9 +18,10 @@ Keyoku scheduling and OpenClaw's built-in cron are **complementary systems** tha
 OpenClaw cron timer fires
   → spawns agent session
     → heartbeat hook runs
-      → Keyoku heartbeat check queries scheduled memories
+      → Keyoku heartbeat check queries scheduled memories (auto_ack_scheduled=false)
         → due schedules appear in <heartbeat-signals>
-          → agent reads signals and acts on them
+          → agent emits a real heartbeat message
+            → integration acknowledges due schedule IDs via /schedule/ack
 ```
 
 **OpenClaw cron** is the execution layer — it decides *when* to wake up an agent. **Keyoku scheduling** is the memory layer — it decides *what the agent should be reminded about* when it wakes up.
@@ -49,6 +50,18 @@ This uses **both** systems:
 3. When the cron fires → agent session starts → heartbeat runs → Keyoku surfaces the "review inbox" memory → agent acts on it
 
 Without OpenClaw cron, there's no session to run in. Without Keyoku scheduling, the agent wouldn't know *what* to do when it wakes up.
+
+## Reminder lifecycle (integration contract)
+
+For the OpenClaw + Keyoku integration path, scheduled reminders are treated as handled only after this sequence:
+
+1. **Created** — memory stored with a `cron:*` tag
+2. **Due** — heartbeat context includes the reminder in `scheduled`
+3. **Surfaced** — plugin injects it into `<heartbeat-signals>`
+4. **Delivered** — assistant sends a real heartbeat message (not `HEARTBEAT_OK`/`NO_REPLY`)
+5. **Acked** — plugin calls `/schedule/ack` for due schedule IDs
+
+This keeps reminder semantics in Keyoku while ensuring delivery semantics stay in the runtime/integration layer.
 
 ## API Reference
 

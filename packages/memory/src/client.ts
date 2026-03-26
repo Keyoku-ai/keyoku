@@ -190,6 +190,7 @@ export class KeyokuClient {
       max_results?: number;
       agent_id?: string;
       team_id?: string;
+      auto_ack_scheduled?: boolean;
     },
   ): Promise<HeartbeatResult> {
     return this.request<HeartbeatResult>('POST', '/api/v1/heartbeat/check', {
@@ -215,6 +216,7 @@ export class KeyokuClient {
       in_conversation?: boolean;
       signals_only?: boolean;
       verbosity?: HeartbeatVerbosity;
+      auto_ack_scheduled?: boolean;
     },
   ): Promise<HeartbeatContextResult> {
     return this.request<HeartbeatContextResult>('POST', '/api/v1/heartbeat/context', {
