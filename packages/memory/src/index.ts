@@ -16,4 +16,5 @@ export type {
   WatcherStatus,
   WatcherTick,
   WatcherTickHistory,
+  ScheduleDiagnostic,
 } from './client.js';

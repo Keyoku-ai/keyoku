@@ -1,9 +1,9 @@
 /**
  * OpenClaw tool registrations for Keyoku memory operations.
- * Registers 7 tools:
+ * Registers 8 tools:
  *   memory_search, memory_get (OpenClaw standard — replaces built-in file-based memory)
  *   memory_store, memory_forget, memory_stats (Keyoku memory management)
- *   schedule_create, schedule_list (Keyoku scheduling)
+ *   schedule_create, schedule_list, schedule_diagnose (Keyoku scheduling)
  */
 
 import { Type } from '@sinclair/typebox';
@@ -319,5 +319,52 @@ export function registerTools(
       },
     },
     { name: 'schedule_list' },
+  );
+
+  // schedule_diagnose — diagnose why a schedule isn't firing
+  api.registerTool(
+    {
+      name: 'schedule_diagnose',
+      label: 'Schedule Diagnose',
+      description:
+        'Diagnose scheduled reminders. Shows lifecycle state, due times, missed windows, and why a reminder may not have fired.',
+      parameters: Type.Object({}),
+      async execute(_toolCallId, _params, context) {
+        if (!resolver.isAllowed(context, 'recall')) {
+          return {
+            content: [{ type: 'text', text: 'No schedules to diagnose.' }],
+            details: { count: 0 },
+          };
+        }
+
+        const entityId = resolver.resolve(context, 'tool');
+        const diagnostics = await client.diagnoseSchedules(entityId, agentId);
+
+        if (diagnostics.length === 0) {
+          return {
+            content: [{ type: 'text', text: 'No scheduled reminders found.' }],
+            details: { count: 0 },
+          };
+        }
+
+        const lines = diagnostics.map((d, i) => {
+          const parts = [
+            `${i + 1}. **${d.content}**`,
+            `   Tag: ${d.cron_tag} | State: ${d.state} | Due now: ${d.is_due_now ? 'YES' : 'no'}`,
+          ];
+          if (d.missed_window) {
+            parts.push(`   ⚠ MISSED WINDOW`);
+          }
+          parts.push(`   ${d.reason}`);
+          return parts.join('\n');
+        });
+
+        return {
+          content: [{ type: 'text', text: `Schedule diagnostics (${diagnostics.length}):\n\n${lines.join('\n\n')}` }],
+          details: { count: diagnostics.length },
+        };
+      },
+    },
+    { name: 'schedule_diagnose' },
   );
 }

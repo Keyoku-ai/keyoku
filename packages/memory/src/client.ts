@@ -285,6 +285,15 @@ export class KeyokuClient {
     return this.request<{ status: string; memory_id: string }>('DELETE', `/api/v1/schedule/${id}`);
   }
 
+  async diagnoseSchedules(
+    entityId: string,
+    agentId?: string,
+  ): Promise<ScheduleDiagnostic[]> {
+    const params = new URLSearchParams({ entity_id: entityId });
+    if (agentId) params.set('agent_id', agentId);
+    return this.request<ScheduleDiagnostic[]>('GET', `/api/v1/schedule/diagnose?${params}`);
+  }
+
   // === Watcher ===
 
   async watcherStatus(): Promise<WatcherStatus> {
@@ -525,4 +534,20 @@ export interface WatcherTick {
 export interface WatcherTickHistory {
   ticks: WatcherTick[];
   total: number;
+}
+
+// Schedule diagnostics
+export interface ScheduleDiagnostic {
+  memory_id: string;
+  content: string;
+  cron_tag: string;
+  state: string;
+  created_at: string;
+  last_run_at: string;
+  next_due_at: string;
+  is_due_now: boolean;
+  missed_window: boolean;
+  importance: number;
+  access_count: number;
+  reason: string;
 }
