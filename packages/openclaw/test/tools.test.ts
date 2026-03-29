@@ -14,6 +14,7 @@ function createMockClient() {
     getStats: vi.fn(),
     createSchedule: vi.fn(),
     listSchedules: vi.fn(),
+    diagnoseSchedules: vi.fn(),
   };
 }
 
@@ -48,8 +49,18 @@ describe('tools', () => {
     registerTools(mockApi.api, mockClient as any, createEntityResolver('entity-1', cfg), 'agent-1');
   });
 
-  it('registers 7 tools', () => {
-    expect(mockApi.api.registerTool).toHaveBeenCalledTimes(7);
+  it('registers the expected tools', () => {
+    expect(mockApi.api.registerTool).toHaveBeenCalledTimes(8);
+    expect(Object.keys(mockApi.tools).sort()).toEqual([
+      'memory_forget',
+      'memory_get',
+      'memory_search',
+      'memory_stats',
+      'memory_store',
+      'schedule_create',
+      'schedule_diagnose',
+      'schedule_list',
+    ]);
   });
 
   describe('memory_search', () => {

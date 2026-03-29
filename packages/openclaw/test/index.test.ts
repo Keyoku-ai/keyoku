@@ -1,6 +1,17 @@
 import keyokuMemory, { createKeyokuMemoryPlugin } from '../src/index.js';
 import type { PluginApi } from '../src/types.js';
 
+const expectedToolNames = [
+  'memory_search',
+  'memory_get',
+  'memory_store',
+  'memory_forget',
+  'memory_stats',
+  'schedule_create',
+  'schedule_list',
+  'schedule_diagnose',
+];
+
 function createMockApi(pluginConfig?: Record<string, unknown>): PluginApi {
   return {
     id: 'keyoku-memory',
@@ -28,7 +39,8 @@ describe('keyokuMemory entrypoint', () => {
 
     keyokuMemory(api);
 
-    expect(api.registerTool).toHaveBeenCalledTimes(7);
+    expect(api.registerTool).toHaveBeenCalledTimes(expectedToolNames.length);
+    expect(api.registerTool.mock.calls.map(([tool]) => tool.name)).toEqual(expectedToolNames);
     expect(api.on).toHaveBeenCalled();
     expect(api.registerService).toHaveBeenCalledTimes(1);
     expect(api.registerCli).toHaveBeenCalledTimes(1);
@@ -49,7 +61,8 @@ describe('keyokuMemory entrypoint', () => {
 
     plugin!.register(api);
 
-    expect(api.registerTool).toHaveBeenCalledTimes(7);
+    expect(api.registerTool).toHaveBeenCalledTimes(expectedToolNames.length);
+    expect(api.registerTool.mock.calls.map(([tool]) => tool.name)).toEqual(expectedToolNames);
     expect(api.registerService).toHaveBeenCalledTimes(1);
   });
 
