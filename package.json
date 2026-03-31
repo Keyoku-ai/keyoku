@@ -33,7 +33,8 @@
     "test": "vitest run",
     "lint": "eslint packages/*/src",
     "format": "prettier --write 'packages/*/src/**/*.ts'",
-    "format:check": "prettier --check 'packages/*/src/**/*.ts'"
+    "format:check": "prettier --check 'packages/*/src/**/*.ts'",
+    "verify:openclaw-pack": "node scripts/verify-openclaw-pack.js"
   },
   "engines": {
     "node": ">=20"
