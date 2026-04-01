@@ -55,8 +55,13 @@ const plugin = keyokuMemory({
 | `heartbeat` | `true` | Enable proactive signals |
 | `incrementalCapture` | `true` | Capture per-message vs. session-end |
 | `topK` | `5` | Memories to inject per prompt |
+| `recallMinScore` | `0.35` | Minimum similarity score for injected recalls |
+| `recallQueryMode` | `"latest-user"` | Recall query strategy: `latest-user` or `prompt-plus-context` |
 | `autonomy` | `"suggest"` | Action level: `observe`, `suggest`, `act` |
 | `captureMaxChars` | `2000` | Max characters for auto-capture |
+| `clientTimeoutMs` | `120000` | Keyoku API timeout for search/remember/heartbeat |
+| `captureDebounceMs` | `10000` | Minimum interval between capture writes |
+| `captureMaxInFlight` | `1` | Max concurrent capture writes before backpressure skips |
 
 ## Tools
 

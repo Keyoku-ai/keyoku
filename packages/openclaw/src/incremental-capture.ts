@@ -97,6 +97,8 @@ export function registerIncrementalCapture(
   // Stash for the most recent user prompt, paired with the next assistant response
   let pendingUserPrompt: string | null = null;
   let pendingEntityId: string | null = null;
+  let inFlightCaptures = 0;
+  let lastCaptureAt = 0;
   const clearPending = () => {
     pendingUserPrompt = null;
     pendingEntityId = null;
@@ -341,6 +343,32 @@ export function registerIncrementalCapture(
 
     const resolvedEntityId = pendingEntityId ?? resolver.resolve(ev, 'capture');
     pendingEntityId = null;
+
+    // Debounce: avoid hammering /remember with near-duplicate rapid turns.
+    const now = Date.now();
+    if (config.captureDebounceMs > 0 && now-lastCaptureAt < config.captureDebounceMs) {
+      logCaptureDiagnostic(api, 'agent_end', {
+        skipped: true,
+        reason: 'capture_debounced',
+        debounce_ms: config.captureDebounceMs,
+        since_last_ms: now - lastCaptureAt,
+        remember: 'no',
+      });
+      return;
+    }
+
+    // Backpressure: keep capture writes bounded.
+    if (inFlightCaptures >= config.captureMaxInFlight) {
+      logCaptureDiagnostic(api, 'agent_end', {
+        skipped: true,
+        reason: 'capture_backpressure',
+        inflight: inFlightCaptures,
+        max_inflight: config.captureMaxInFlight,
+        remember: 'no',
+      });
+      return;
+    }
+
     logCaptureDiagnostic(api, 'agent_end', {
       skipped: false,
       mode,
@@ -352,10 +380,13 @@ export function registerIncrementalCapture(
     });
 
     try {
+      inFlightCaptures += 1;
       await client.remember(resolvedEntityId, exchange, {
         agent_id: agentId,
         source: 'conversation',
+        timeout_ms: config.clientTimeoutMs,
       });
+      lastCaptureAt = Date.now();
       logCaptureDiagnostic(api, 'agent_end', {
         mode,
         entity_id: resolvedEntityId,
@@ -366,6 +397,8 @@ export function registerIncrementalCapture(
       api.logger.warn(
         `keyoku: TEMP capture_diag event=agent_end mode=${mode} entity_id=${resolvedEntityId} exchange_len=${exchange.length} remember=failed error=${String(err)}`,
       );
+    } finally {
+      inFlightCaptures = Math.max(0, inFlightCaptures - 1);
     }
   });
 }
