@@ -52,6 +52,21 @@ function summarizeRecentActivity(messages: unknown[], maxMessages = 6): string {
   return parts.join('\n');
 }
 
+function stripInjectedBlocks(text: string): string {
+  return text
+    .replace(/<your-memories>[\s\S]*?<\/your-memories>/gi, '')
+    .replace(/<heartbeat-signals>[\s\S]*?<\/heartbeat-signals>/gi, '')
+    .replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>/gi, '')
+    .trim();
+}
+
+function sanitizeRecallText(text: string): string {
+  if (!text) return '';
+  const withoutMeta = stripInboundMetadata(text);
+  const withoutInjected = stripInjectedBlocks(withoutMeta);
+  return withoutInjected.replace(/\n{3,}/g, '\n\n').trim();
+}
+
 function extractLatestUserText(messages: unknown[]): string {
   if (!Array.isArray(messages) || messages.length === 0) return '';
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -71,7 +86,10 @@ function extractLatestUserText(messages: unknown[]): string {
         .join(' ');
     }
 
-    if (text && text.trim().length > 0) return text.trim();
+    if (text && text.trim().length > 0) {
+      const cleaned = sanitizeRecallText(text);
+      if (cleaned) return cleaned;
+    }
   }
   return '';
 }
@@ -216,7 +234,7 @@ export function registerHooks(
         const entityId = resolver.resolve(ev, 'recall');
         try {
           // Strip OpenClaw metadata blocks so the search query is the actual user message
-          const cleanPrompt = stripInboundMetadata(ev.prompt);
+          const cleanPrompt = sanitizeRecallText(ev.prompt);
           // Build query based on configured mode.
           // Default latest-user avoids injecting system/tool chatter into recall search.
           const query =
