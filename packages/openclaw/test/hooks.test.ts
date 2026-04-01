@@ -125,6 +125,27 @@ describe('hooks', () => {
       expect(result).toBeUndefined();
       expect(mockClient.search).not.toHaveBeenCalled();
     });
+
+    it('sanitizes metadata blocks in latest-user recall mode', async () => {
+      mockClient.search.mockResolvedValue([]);
+
+      await mockApi.hooks['before_prompt_build']({
+        prompt: 'fallback prompt',
+        messages: [
+          {
+            role: 'user',
+            content:
+              'Conversation info (untrusted metadata):\n```json\n{"channel":"telegram"}\n```\n\nActual user request: help me deploy',
+          },
+        ],
+      });
+
+      expect(mockClient.search).toHaveBeenCalledWith('entity-1', 'Actual user request: help me deploy', {
+        limit: 5,
+        min_score: 0.35,
+        timeout_ms: 120000,
+      });
+    });
   });
 
   describe('before_prompt_build (heartbeat)', () => {
