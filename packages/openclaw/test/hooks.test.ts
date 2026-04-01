@@ -57,7 +57,11 @@ describe('hooks', () => {
 
       const result = await mockApi.hooks['before_prompt_build']({ prompt: 'What do I prefer?' });
 
-      expect(mockClient.search).toHaveBeenCalledWith('entity-1', 'What do I prefer?', { limit: 5, min_score: 0.15 });
+      expect(mockClient.search).toHaveBeenCalledWith('entity-1', 'What do I prefer?', {
+        limit: 5,
+        min_score: 0.35,
+        timeout_ms: 120000,
+      });
       expect(result).toHaveProperty('prependContext');
       expect((result as { prependContext: string }).prependContext).toContain('User likes TypeScript');
     });
@@ -99,7 +103,7 @@ describe('hooks', () => {
       expect(mockClient.search).toHaveBeenCalledWith(
         'entity-1:session:sess-123',
         'What do I prefer?',
-        { limit: 5, min_score: 0.15 },
+        { limit: 5, min_score: 0.35, timeout_ms: 120000 },
       );
     });
 
