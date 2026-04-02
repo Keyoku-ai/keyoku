@@ -24,6 +24,7 @@ import { looksLikePromptInjection } from './capture.js';
 import type { PluginApi } from './types.js';
 import type { EntityResolver } from './entity-resolver.js';
 import { stripInboundMetadata } from './inbound-metadata.js';
+import { computeSessionBudget, assessCaptureWorthiness } from './session-budget.js';
 
 type OpenClawMessage = {
   role?: string;
@@ -119,6 +120,20 @@ export function registerIncrementalCapture(
         logCaptureDiagnostic(api, 'before_prompt_build', {
           skipped: true,
           reason: 'empty_event',
+          remember: 'no',
+        });
+        return;
+      }
+
+      // Session budget check: skip capture if session is near capacity
+      const budget = computeSessionBudget(ev.messages ?? [], config.topK);
+      if (!budget.allowCapture) {
+        clearPending();
+        logCaptureDiagnostic(api, 'before_prompt_build', {
+          skipped: true,
+          reason: 'session_budget_exceeded',
+          headroom: Math.round(budget.headroom * 100),
+          session_tokens: budget.sessionTokens,
           remember: 'no',
         });
         return;
@@ -329,6 +344,20 @@ export function registerIncrementalCapture(
     let exchange: string;
     const mode = pendingUserPrompt ? 'paired' : 'assistant-only';
     if (pendingUserPrompt) {
+      // Capture intelligence: pre-filter trivial exchanges
+      const worthiness = assessCaptureWorthiness(pendingUserPrompt, assistantContent);
+      if (!worthiness.shouldCapture) {
+        clearPending();
+        logCaptureDiagnostic(api, 'agent_end', {
+          skipped: true,
+          reason: `capture_filter:${worthiness.reason}`,
+          assistant_source: assistantSource,
+          assistant_len: assistantContent.length,
+          remember: 'no',
+        });
+        return;
+      }
+
       exchange = `User: ${pendingUserPrompt}\n\nAssistant: ${assistantContent}`;
       pendingUserPrompt = null; // consumed
     } else {

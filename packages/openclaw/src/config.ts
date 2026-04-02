@@ -52,6 +52,8 @@ export interface KeyokuConfig {
   recallInGroups?: boolean;
   /** Heartbeat verbosity level (default: 'conversational') */
   verbosity?: HeartbeatVerbosity;
+  /** Target max session tokens before plugin backs off injection/capture (default: 150000) */
+  maxSessionTokens?: number;
 }
 
 export const DEFAULT_CONFIG: Required<KeyokuConfig> = {
@@ -75,6 +77,7 @@ export const DEFAULT_CONFIG: Required<KeyokuConfig> = {
   captureInGroups: true,
   recallInGroups: true,
   verbosity: 'conversational',
+  maxSessionTokens: 150_000,
 };
 
 export function resolveConfig(config?: KeyokuConfig): Required<KeyokuConfig> {

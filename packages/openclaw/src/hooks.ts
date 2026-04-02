@@ -5,11 +5,19 @@
  */
 
 import type { KeyokuClient } from '@keyoku/memory';
+import type { SearchResult } from '@keyoku/types';
 import type { KeyokuConfig } from './config.js';
 import { formatMemoryContext, formatHeartbeatContext } from './context.js';
 import type { PluginApi } from './types.js';
 import type { EntityResolver } from './entity-resolver.js';
 import { stripInboundMetadata } from './inbound-metadata.js';
+import {
+  computeSessionBudget,
+  classifyQueryStrength,
+  adaptiveMinScore,
+  computeSessionOverlap,
+  detectMemoryUsage,
+} from './session-budget.js';
 
 /**
  * Extract a summary of recent activity from conversation messages.
@@ -104,6 +112,9 @@ export function registerHooks(
   // Due schedules waiting for post-delivery acknowledgment, keyed by entity.
   const pendingScheduleAcks = new Map<string, Set<string>>();
 
+  // Track injected memories for feedback signal (used in agent_end)
+  let lastInjectedMemories: Array<{ content: string; id?: string }> = [];
+
   // before_prompt_build: auto-recall + heartbeat context injection
   if (config.autoRecall || config.heartbeat) {
     api.on('before_prompt_build', async (event: unknown) => {
@@ -116,6 +127,13 @@ export function registerHooks(
       if (isHeartbeat && config.heartbeat) {
         if (!resolver.isAllowed(ev, 'heartbeat')) {
           api.logger.debug?.('keyoku: heartbeat recall skipped in group context by policy');
+          return;
+        }
+
+        // Session budget check: skip heartbeat if session is too full
+        const hbBudget = computeSessionBudget(ev.messages ?? [], config.topK, undefined, undefined);
+        if (!hbBudget.allowHeartbeat) {
+          api.logger.warn?.(`keyoku: heartbeat skipped (headroom: ${(hbBudget.headroom * 100).toFixed(0)}%, session: ~${hbBudget.sessionTokens} tokens)`);
           return;
         }
 
@@ -224,10 +242,19 @@ export function registerHooks(
         return;
       }
 
-      // Auto-recall path: search memories relevant to user's prompt + recent context
+      // Auto-recall path: adaptive memory injection based on session budget
       if (config.autoRecall && !isHeartbeat) {
         if (!resolver.isAllowed(ev, 'recall')) {
           api.logger.debug?.('keyoku: auto-recall skipped in group context by policy');
+          return;
+        }
+
+        const messages = ev.messages ?? [];
+
+        // Session budget: how much room do we have?
+        const budget = computeSessionBudget(messages, config.topK, undefined, undefined);
+        if (budget.effectiveTopK === 0) {
+          api.logger.info?.(`keyoku: auto-recall skipped (headroom: ${(budget.headroom * 100).toFixed(0)}%, session: ~${budget.sessionTokens} tokens)`);
           return;
         }
 
@@ -235,8 +262,18 @@ export function registerHooks(
         try {
           // Strip OpenClaw metadata blocks so the search query is the actual user message
           const cleanPrompt = sanitizeRecallText(ev.prompt);
-          // Build query based on configured mode.
-          // Default latest-user avoids injecting system/tool chatter into recall search.
+
+          // Query strength determines adaptive min_score (uses recallMinScore as floor)
+          const strength = classifyQueryStrength(cleanPrompt);
+          if (strength === 'weak') {
+            api.logger.info?.('keyoku: auto-recall skipped (weak query)');
+            return;
+          }
+
+          const adaptiveScore = adaptiveMinScore(strength);
+          const minScore = Math.max(adaptiveScore, config.recallMinScore);
+
+          // Build query based on configured mode
           const query =
             config.recallQueryMode === 'prompt-plus-context'
               ? (() => {
@@ -252,23 +289,81 @@ export function registerHooks(
 
           api.logger.info?.(`keyoku: auto-recall searching (query: ${query.slice(0, 80)}...)`);
 
+          // Fetch more candidates than we'll inject, then filter by session dedup
+          const fetchLimit = Math.min(budget.effectiveTopK * 2, 10);
           const results = await client.search(entityId, query, {
-            limit: config.topK,
-            min_score: config.recallMinScore,
+            limit: fetchLimit,
+            min_score: minScore,
             timeout_ms: config.clientTimeoutMs,
           });
 
           if (results.length > 0) {
-            const formatted = formatMemoryContext(results);
-            api.logger.info?.(`keyoku: auto-recall injected ${results.length} memories`);
-            return { prependContext: formatted };
-          } else {
-            api.logger.info?.('keyoku: auto-recall found 0 matching memories');
+            // Session dedup: filter out memories redundant with recent conversation
+            const dedupedResults = results.filter((r: SearchResult) => {
+              const overlap = computeSessionOverlap(r.memory.content, messages);
+              return overlap < 0.7; // Keep if <70% overlap with recent messages
+            }).slice(0, budget.effectiveTopK);
+
+            if (dedupedResults.length > 0) {
+              // Track injected memories for feedback signal
+              lastInjectedMemories = dedupedResults.map((r: SearchResult) => ({
+                content: r.memory.content,
+                id: r.memory.id,
+              }));
+
+              const formatted = formatMemoryContext(dedupedResults);
+              api.logger.info?.(
+                `keyoku: auto-recall injected ${dedupedResults.length}/${results.length} memories (topK: ${budget.effectiveTopK}, headroom: ${(budget.headroom * 100).toFixed(0)}%, strength: ${strength})`,
+              );
+              return { prependContext: formatted };
+            }
           }
+
+          api.logger.info?.('keyoku: auto-recall found 0 matching memories');
         } catch (err) {
           api.logger.warn(`keyoku: auto-recall failed: ${String(err)}`);
         }
       }
+    });
+  }
+
+  // Feedback signal: track which injected memories the model actually used
+  if (config.autoRecall) {
+    api.on('agent_end', async (event: unknown) => {
+      if (lastInjectedMemories.length === 0) return;
+
+      const ev = event as { messages?: Array<{ role?: string; content?: string | Array<{ type?: string; text?: string }> }>; output?: string };
+      let response = ev.output ?? '';
+      if (!response && ev.messages) {
+        for (let i = (ev.messages ?? []).length - 1; i >= 0; i--) {
+          const msg = ev.messages[i];
+          if (msg.role !== 'assistant') continue;
+          response = typeof msg.content === 'string' ? msg.content : '';
+          if (response) break;
+        }
+      }
+      if (!response || response.length < 20) {
+        lastInjectedMemories = [];
+        return;
+      }
+
+      try {
+        const usage = detectMemoryUsage(lastInjectedMemories, response);
+        const used = usage.filter((m) => m.used);
+        if (used.length > 0) {
+          // Bump access count for used memories — reinforces useful memories against decay
+          for (const m of used) {
+            if (m.id) {
+              const entityId = resolver.resolve(ev, 'recall');
+              await client.search(entityId, m.content, { limit: 1, min_score: 0.5 }).catch(() => {});
+            }
+          }
+          api.logger.info?.(`keyoku: feedback — ${used.length}/${lastInjectedMemories.length} injected memories referenced in response`);
+        }
+      } catch {
+        // Non-critical — don't fail the hook
+      }
+      lastInjectedMemories = [];
     });
   }
 
