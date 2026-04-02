@@ -149,6 +149,75 @@ describe('hooks', () => {
         timeout_ms: 120000,
       });
     });
+
+    it('logs feedback usage for injected memories once and clears pending state after agent_end', async () => {
+      mockClient.search.mockResolvedValue([
+        {
+          memory: {
+            id: 'mem-1',
+            content: 'User prefers TypeScript for backend services and testing',
+          },
+          similarity: 0.9,
+          score: 0.8,
+        },
+      ]);
+
+      await mockApi.hooks['before_prompt_build']({ prompt: 'What language stack should I use?' });
+
+      const info = mockApi.api.logger.info as ReturnType<typeof vi.fn>;
+      const baselineInfoCalls = info.mock.calls.length;
+
+      await mockApi.hooks['agent_end']({
+        output: 'We should keep this in TypeScript for the backend and testing so it matches the preference.',
+      });
+
+      const firstFeedbackLogs = info.mock.calls
+        .slice(baselineInfoCalls)
+        .map(([message]) => String(message))
+        .filter((message) => message.includes('feedback') && message.includes('1/1 injected memories referenced'));
+
+      expect(firstFeedbackLogs).toHaveLength(1);
+
+      await mockApi.hooks['agent_end']({
+        output: 'TypeScript is still the right choice here.',
+      });
+
+      const allFeedbackLogs = info.mock.calls
+        .map(([message]) => String(message))
+        .filter((message) => message.includes('feedback') && message.includes('1/1 injected memories referenced'));
+
+      expect(allFeedbackLogs).toHaveLength(1);
+    });
+
+    it('clears pending injected memories after short agent_end output', async () => {
+      mockClient.search.mockResolvedValue([
+        {
+          memory: {
+            id: 'mem-2',
+            content: 'User prefers terminal-first workflows for repo maintenance',
+          },
+          similarity: 0.91,
+          score: 0.81,
+        },
+      ]);
+
+      await mockApi.hooks['before_prompt_build']({ prompt: 'How should I approach this repo task?' });
+
+      const info = mockApi.api.logger.info as ReturnType<typeof vi.fn>;
+      const baselineInfoCalls = info.mock.calls.length;
+
+      await mockApi.hooks['agent_end']({ output: 'Too short.' });
+      await mockApi.hooks['agent_end']({
+        output: 'A terminal-first workflow still seems appropriate for this repository task.',
+      });
+
+      const feedbackLogs = info.mock.calls
+        .slice(baselineInfoCalls)
+        .map(([message]) => String(message))
+        .filter((message) => message.includes('feedback'));
+
+      expect(feedbackLogs).toHaveLength(0);
+    });
   });
 
   describe('before_prompt_build (heartbeat)', () => {
