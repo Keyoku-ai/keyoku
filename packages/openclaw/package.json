@@ -30,6 +30,7 @@
     "dist",
     "bin",
     "skills",
+    "openclaw.plugin.json",
     "README.md"
   ],
   "openclaw": {

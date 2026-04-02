@@ -420,24 +420,26 @@ function installPluginFiles(): void {
   }
 
   // Create openclaw.plugin.json manifest (required by OpenClaw for discovery)
-  const manifest = {
-    id: 'keyoku-memory',
-    kind: 'memory',
-    skills: ['./skills'],
-    configSchema: {
-      type: 'object',
-      additionalProperties: true,
-      properties: {
-        keyokuUrl: { type: 'string' },
-        sessionToken: { type: 'string', description: 'Keyoku server auth token (Bearer). Use when the server requires KEYOKU_SESSION_TOKEN.' },
-        autoCapture: { type: 'boolean' },
-        autoRecall: { type: 'boolean' },
-        heartbeat: { type: 'boolean' },
-        topK: { type: 'number', minimum: 1, maximum: 20 },
-        autonomy: { type: 'string', enum: ['observe', 'suggest', 'act'] },
-      },
-    },
-  };
+  const manifestPath = join(packageRoot, 'openclaw.plugin.json');
+  const manifest = existsSync(manifestPath)
+    ? JSON.parse(readFileSync(manifestPath, 'utf-8'))
+    : {
+        id: 'keyoku-memory',
+        kind: 'memory',
+        skills: ['skills/keyoku-memory'],
+        configSchema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            keyokuUrl: { type: 'string' },
+            autoCapture: { type: 'boolean' },
+            autoRecall: { type: 'boolean' },
+            heartbeat: { type: 'boolean' },
+            topK: { type: 'number', minimum: 1, maximum: 20 },
+            autonomy: { type: 'string', enum: ['observe', 'suggest', 'act'] },
+          },
+        },
+      };
   writeFileSync(
     join(PLUGIN_INSTALL_DIR, 'openclaw.plugin.json'),
     JSON.stringify(manifest, null, 2) + '\n',
