@@ -47,6 +47,10 @@ packages/
 └── openclaw/  — OpenClaw plugin for persistent memory
 ```
 
+## Contributor License Agreement (CLA)
+
+All contributors must sign our [Contributor License Agreement](CLA.md) before their pull request can be merged. When you open your first PR, a bot will comment with instructions — simply reply with the required comment to sign.
+
 ## Pull Request Process
 
 1. Fork the repository
@@ -55,6 +59,7 @@ packages/
 4. Run `npm run build` and `npm test` to verify
 5. Commit with a descriptive message (see below)
 6. Push to your fork and open a PR
+7. Sign the CLA if you haven't already (the bot will prompt you)
 
 ## Commit Messages
 

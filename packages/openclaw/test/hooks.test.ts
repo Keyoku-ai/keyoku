@@ -57,8 +57,9 @@ describe('hooks', () => {
 
       const result = await mockApi.hooks['before_prompt_build']({ prompt: 'What do I prefer?' });
 
+      // Adaptive: strong query (question word) → adaptive 0.25, floor 0.35 → max=0.35, limit=topK*2=10
       expect(mockClient.search).toHaveBeenCalledWith('entity-1', 'What do I prefer?', {
-        limit: 5,
+        limit: 10,
         min_score: 0.35,
         timeout_ms: 120000,
       });
@@ -100,10 +101,11 @@ describe('hooks', () => {
 
       await mockApi.hooks['before_prompt_build']({ prompt: 'What do I prefer?', sessionKey: 'sess-123' });
 
+      // Adaptive: strong query → min_score=0.25, limit=topK*2=10
       expect(mockClient.search).toHaveBeenCalledWith(
         'entity-1:session:sess-123',
         'What do I prefer?',
-        { limit: 5, min_score: 0.35, timeout_ms: 120000 },
+        { limit: 10, min_score: 0.35, timeout_ms: 120000 },
       );
     });
 
@@ -140,8 +142,9 @@ describe('hooks', () => {
         ],
       });
 
+      // Adaptive: fetchLimit = topK*2 = 10
       expect(mockClient.search).toHaveBeenCalledWith('entity-1', 'Actual user request: help me deploy', {
-        limit: 5,
+        limit: 10,
         min_score: 0.35,
         timeout_ms: 120000,
       });
