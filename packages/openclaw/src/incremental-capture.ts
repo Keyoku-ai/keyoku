@@ -126,7 +126,7 @@ export function registerIncrementalCapture(
       }
 
       // Session budget check: skip capture if session is near capacity
-      const budget = computeSessionBudget(ev.messages ?? [], config.topK);
+      const budget = computeSessionBudget(ev.messages ?? [], config.topK, config.maxSessionTokens);
       if (!budget.allowCapture) {
         clearPending();
         logCaptureDiagnostic(api, 'before_prompt_build', {

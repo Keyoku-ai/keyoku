@@ -112,8 +112,9 @@ export function registerHooks(
   // Due schedules waiting for post-delivery acknowledgment, keyed by entity.
   const pendingScheduleAcks = new Map<string, Set<string>>();
 
-  // Track injected memories for feedback signal (used in agent_end)
-  let lastInjectedMemories: Array<{ content: string; id?: string }> = [];
+  // Track injected memories per session for feedback signal (used in agent_end).
+  // Keyed by entityId to prevent cross-session races under concurrent prompts.
+  const injectedMemoriesByEntity = new Map<string, Array<{ content: string; id?: string }>>();
 
   // before_prompt_build: auto-recall + heartbeat context injection
   if (config.autoRecall || config.heartbeat) {
@@ -131,7 +132,7 @@ export function registerHooks(
         }
 
         // Session budget check: skip heartbeat if session is too full
-        const hbBudget = computeSessionBudget(ev.messages ?? [], config.topK, undefined, undefined);
+        const hbBudget = computeSessionBudget(ev.messages ?? [], config.topK, config.maxSessionTokens);
         if (!hbBudget.allowHeartbeat) {
           api.logger.warn?.(`keyoku: heartbeat skipped (headroom: ${(hbBudget.headroom * 100).toFixed(0)}%, session: ~${hbBudget.sessionTokens} tokens)`);
           return;
@@ -252,7 +253,7 @@ export function registerHooks(
         const messages = ev.messages ?? [];
 
         // Session budget: how much room do we have?
-        const budget = computeSessionBudget(messages, config.topK, undefined, undefined);
+        const budget = computeSessionBudget(messages, config.topK, config.maxSessionTokens);
         if (budget.effectiveTopK === 0) {
           api.logger.info?.(`keyoku: auto-recall skipped (headroom: ${(budget.headroom * 100).toFixed(0)}%, session: ~${budget.sessionTokens} tokens)`);
           return;
@@ -290,7 +291,7 @@ export function registerHooks(
           api.logger.info?.(`keyoku: auto-recall searching (query: ${query.slice(0, 80)}...)`);
 
           // Fetch more candidates than we'll inject, then filter by session dedup
-          const fetchLimit = Math.min(budget.effectiveTopK * 2, 10);
+          const fetchLimit = Math.min(budget.effectiveTopK * 2, config.topK * 2);
           const results = await client.search(entityId, query, {
             limit: fetchLimit,
             min_score: minScore,
@@ -306,10 +307,10 @@ export function registerHooks(
 
             if (dedupedResults.length > 0) {
               // Track injected memories for feedback signal
-              lastInjectedMemories = dedupedResults.map((r: SearchResult) => ({
+              injectedMemoriesByEntity.set(entityId, dedupedResults.map((r: SearchResult) => ({
                 content: r.memory.content,
                 id: r.memory.id,
-              }));
+              })));
 
               const formatted = formatMemoryContext(dedupedResults);
               api.logger.info?.(
@@ -327,10 +328,14 @@ export function registerHooks(
     });
   }
 
-  // Feedback signal: track which injected memories the model actually used
+  // Feedback signal: track which injected memories the model actually referenced.
+  // Observability only — logs usage ratio. Access count bumping requires a dedicated
+  // engine endpoint (search is read-only), so reinforcement is deferred to a future
+  // engine release. The detection logic is still valuable for tuning injection quality.
   if (config.autoRecall) {
     api.on('agent_end', async (event: unknown) => {
-      if (lastInjectedMemories.length === 0) return;
+      // Find which entity has pending injected memories
+      if (injectedMemoriesByEntity.size === 0) return;
 
       const ev = event as { messages?: Array<{ role?: string; content?: string | Array<{ type?: string; text?: string }> }>; output?: string };
       let response = ev.output ?? '';
@@ -343,27 +348,23 @@ export function registerHooks(
         }
       }
       if (!response || response.length < 20) {
-        lastInjectedMemories = [];
+        injectedMemoriesByEntity.clear();
         return;
       }
 
       try {
-        const usage = detectMemoryUsage(lastInjectedMemories, response);
-        const used = usage.filter((m) => m.used);
-        if (used.length > 0) {
-          // Bump access count for used memories — reinforces useful memories against decay
-          for (const m of used) {
-            if (m.id) {
-              const entityId = resolver.resolve(ev, 'recall');
-              await client.search(entityId, m.content, { limit: 1, min_score: 0.5 }).catch(() => {});
-            }
+        // Process all pending entities (typically just one)
+        for (const [entityId, memories] of injectedMemoriesByEntity) {
+          const usage = detectMemoryUsage(memories, response);
+          const used = usage.filter((m) => m.used);
+          if (used.length > 0) {
+            api.logger.info?.(`keyoku: feedback — ${used.length}/${memories.length} injected memories referenced in response (entity: ${entityId})`);
           }
-          api.logger.info?.(`keyoku: feedback — ${used.length}/${lastInjectedMemories.length} injected memories referenced in response`);
         }
       } catch {
         // Non-critical — don't fail the hook
       }
-      lastInjectedMemories = [];
+      injectedMemoriesByEntity.clear();
     });
   }
 

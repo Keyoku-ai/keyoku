@@ -119,6 +119,13 @@ describe('classifyQueryStrength', () => {
     expect(classifyQueryStrength('When is the meeting with Alice?')).toBe('strong');
   });
 
+  it('classifies short questions as strong (not weak)', () => {
+    expect(classifyQueryStrength('Why?')).toBe('strong');
+    expect(classifyQueryStrength('What time?')).toBe('strong');
+    expect(classifyQueryStrength('How?')).toBe('strong');
+    expect(classifyQueryStrength('Who did it?')).toBe('strong');
+  });
+
   it('classifies messages with proper nouns as strong', () => {
     expect(classifyQueryStrength('tell me about Alice and the project')).toBe('strong');
     expect(classifyQueryStrength('check on the Keyoku deployment status')).toBe('strong');

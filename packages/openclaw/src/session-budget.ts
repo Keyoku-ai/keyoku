@@ -121,9 +121,12 @@ const QUESTION_WORDS = /^(what|how|why|when|where|who|which|can|could|would|shou
  */
 export function classifyQueryStrength(query: string): QueryStrength {
   const trimmed = query.trim();
-  if (trimmed.length < 15 || WEAK_PATTERNS.test(trimmed)) return 'weak';
+  // Check question words BEFORE length gate — short questions like "Why?" are strong
+  if (QUESTION_WORDS.test(trimmed)) return 'strong';
+  if (WEAK_PATTERNS.test(trimmed)) return 'weak';
+  if (trimmed.length < 15) return 'weak';
   if (FOLLOW_UP_PATTERNS.test(trimmed)) return 'weak';
-  if (trimmed.length > 80 || QUESTION_WORDS.test(trimmed)) return 'strong';
+  if (trimmed.length > 80) return 'strong';
   // Check for proper nouns (capitalized words not at start)
   const words = trimmed.split(/\s+/);
   const hasProperNoun = words.slice(1).some((w) => /^[A-Z][a-z]/.test(w));
@@ -144,19 +147,19 @@ export function adaptiveMinScore(strength: QueryStrength): number {
 
 // --- Session Dedup ---
 
+const STOP_WORDS = new Set([
+  'this', 'that', 'with', 'from', 'they', 'them', 'their', 'have', 'been',
+  'will', 'would', 'could', 'should', 'about', 'which', 'there', 'where',
+  'when', 'what', 'some', 'than', 'then', 'also', 'just', 'into', 'your',
+  'more', 'very', 'most', 'each', 'only', 'over', 'such', 'here', 'does',
+  'like', 'make', 'made', 'know', 'need', 'want', 'look', 'think', 'well',
+]);
+
 /**
  * Extract key terms from text for overlap detection.
  * Returns lowercase unique terms ≥4 chars (filters noise words).
  */
 export function extractKeyTerms(text: string): Set<string> {
-  const STOP_WORDS = new Set([
-    'this', 'that', 'with', 'from', 'they', 'them', 'their', 'have', 'been',
-    'will', 'would', 'could', 'should', 'about', 'which', 'there', 'where',
-    'when', 'what', 'some', 'than', 'then', 'also', 'just', 'into', 'your',
-    'more', 'very', 'most', 'each', 'only', 'over', 'such', 'here', 'does',
-    'like', 'make', 'made', 'know', 'need', 'want', 'look', 'think', 'well',
-  ]);
-
   const words = text.toLowerCase().match(/\b[a-z]{4,}\b/g) ?? [];
   const terms = new Set<string>();
   for (const w of words) {
