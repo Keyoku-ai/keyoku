@@ -22,12 +22,22 @@ export interface KeyokuConfig {
   heartbeat?: boolean;
   /** Number of memories to inject per prompt (default: 5) */
   topK?: number;
+  /** Minimum similarity score for auto-recall injections (default: 0.35) */
+  recallMinScore?: number;
+  /** How auto-recall builds its search query (default: latest-user) */
+  recallQueryMode?: 'latest-user' | 'prompt-plus-context';
   /** Base memory namespace key (default: "default") */
   entityId?: string;
   /** Agent identifier for memory attribution */
   agentId?: string;
   /** Maximum characters to consider for auto-capture (default: 2000) */
   captureMaxChars?: number;
+  /** HTTP timeout used by Keyoku client calls (default: 120000ms) */
+  clientTimeoutMs?: number;
+  /** Minimum time between capture writes (default: 10000ms) */
+  captureDebounceMs?: number;
+  /** Maximum in-flight capture writes before skipping new ones (default: 1) */
+  captureMaxInFlight?: number;
   /** Autonomy level for heartbeat actions (default: 'suggest') */
   autonomy?: 'observe' | 'suggest' | 'act';
   /** Capture memories incrementally per message (default: true) */
@@ -50,9 +60,14 @@ export const DEFAULT_CONFIG: Required<KeyokuConfig> = {
   autoCapture: true,
   heartbeat: true,
   topK: 5,
+  recallMinScore: 0.35,
+  recallQueryMode: 'latest-user',
   entityId: '',
   agentId: '',
   captureMaxChars: 2000,
+  clientTimeoutMs: 120000,
+  captureDebounceMs: 10000,
+  captureMaxInFlight: 1,
   autonomy: 'suggest',
   incrementalCapture: true,
   entityStrategy: 'static',

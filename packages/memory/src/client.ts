@@ -96,6 +96,7 @@ export class KeyokuClient {
     entityId: string,
     content: string,
     options?: {
+      timeout_ms?: number;
       session_id?: string;
       agent_id?: string;
       source?: string;
@@ -114,6 +115,7 @@ export class KeyokuClient {
     entityId: string,
     query: string,
     options?: {
+      timeout_ms?: number;
       limit?: number;
       mode?: string;
       agent_id?: string;

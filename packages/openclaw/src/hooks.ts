@@ -52,6 +52,48 @@ function summarizeRecentActivity(messages: unknown[], maxMessages = 6): string {
   return parts.join('\n');
 }
 
+function stripInjectedBlocks(text: string): string {
+  return text
+    .replace(/<your-memories>[\s\S]*?<\/your-memories>/gi, '')
+    .replace(/<heartbeat-signals>[\s\S]*?<\/heartbeat-signals>/gi, '')
+    .replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>/gi, '')
+    .trim();
+}
+
+function sanitizeRecallText(text: string): string {
+  if (!text) return '';
+  const withoutMeta = stripInboundMetadata(text);
+  const withoutInjected = stripInjectedBlocks(withoutMeta);
+  return withoutInjected.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function extractLatestUserText(messages: unknown[]): string {
+  if (!Array.isArray(messages) || messages.length === 0) return '';
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i] as {
+      role?: string;
+      content?: string | Array<{ type?: string; text?: string }>;
+    };
+    if (m.role !== 'user' || !m.content) continue;
+
+    let text = '';
+    if (typeof m.content === 'string') {
+      text = m.content;
+    } else if (Array.isArray(m.content)) {
+      text = m.content
+        .filter((b) => b.type === 'text' && b.text)
+        .map((b) => b.text!)
+        .join(' ');
+    }
+
+    if (text && text.trim().length > 0) {
+      const cleaned = sanitizeRecallText(text);
+      if (cleaned) return cleaned;
+    }
+  }
+  return '';
+}
+
 export function registerHooks(
   api: PluginApi,
   client: KeyokuClient,
@@ -192,18 +234,28 @@ export function registerHooks(
         const entityId = resolver.resolve(ev, 'recall');
         try {
           // Strip OpenClaw metadata blocks so the search query is the actual user message
-          const cleanPrompt = stripInboundMetadata(ev.prompt);
-          // Build a richer query: user prompt + last assistant message for context
-          const recentContext = summarizeRecentActivity(ev.messages ?? [], 2);
-          const query = recentContext
-            ? `${cleanPrompt}\n\nRecent context:\n${recentContext}`
-            : cleanPrompt;
+          const cleanPrompt = sanitizeRecallText(ev.prompt);
+          // Build query based on configured mode.
+          // Default latest-user avoids injecting system/tool chatter into recall search.
+          const query =
+            config.recallQueryMode === 'prompt-plus-context'
+              ? (() => {
+                  const recentContext = summarizeRecentActivity(ev.messages ?? [], 2);
+                  return recentContext
+                    ? `${cleanPrompt}\n\nRecent context:\n${recentContext}`
+                    : cleanPrompt;
+                })()
+              : (() => {
+                  const latestUser = extractLatestUserText(ev.messages ?? []);
+                  return latestUser || cleanPrompt;
+                })();
 
           api.logger.info?.(`keyoku: auto-recall searching (query: ${query.slice(0, 80)}...)`);
 
           const results = await client.search(entityId, query, {
             limit: config.topK,
-            min_score: 0.15,
+            min_score: config.recallMinScore,
+            timeout_ms: config.clientTimeoutMs,
           });
 
           if (results.length > 0) {

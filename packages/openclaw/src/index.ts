@@ -37,11 +37,11 @@ function registerKeyokuMemory(api: PluginApi, config?: KeyokuConfig): void {
   const resolver = createEntityResolver(entityId, cfg, api.logger);
 
   // Token resolved lazily — the service generates it at startup, after register()
-  // 60s timeout: remember calls LLM extraction, heartbeatContext does analysis
+  // timeout is configurable because extraction can exceed 60s under load
   const client = new KeyokuClient({
     baseUrl: cfg.keyokuUrl,
     token: () => process.env.KEYOKU_SESSION_TOKEN,
-    timeout: 60000,
+    timeout: cfg.clientTimeoutMs,
   });
 
   // When keyoku heartbeat is enabled, disable OpenClaw's built-in heartbeat runner.
