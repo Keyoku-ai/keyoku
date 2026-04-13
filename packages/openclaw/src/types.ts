@@ -29,6 +29,60 @@ export type AgentTool = {
   ) => Promise<ToolResult>;
 };
 
+export type MemorySearchResult = {
+  path: string;
+  startLine: number;
+  endLine: number;
+  score: number;
+  snippet: string;
+  source: 'memory' | 'sessions';
+  citation?: string;
+};
+
+export type MemoryRuntimeBackendConfig =
+  | { backend: 'builtin' }
+  | { backend: 'qmd'; qmd?: { command?: string } };
+
+export type MemorySearchManager = {
+  search: (
+    query: string,
+    opts?: {
+      maxResults?: number;
+      minScore?: number;
+    },
+  ) => Promise<MemorySearchResult[]>;
+  readFile: (params: {
+    relPath: string;
+    from?: number;
+    lines?: number;
+  }) => Promise<{ text: string; path: string }>;
+  status: () => {
+    backend: 'builtin' | 'qmd';
+    provider: string;
+    sources?: Array<'memory' | 'sessions'>;
+    custom?: Record<string, unknown>;
+  };
+  probeEmbeddingAvailability: () => Promise<{ ok: boolean; error?: string }>;
+  probeVectorAvailability: () => Promise<boolean>;
+  close?: () => Promise<void>;
+};
+
+export type MemoryPluginRuntime = {
+  getMemorySearchManager: (params: {
+    cfg: unknown;
+    agentId: string;
+    purpose?: 'default' | 'status';
+  }) => Promise<{
+    manager: MemorySearchManager | null;
+    error?: string;
+  }>;
+  resolveMemoryBackendConfig: (params: {
+    cfg: unknown;
+    agentId: string;
+  }) => MemoryRuntimeBackendConfig;
+  closeAllMemorySearchManagers?: () => Promise<void>;
+};
+
 export type PluginApi = {
   id: string;
   name: string;
@@ -56,4 +110,7 @@ export type PluginApi = {
     opts?: { priority?: number },
   ) => void;
   config?: Record<string, unknown>;
+  registerMemoryCapability?: (capability: {
+    runtime?: MemoryPluginRuntime;
+  }) => void;
 };
