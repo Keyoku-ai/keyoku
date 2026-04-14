@@ -19,6 +19,7 @@ import { registerService } from './service.js';
 import { registerCli } from './cli.js';
 import { registerIncrementalCapture } from './incremental-capture.js';
 import { createEntityResolver } from './entity-resolver.js';
+import { createMemoryRuntime } from './memory-runtime.js';
 import type { PluginApi } from './types.js';
 
 export type { KeyokuConfig } from './config.js';
@@ -80,6 +81,17 @@ function registerKeyokuMemory(api: PluginApi, config?: KeyokuConfig): void {
 
   // Register CLI subcommands
   registerCli(api, client, entityId);
+
+  // Register OpenClaw memory runtime capability so doctor/status can resolve active memory backend.
+  api.registerMemoryCapability?.({
+    runtime: createMemoryRuntime({
+      client,
+      resolver,
+      entityBase: entityId,
+      keyokuUrl: cfg.keyokuUrl,
+      logger: api.logger,
+    }),
+  });
 
   // Register incremental per-message capture
   if (cfg.incrementalCapture) {
