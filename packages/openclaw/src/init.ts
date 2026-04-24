@@ -39,6 +39,11 @@ import {
 } from './heartbeat-migration.js';
 import { findKeyokuBinary, loadKeyokuEnv, waitForHealthy } from './service.js';
 import { updateEngine } from './update-engine.js';
+import {
+  createEnvStaging,
+  assertProviderCredentials,
+  type EnvStaging,
+} from './env-atomic.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -673,7 +678,18 @@ async function setupLlmProvider(): Promise<{ embeddingProvider: string; extracti
   // Isolate vector dimensions/index state per embedding backend.
   // This avoids dimension/index corruption when switching providers/models
   // (e.g. OpenAI 1536-dim → Ollama 768-dim) on the same DB file.
-  configureProviderScopedDbPath(embeddingProvider, process.env.KEYOKU_EMBEDDING_MODEL || 'default');
+  configureProviderScopedDbPath(embeddingProvider, effectiveEnv('KEYOKU_EMBEDDING_MODEL') || 'default');
+
+  // Gate before commit: refuse to persist a provider switch that's
+  // missing its credential (keyoku#34). Throwing here rolls back via
+  // the outer try/catch in init() and leaves ~/.keyoku/.env untouched.
+  assertProviderCredentialsStaged(embeddingProvider, extractionProvider);
+
+  // Atomically persist the full provider config in one go. Downstream
+  // steps (engine compatibility check, migration temp-start) depend on
+  // these values being readable from ~/.keyoku/.env, so we commit here
+  // rather than deferring to the end of init().
+  commitEnvStaging();
 
   if (neededProviders.has('ollama')) {
     info('If startup reports "unknown provider: ollama", update engine binary:');
@@ -872,30 +888,46 @@ function configureProviderScopedDbPath(embeddingProvider: string, embeddingModel
   info(`${c.dim}Provider-scoped DB path set to avoid mixed-dimension vector indexes.${c.reset}`);
 }
 
-/**
- * Append a key=value to ~/.keyoku/.env (creates if needed).
- * This file is sourced by the service when starting keyoku-engine.
- */
+// ── Atomic env-file staging ─────────────────────────────────────────────
+// See src/env-atomic.ts and harness/20-contracts/config.md §Atomicity.
+// ~/.keyoku/.env is written transactionally: stage → validate → rename.
+
+const envStaging: EnvStaging = createEnvStaging({
+  dir: join(HOME, '.keyoku'),
+  mirrorProcessEnv: true,
+});
+let rollbackHandlerInstalled = false;
+
 function appendToEnvFile(key: string, value: string): void {
-  const envDir = join(HOME, '.keyoku');
-  const envPath = join(envDir, '.env');
-  mkdirSync(envDir, { recursive: true });
+  installRollbackHandler();
+  envStaging.stage(key, value);
+}
 
-  let content = '';
-  if (existsSync(envPath)) {
-    content = readFileSync(envPath, 'utf-8');
-    // Replace existing key if present
-    const regex = new RegExp(`^${key}=.*$`, 'm');
-    if (regex.test(content)) {
-      content = content.replace(regex, `${key}=${value}`);
-      writeFileSync(envPath, content, 'utf-8');
-      return;
-    }
-  }
+function effectiveEnv(key: string): string | undefined {
+  return envStaging.effective(key);
+}
 
-  // Append new key
-  const line = `${key}=${value}\n`;
-  writeFileSync(envPath, content + line, 'utf-8');
+function commitEnvStaging(): void {
+  envStaging.commit();
+}
+
+function rollbackEnvStaging(): void {
+  envStaging.rollback();
+}
+
+function installRollbackHandler(): void {
+  if (rollbackHandlerInstalled) return;
+  rollbackHandlerInstalled = true;
+  const onSignal = (sig: NodeJS.Signals) => {
+    rollbackEnvStaging();
+    process.exit(sig === 'SIGINT' ? 130 : 143);
+  };
+  process.on('SIGINT', onSignal);
+  process.on('SIGTERM', onSignal);
+}
+
+function assertProviderCredentialsStaged(...providers: string[]): void {
+  assertProviderCredentials(envStaging, ...providers);
 }
 
 // ── System Configuration ─────────────────────────────────────────────────
@@ -1155,6 +1187,23 @@ async function healthCheck(): Promise<boolean> {
  * Main init function — orchestrates the full setup.
  */
 export async function init(): Promise<void> {
+  // Install SIGINT/SIGTERM rollback before any staged writes can accumulate.
+  // Guarantees ~/.keyoku/.env is never left in a half-applied state if the
+  // user ^C's mid-flow (keyoku#34).
+  installRollbackHandler();
+  try {
+    await runInit();
+    // Final flush for any trailing staged writes (quiet hours, timezone,
+    // autonomy). Provider config was already committed inside
+    // setupLlmProvider().
+    commitEnvStaging();
+  } catch (err) {
+    rollbackEnvStaging();
+    throw err;
+  }
+}
+
+async function runInit(): Promise<void> {
   console.log('');
   console.log(`  ${c.indigo}${c.bold}  █  █  █▀▀  █   █  █▀▀█  █  █  █  █${c.reset}`);
   console.log(`  ${c.indigo}${c.bold}  █▄▀   █▀▀   █ █   █  █  █▀▄   █  █${c.reset}`);
