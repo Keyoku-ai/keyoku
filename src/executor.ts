@@ -9,7 +9,7 @@ export async function executeBashStep(
   return new Promise((resolve) => {
     const child = spawn("sh", ["-c", command], {
       stdio: ["ignore", "pipe", "pipe"],
-      cwd: cwd ?? process.env.HOME,
+      cwd: cwd ?? process.cwd(),
     });
     let stdout = "";
     let stderr = "";

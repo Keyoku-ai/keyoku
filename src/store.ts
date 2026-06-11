@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -312,10 +312,12 @@ export class Store {
   appendActivity(event: ActivityEvent): void {
     const path = this.activityFile();
     appendFileSync(path, `${JSON.stringify(event)}\n`, { mode: FILE_MODE });
-    // Only read the full file to check the cap when we're near it.
-    // A single line is ~200 bytes; 10 000 lines ≈ 2 MB. Stat is negligible.
-    const stat = (() => { try { return readFileSync(path, "utf8").split("\n").filter((l) => l.trim()).length; } catch { return 0; } })();
-    if (stat > 10_000) {
+    // O(1) cap check: stat the size, and only read+trim once it plausibly
+    // exceeds ~10k events (~250 B/line ⇒ 2.5 MB). The cap is approximate by
+    // design — it bounds growth, it is not an exact retention contract.
+    let size = 0;
+    try { size = statSync(path).size; } catch { return; }
+    if (size > 2_500_000) {
       const trimmed = this.listActivity().slice(-8_000);
       const tmp = `${path}.${process.pid}.tmp`;
       writeFileSync(tmp, trimmed.map((e) => JSON.stringify(e)).join("\n") + "\n", { mode: FILE_MODE });

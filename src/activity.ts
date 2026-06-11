@@ -47,26 +47,46 @@ export function detectPatterns(
   if (recent.length < 2) return [];
 
   const keys = recent.map(eventKey);
-  const counts = new Map<string, { count: number; exemplar: ActivityEvent[] }>();
 
+  // Count candidate sequences of length 2–4. Two rules keep counts honest:
+  // occurrences never overlap (A,B,A,B,A,B is three A→B's, not five), and
+  // sequences whose events are all identical are skipped — a formatter
+  // rewriting the same file ten times is one action repeating, not a workflow.
+  interface Candidate {
+    count: number;
+    exemplar: ActivityEvent[];
+    seq: string[];
+  }
+  const counts = new Map<string, Candidate>();
   for (let seqLen = 2; seqLen <= 4; seqLen++) {
+    const nextAllowed = new Map<string, number>();
     for (let i = 0; i <= recent.length - seqLen; i++) {
       const seq = keys.slice(i, i + seqLen);
+      if (new Set(seq).size === 1) continue;
       const key = seq.join(" → ");
+      if (i < (nextAllowed.get(key) ?? 0)) continue;
+      nextAllowed.set(key, i + seqLen);
       const existing = counts.get(key);
-      if (existing) {
-        existing.count++;
-      } else {
-        counts.set(key, { count: 1, exemplar: recent.slice(i, i + seqLen) });
-      }
+      if (existing) existing.count++;
+      else counts.set(key, { count: 1, exemplar: recent.slice(i, i + seqLen), seq });
     }
   }
 
-  const results: ActivitySuggestion[] = [];
-  for (const [key, { count, exemplar }] of counts) {
-    if (count < minCount) continue;
+  const qualified = [...counts.values()].filter((c) => c.count >= minCount);
 
-    const draftSteps: WorkflowStepTemplate[] = exemplar.map((ev) => {
+  // Prefer the longest chain that still clears minCount — it automates the
+  // most — then drop anything contained in (or containing) an accepted one,
+  // so A→B→C→D doesn't also surface as A→B, B→C, A→B→C, ...
+  qualified.sort((a, b) => b.seq.length - a.seq.length || b.count - a.count);
+  const accepted: Candidate[] = [];
+  for (const c of qualified) {
+    if (accepted.some((a) => containsSeq(a.seq, c.seq) || containsSeq(c.seq, a.seq))) continue;
+    accepted.push(c);
+    if (accepted.length === 5) break;
+  }
+
+  return accepted.map((c, idx) => {
+    const draftSteps: WorkflowStepTemplate[] = c.exemplar.map((ev) => {
       if (ev.tool === "Bash" && ev.detail) {
         return {
           type: "bash" as const,
@@ -81,32 +101,30 @@ export function detectPatterns(
       };
     });
 
-    const parts = key.split(" → ");
-    const firstTool = exemplar[0]?.tool ?? "workflow";
-    const slug = `auto-${firstTool.toLowerCase().replace(/[^a-z0-9]/g, "")}-${results.length + 1}`;
+    const first = c.exemplar[0].summary.slice(0, 40);
+    const last = c.exemplar[c.exemplar.length - 1].summary.slice(0, 40);
+    const firstTool = c.exemplar[0].tool ?? "workflow";
 
-    results.push({
-      slug,
-      name: `Auto: ${parts[0].split(":")[0]} → ${parts[parts.length - 1].split(":")[0]}`,
-      description: `Detected ${count}× in recent activity (${parts.length} steps): ${parts.join(" → ")}`,
-      count,
+    return {
+      slug: `auto-${firstTool.toLowerCase().replace(/[^a-z0-9]/g, "")}-${idx + 1}`,
+      name: `Auto: ${first} → ${last}`,
+      description: `Detected ${c.count}× in recent activity (${c.seq.length} steps): ${c.seq.join(" → ")}`,
+      count: c.count,
       draftSteps,
-    });
+    };
+  });
+}
+
+/** True if `haystack` contains `needle` as a contiguous run. */
+function containsSeq(haystack: string[], needle: string[]): boolean {
+  if (needle.length > haystack.length) return false;
+  outer: for (let i = 0; i <= haystack.length - needle.length; i++) {
+    for (let j = 0; j < needle.length; j++) {
+      if (haystack[i + j] !== needle[j]) continue outer;
+    }
+    return true;
   }
-
-  // Sort by count desc, prefer longer sequences as tiebreaker
-  results.sort((a, b) => b.count - a.count || b.draftSteps.length - a.draftSteps.length);
-
-  // Deduplicate: skip suggestions that are subsequences of a higher-ranked one
-  const seen = new Set<string>();
-  return results
-    .filter((s) => {
-      const key = s.draftSteps.map((st) => st.summary.slice(0, 80)).join("|");
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .slice(0, 5);
+  return false;
 }
 
 export function enrichWithEntities(event: ActivityEvent): ActivityEvent {

@@ -6,7 +6,8 @@ import { Harness } from "./engine.js";
 import { runLearning } from "./learn.js";
 import { buildServer, VERSION } from "./server.js";
 import { resolveSlmFromEnv } from "./slm.js";
-import { Store } from "./store.js";
+import { newId, Store } from "./store.js";
+import type { ActivityEvent } from "./types.js";
 
 // stdout is the MCP protocol channel in serve mode — all human output in that
 // mode MUST go to stderr.
@@ -219,30 +220,27 @@ async function record(): Promise<void> {
           : ("tool_use" as const);
 
   // Append directly to the activity JSONL — no MCP server needed.
-  const { Store } = await import("./store.js");
   const { enrichWithEntities } = await import("./activity.js");
-  const { newId } = await import("./store.js");
   const store = new Store();
-  let event = {
+  const event: ActivityEvent = {
     id: newId("ev"),
     type,
     summary,
     ...(detail ? { detail } : {}),
-    tool: toolName || undefined,
-    sessionId: sessionId || undefined,
+    ...(toolName ? { tool: toolName } : {}),
+    ...(sessionId ? { sessionId } : {}),
     at: new Date().toISOString(),
   };
-  // @ts-ignore — enrichWithEntities accepts ActivityEvent but we've inlined the shape
-  event = enrichWithEntities(event);
-  store.appendActivity(event as Parameters<typeof store.appendActivity>[0]);
+  store.appendActivity(enrichWithEntities(event));
   // Exit 0 — hooks must not block Claude Code on failure
 }
 
 async function init(): Promise<void> {
   const { homedir } = await import("node:os");
   const { join } = await import("node:path");
-  const { existsSync, readFileSync, writeFileSync, mkdirSync } = await import("node:fs");
+  const { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } = await import("node:fs");
   const { fileURLToPath } = await import("node:url");
+  const { execSync, spawnSync } = await import("node:child_process");
 
   // Resolve the absolute path to this dist/index.js
   const selfPath = fileURLToPath(import.meta.url);
@@ -251,48 +249,80 @@ async function init(): Promise<void> {
   const claudeDir = join(home, ".claude");
   mkdirSync(claudeDir, { recursive: true });
 
-  // Claude Code reads BOTH MCP servers and hooks from ~/.claude/settings.json.
-  // A separate mcp.json is NOT read by Claude Code — everything goes in settings.
-  const settingsPath = join(claudeDir, "settings.json");
-
-  function readJsonFile(p: string): Record<string, unknown> {
+  function loadJson(p: string): Record<string, unknown> {
     if (!existsSync(p)) return {};
-    const raw = readFileSync(p, "utf8");
-    try { return JSON.parse(raw); }
-    catch {
-      throw new Error(
-        `${p} exists but could not be parsed as JSON. Fix or delete it first, then re-run keyoku init.`,
-      );
+    try {
+      return JSON.parse(readFileSync(p, "utf8"));
+    } catch {
+      throw new Error(`${p} exists but is not valid JSON. Fix or remove it, then re-run keyoku init.`);
     }
   }
-
-  const settings = readJsonFile(settingsPath);
-
-  // 1. MCP server entry
-  const mcpServers = ((settings.mcpServers ?? {}) as Record<string, unknown>);
-  mcpServers["keyoku"] = { command: "node", args: [selfPath] };
-  settings.mcpServers = mcpServers;
-
-  // 2. PostToolUse hook
-  const hooks = ((settings.hooks ?? {}) as Record<string, unknown>);
-  const postToolUse = (Array.isArray(hooks.PostToolUse) ? hooks.PostToolUse : []) as unknown[];
-  const alreadyWired = postToolUse.some(
-    (h) => typeof h === "object" && h !== null && JSON.stringify(h).includes("keyoku"),
-  );
-  if (!alreadyWired) {
-    postToolUse.push({
-      matcher: "Bash|Edit|Write|Read",
-      hooks: [{ type: "command", command: `node ${selfPath} record` }],
-    });
+  function writeJsonAtomic(p: string, data: unknown): void {
+    const tmp = `${p}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify(data, null, 2));
+    renameSync(tmp, p);
   }
-  hooks.PostToolUse = postToolUse;
-  settings.hooks = hooks;
 
-  writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+  // 1. MCP server registration. Claude Code reads user-scoped MCP servers from
+  // ~/.claude.json — NOT from settings.json and NOT from a mcp.json. Prefer
+  // the official CLI; fall back to editing ~/.claude.json when it isn't on PATH.
+  let mcpHow: string;
+  const viaCli = spawnSync(
+    "claude",
+    ["mcp", "add", "--scope", "user", "keyoku", "--", "node", selfPath],
+    { stdio: "ignore" },
+  );
+  if (viaCli.status === 0) {
+    mcpHow = "registered via `claude mcp add --scope user keyoku`";
+  } else {
+    const claudeJsonPath = join(home, ".claude.json");
+    const claudeJson = loadJson(claudeJsonPath);
+    const servers = (claudeJson.mcpServers ?? {}) as Record<string, unknown>;
+    servers["keyoku"] = { type: "stdio", command: "node", args: [selfPath] };
+    claudeJson.mcpServers = servers;
+    writeJsonAtomic(claudeJsonPath, claudeJson);
+    mcpHow = `written to ${claudeJsonPath}`;
+  }
+
+  // 2. PostToolUse hook — hooks DO live in settings.json. Also clean up the
+  // mcpServers key an older keyoku init wrote there (Claude Code ignores it).
+  const settingsPath = join(claudeDir, "settings.json");
+  const settings = loadJson(settingsPath);
+  if (settings.mcpServers && typeof settings.mcpServers === "object") {
+    const stray = settings.mcpServers as Record<string, unknown>;
+    delete stray["keyoku"];
+    if (Object.keys(stray).length === 0) delete settings.mcpServers;
+  }
+
+  // Prefer the PATH-resolved bin — it survives package upgrades. Fall back to
+  // the absolute dist path for local checkouts.
+  let hookCmd = `node ${selfPath} record`;
+  try {
+    execSync("command -v keyoku", { stdio: "ignore", shell: "/bin/sh" });
+    hookCmd = "keyoku record";
+  } catch {
+    /* not on PATH — keep the absolute path */
+  }
+
+  const hooks = (settings.hooks ?? {}) as Record<string, unknown>;
+  const postToolUse = (Array.isArray(hooks.PostToolUse) ? hooks.PostToolUse : []) as unknown[];
+  // Drop any previous keyoku hook entry (it may point at a stale install path),
+  // then add the current one — idempotent and self-healing across upgrades.
+  const others = postToolUse.filter(
+    (h) => !(typeof h === "object" && h !== null && JSON.stringify(h).includes("keyoku")),
+  );
+  others.push({
+    matcher: "Bash|Edit|Write|Read",
+    hooks: [{ type: "command", command: hookCmd }],
+  });
+  hooks.PostToolUse = others;
+  settings.hooks = hooks;
+  writeJsonAtomic(settingsPath, settings);
 
   console.log(`keyoku initialised.
 
-  MCP server + PostToolUse hook written to: ${settingsPath}
+  MCP server:       ${mcpHow}
+  PostToolUse hook: ${settingsPath} (${hookCmd})
 
   Restart Claude Code for changes to take effect.
   State lives in ~/.keyoku/

@@ -454,6 +454,7 @@ export interface WorkflowStepTemplate {
   summary: string;
   /** bash steps */
   command?: string;
+  cwd?: string;
   /** agent_prompt steps */
   prompt?: string;
   /** mcp_call steps */
@@ -504,6 +505,7 @@ export interface ExecutionStep {
   summary: string;
   status: ExecutionStepStatus;
   command?: string;
+  cwd?: string;
   prompt?: string;
   connector?: string;
   tool?: string;

@@ -685,6 +685,86 @@ export function buildServer(harness: Harness): McpServer {
     };
   }
 
+  /**
+   * Run an execution forward from startIdx. Shared by workflow_execute and
+   * execution_complete so step semantics and audit logging cannot drift apart.
+   * Persists after every step (crash-safe); pauses on agent_prompt /
+   * human_review; fails fast on a misconfigured step instead of leaving it
+   * stuck in "running".
+   */
+  async function advanceExecution(
+    exec: WorkflowExecution,
+    template: WorkflowTemplate | undefined,
+    startIdx: number,
+  ): Promise<ToolResult> {
+    const failAt = (i: number, error: string): ToolResult => {
+      exec.status = "failed";
+      harness.store.saveExecution(exec);
+      logAudit("workflow_execute", exec.templateSlug, `failed at step ${i}`, false);
+      return json({ execution: summarizeExecution(exec), failed_at: i, error });
+    };
+
+    for (let i = startIdx; i < exec.steps.length; i++) {
+      const s = exec.steps[i];
+      s.status = "running";
+      s.startedAt = new Date().toISOString();
+      exec.currentStep = i;
+      harness.store.saveExecution(exec);
+
+      if (s.type === "bash") {
+        const { result, ok } = await executeBashStep(s.command ?? s.summary, s.cwd);
+        s.result = result;
+        s.status = ok ? "done" : "failed";
+        s.completedAt = new Date().toISOString();
+        if (!ok) return failAt(i, result);
+        harness.store.saveExecution(exec);
+      } else if (s.type === "mcp_call") {
+        if (!s.connector || !s.tool) {
+          s.status = "failed";
+          s.error = "mcp_call step is missing connector or tool";
+          s.completedAt = new Date().toISOString();
+          return failAt(i, s.error);
+        }
+        const { result, ok } = await executeMcpStep(s.connector, s.tool, s.args ?? {}, harness.connectors);
+        s.result = result;
+        s.status = ok ? "done" : "failed";
+        s.completedAt = new Date().toISOString();
+        if (!ok) return failAt(i, result);
+        harness.store.saveExecution(exec);
+      } else if (s.type === "agent_prompt") {
+        s.status = "waiting_agent";
+        exec.status = "waiting_agent";
+        harness.store.saveExecution(exec);
+        return json({
+          execution: summarizeExecution(exec),
+          waiting_for: "agent",
+          step: { index: i, type: "agent_prompt", summary: s.summary, prompt: s.prompt },
+          guidance: `Handle this step, then call execution_complete { id: "${exec.id}", step_index: ${i}, result: "your result" } to continue.`,
+        });
+      } else {
+        s.status = "waiting_human";
+        exec.status = "waiting_human";
+        harness.store.saveExecution(exec);
+        return json({
+          execution: summarizeExecution(exec),
+          waiting_for: "human",
+          step: { index: i, type: "human_review", summary: s.summary, message: s.message },
+          guidance: `Review required. When ready, call execution_complete { id: "${exec.id}", step_index: ${i}, result: "approved" }.`,
+        });
+      }
+    }
+
+    exec.status = "done";
+    exec.completedAt = new Date().toISOString();
+    harness.store.saveExecution(exec);
+    if (template) {
+      template.timesRun += 1;
+      harness.store.saveTemplate(template);
+    }
+    logAudit("workflow_execute", exec.templateSlug, `completed ${exec.steps.length} steps`, true);
+    return json({ execution: summarizeExecution(exec), completed: true });
+  }
+
   server.registerTool(
     "activity_record",
     {
@@ -792,6 +872,7 @@ export function buildServer(harness: Harness): McpServer {
               type: z.enum(["bash", "agent_prompt", "mcp_call", "human_review"]),
               summary: z.string().min(1),
               command: z.string().optional(),
+              cwd: z.string().optional().describe("Working directory for bash steps (default: the server's cwd)."),
               prompt: z.string().optional(),
               connector: z.string().optional(),
               tool: z.string().optional(),
@@ -917,6 +998,7 @@ export function buildServer(harness: Harness): McpServer {
             summary: s.summary,
             status: "pending" as const,
             ...(s.command ? { command: s.command } : {}),
+            ...(s.cwd ? { cwd: s.cwd } : {}),
             ...(s.prompt ? { prompt: s.prompt } : {}),
             ...(s.connector ? { connector: s.connector } : {}),
             ...(s.tool ? { tool: s.tool } : {}),
@@ -928,65 +1010,7 @@ export function buildServer(harness: Harness): McpServer {
           triggeredBy: triggered_by ?? "on_demand",
         };
 
-        async function runFrom(startIdx: number): Promise<ToolResult> {
-          for (let i = startIdx; i < execution.steps.length; i++) {
-            const step = execution.steps[i];
-            step.status = "running";
-            step.startedAt = new Date().toISOString();
-            execution.currentStep = i;
-
-            if (step.type === "bash") {
-              const { result, ok } = await executeBashStep(step.command ?? step.summary);
-              step.result = result;
-              step.status = ok ? "done" : "failed";
-              step.completedAt = new Date().toISOString();
-              if (!ok) {
-                execution.status = "failed";
-                harness.store.saveExecution(execution);
-                logAudit("workflow_execute", slug, `failed at step ${i}`, false);
-                return json({ execution: summarizeExecution(execution), failed_at: i, error: result });
-              }
-            } else if (step.type === "mcp_call" && step.connector && step.tool) {
-              const { result, ok } = await executeMcpStep(step.connector, step.tool, step.args ?? {}, harness.connectors);
-              step.result = result;
-              step.status = ok ? "done" : "failed";
-              step.completedAt = new Date().toISOString();
-              if (!ok) {
-                execution.status = "failed";
-                harness.store.saveExecution(execution);
-                return json({ execution: summarizeExecution(execution), failed_at: i, error: result });
-              }
-            } else if (step.type === "agent_prompt") {
-              step.status = "waiting_agent";
-              execution.status = "waiting_agent";
-              harness.store.saveExecution(execution);
-              return json({
-                execution: summarizeExecution(execution),
-                waiting_for: "agent",
-                step: { index: i, type: "agent_prompt", summary: step.summary, prompt: step.prompt },
-                guidance: `Handle this step, then call execution_complete { id: "${execution.id}", step_index: ${i}, result: "your result" } to continue.`,
-              });
-            } else if (step.type === "human_review") {
-              step.status = "waiting_human";
-              execution.status = "waiting_human";
-              harness.store.saveExecution(execution);
-              return json({
-                execution: summarizeExecution(execution),
-                waiting_for: "human",
-                step: { index: i, type: "human_review", summary: step.summary, message: step.message },
-                guidance: `Review required. When ready, call execution_complete { id: "${execution.id}", step_index: ${i}, result: "approved" }.`,
-              });
-            }
-          }
-          execution.status = "done";
-          execution.completedAt = new Date().toISOString();
-          harness.store.saveExecution(execution);
-          if (template) { template.timesRun += 1; harness.store.saveTemplate(template); }
-          logAudit("workflow_execute", slug, `completed ${execution.steps.length} steps`, true);
-          return json({ execution: summarizeExecution(execution), completed: true });
-        }
-
-        return runFrom(0);
+        return advanceExecution(execution, template, 0);
       } catch (err) {
         return fail(err);
       }
@@ -1028,66 +1052,7 @@ export function buildServer(harness: Harness): McpServer {
         }
 
         const template = harness.store.getTemplate(execution.templateSlug);
-        const exec: WorkflowExecution = execution;
-
-        async function continueFrom(startIdx: number): Promise<ToolResult> {
-          for (let i = startIdx; i < exec.steps.length; i++) {
-            const s = exec.steps[i];
-            s.status = "running";
-            s.startedAt = new Date().toISOString();
-            exec.currentStep = i;
-
-            if (s.type === "bash") {
-              const r = await executeBashStep(s.command ?? s.summary);
-              s.result = r.result;
-              s.status = r.ok ? "done" : "failed";
-              s.completedAt = new Date().toISOString();
-              if (!r.ok) {
-                exec.status = "failed";
-                harness.store.saveExecution(exec);
-                return json({ execution: summarizeExecution(exec), failed_at: i, error: r.result });
-              }
-            } else if (s.type === "mcp_call" && s.connector && s.tool) {
-              const r = await executeMcpStep(s.connector, s.tool, s.args ?? {}, harness.connectors);
-              s.result = r.result;
-              s.status = r.ok ? "done" : "failed";
-              s.completedAt = new Date().toISOString();
-              if (!r.ok) {
-                exec.status = "failed";
-                harness.store.saveExecution(exec);
-                return json({ execution: summarizeExecution(exec), failed_at: i });
-              }
-            } else if (s.type === "agent_prompt") {
-              s.status = "waiting_agent";
-              exec.status = "waiting_agent";
-              harness.store.saveExecution(exec);
-              return json({
-                execution: summarizeExecution(exec),
-                waiting_for: "agent",
-                step: { index: i, type: "agent_prompt", summary: s.summary, prompt: s.prompt },
-                guidance: `Handle this step, then call execution_complete { id: "${exec.id}", step_index: ${i}, result: "..." }.`,
-              });
-            } else if (s.type === "human_review") {
-              s.status = "waiting_human";
-              exec.status = "waiting_human";
-              harness.store.saveExecution(exec);
-              return json({
-                execution: summarizeExecution(exec),
-                waiting_for: "human",
-                step: { index: i, summary: s.summary, message: s.message },
-                guidance: `Call execution_complete { id: "${exec.id}", step_index: ${i}, result: "approved" } when ready.`,
-              });
-            }
-          }
-          exec.status = "done";
-          exec.completedAt = new Date().toISOString();
-          if (template) { template.timesRun += 1; harness.store.saveTemplate(template); }
-          harness.store.saveExecution(exec);
-          logAudit("workflow_execute", exec.templateSlug, "completed via execution_complete", true);
-          return json({ execution: summarizeExecution(exec), completed: true });
-        }
-
-        return continueFrom(step_index + 1);
+        return advanceExecution(execution, template, step_index + 1);
       } catch (err) {
         return fail(err);
       }
