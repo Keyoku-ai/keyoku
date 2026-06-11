@@ -9,6 +9,10 @@ export interface ActivitySuggestion {
   /** Stable identity of the underlying sequence — used to surface each
    * detected pattern to the user exactly once. */
   key: string;
+  /** Routing: "automation" = runnable, suggest/nudge it as a workflow;
+   * "practice" = a real pattern in the wrong vocabulary (e.g. files that
+   * change together) — file it as knowledge, never as a run button. */
+  kind: "automation" | "practice";
 }
 
 function eventKey(event: ActivityEvent): string {
@@ -154,6 +158,13 @@ export function detectPatterns(
     const last = c.exemplar[c.exemplar.length - 1].summary.slice(0, 40);
     const firstTool = c.exemplar[0].tool ?? "workflow";
 
+    // Routing: a pattern is runnable automation only if executable steps
+    // (bash / mcp_call) carry it. Edit/Write clusters are real patterns in
+    // the wrong vocabulary — they become practice knowledge instead.
+    const executable = draftSteps.filter((s) => s.type === "bash" || s.type === "mcp_call").length;
+    const kind: "automation" | "practice" =
+      executable >= 2 || executable / draftSteps.length >= 0.5 ? "automation" : "practice";
+
     return {
       slug: `auto-${firstTool.toLowerCase().replace(/[^a-z0-9]/g, "")}-${idx + 1}`,
       name: `Auto: ${first} → ${last}`,
@@ -161,6 +172,7 @@ export function detectPatterns(
       count: c.count,
       draftSteps,
       key: c.seq.join(" → "),
+      kind,
     };
   });
 }

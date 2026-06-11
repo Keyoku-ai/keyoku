@@ -23,7 +23,7 @@ console.log(`Events: ${events.length} (from ${path}, window ${win})\n`);
 const suggestions = detectPatterns(events, 3, win);
 console.log(`Suggestions: ${suggestions.length}\n`);
 for (const s of suggestions) {
-  console.log(`■ ${s.name}   [count=${s.count}, steps=${s.draftSteps.length}]`);
+  console.log(`■ [${s.kind}] ${s.name}   [count=${s.count}, steps=${s.draftSteps.length}]`);
   for (const st of s.draftSteps) {
     console.log(`    - [${st.type}] ${(st.command ?? st.prompt ?? st.summary).slice(0, 100)}`);
   }

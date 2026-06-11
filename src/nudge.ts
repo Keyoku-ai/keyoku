@@ -30,9 +30,10 @@ export function saveSurfaced(home: string, surfaced: Set<string>): void {
   writeFileSync(surfacedPath(home), JSON.stringify([...surfaced].slice(-500)));
 }
 
-/** Ripe = qualifying patterns not yet surfaced to the user. */
+/** Ripe = runnable patterns not yet surfaced. Practice patterns are filed
+ * into knowledge by workflow_suggest, never nudged as run buttons. */
 export function findRipe(events: ActivityEvent[], surfaced: Set<string>): ActivitySuggestion[] {
-  return detectPatterns(events, 3, 2000).filter((s) => !surfaced.has(s.key));
+  return detectPatterns(events, 3, 2000).filter((s) => s.kind === "automation" && !surfaced.has(s.key));
 }
 
 // --- ripeness cache -----------------------------------------------------

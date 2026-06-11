@@ -54,13 +54,20 @@ Return ONLY JSON: {"suggestions":[{"slug":"...","name":"...","description":"..."
     const raw = await slm.complete(prompt, { json: true, maxTokens: 2048 });
     const parsed = JSON.parse(raw) as { suggestions?: unknown };
     if (!Array.isArray(parsed.suggestions)) return drafts;
-    const bySlug = new Map(drafts.map((d) => [d.slug, d.key]));
+    const bySlug = new Map(drafts.map((d) => [d.slug, d]));
     const valid = parsed.suggestions
       .filter(isValidSuggestion)
       .slice(0, 5)
-      // Preserve the stable pattern identity through refinement so each
-      // pattern is still surfaced exactly once.
-      .map((s) => ({ ...s, key: s.key || bySlug.get(s.slug) || s.slug }));
+      // Preserve the stable pattern identity (and routing) through
+      // refinement so each pattern is still surfaced exactly once.
+      .map((s) => {
+        const draft = bySlug.get(s.slug);
+        return {
+          ...s,
+          key: s.key || draft?.key || s.slug,
+          kind: s.kind || draft?.kind || ("automation" as const),
+        };
+      });
     return valid.length > 0 ? valid : drafts;
   } catch {
     return drafts;

@@ -85,6 +85,31 @@ describe("detectPatterns", () => {
   });
 });
 
+describe("routing (automation vs practice)", () => {
+  it("classifies command chains as automation", () => {
+    const events: ActivityEvent[] = [];
+    for (let i = 0; i < 3; i++) {
+      events.push(ev("Bash: npm test", "Bash", "npm test"));
+      events.push(ev("Bash: git push", "Bash", "git push"));
+      events.push(ev(`Read: /tmp/x-${i}.md`, "Read"));
+    }
+    const [s] = detectPatterns(events, 3);
+    expect(s.kind).toBe("automation");
+  });
+
+  it("classifies edit clusters as practice, not run buttons", () => {
+    const events: ActivityEvent[] = [];
+    for (let i = 0; i < 3; i++) {
+      events.push(ev("Edit: /proj/src/hook.mjs", "Edit"));
+      events.push(ev("Write: /proj/src/hud.mjs", "Write"));
+      events.push(ev(`Read: /tmp/sep-${i}.md`, "Read"));
+    }
+    const [s] = detectPatterns(events, 3);
+    expect(s).toBeTruthy();
+    expect(s.kind).toBe("practice");
+  });
+});
+
 describe("session partitioning", () => {
   it("does not stitch interleaved concurrent sessions into false patterns", () => {
     // Session A edits project A, session B edits project B — interleaved in

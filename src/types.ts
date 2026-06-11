@@ -512,7 +512,7 @@ export interface KnowledgeEntry {
   subject: string;
   kind: "connector" | "operation" | "note";
   fact: string;
-  source: "mcp-description" | "agent-research" | "user";
+  source: "mcp-description" | "agent-research" | "user" | "pattern-mining";
   at: string;
 }
 

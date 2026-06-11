@@ -8,7 +8,8 @@ import {
   enqueueApproval,
   gateCall,
 } from "./approvals.js";
-import { detectPatterns, enrichWithEntities } from "./activity.js";
+import { detectPatterns, enrichWithEntities, type ActivitySuggestion } from "./activity.js";
+import { loadSurfaced, saveSurfaced } from "./nudge.js";
 import { redactConnector } from "./connectors.js";
 import type { Harness } from "./engine.js";
 import { executeBashStep, executeMcpStep } from "./executor.js";
@@ -88,6 +89,13 @@ function redactCriteria(criteria: Criterion[]): Criterion[] {
         }
       : c,
   );
+}
+
+/** Subject for a practice knowledge entry — project dir name when visible. */
+function practiceSubject(s: ActivitySuggestion): string {
+  const first = s.draftSteps[0]?.summary ?? "";
+  const m = first.match(/\/Development\/([^/]+)\//);
+  return (m?.[1] ?? first.split(":")[0] ?? "general").toLowerCase();
 }
 
 export function buildServer(harness: Harness): McpServer {
@@ -1032,7 +1040,33 @@ export function buildServer(harness: Harness): McpServer {
         // Mine a deep window — transcript import can backfill thousands of
         // events, and per-session partitioning keeps the cost linear.
         const events = harness.store.listActivity(5000);
-        let suggestions = detectPatterns(events, min_count ?? 3, 5000);
+        const detected = detectPatterns(events, min_count ?? 3, 5000);
+        let suggestions = detected.filter((s) => s.kind === "automation");
+
+        // Practice patterns (files that change together, edit clusters) are
+        // real but not runnable: file them into the knowledge layer — where
+        // they ground refinement and answer agent queries — and mark them
+        // surfaced so they are never offered as run buttons.
+        const practice = detected.filter((s) => s.kind === "practice");
+        let practiceFiled = 0;
+        if (practice.length > 0) {
+          const surfaced = loadSurfaced(harness.store.dir);
+          for (const p of practice) {
+            if (surfaced.has(p.key)) continue;
+            surfaced.add(p.key);
+            harness.store.appendKnowledge({
+              id: newId("kn"),
+              subject: `practice:${practiceSubject(p)}`,
+              kind: "note",
+              fact: `Recurring work pattern (${p.count}×): ${p.draftSteps.map((s) => s.summary).join(" → ")}`.slice(0, 800),
+              source: "pattern-mining",
+              at: new Date().toISOString(),
+            });
+            practiceFiled += 1;
+          }
+          saveSurfaced(harness.store.dir, surfaced);
+        }
+
         let method = "heuristic";
         const slm = resolveSlmFromEnv();
         if (slm && suggestions.length > 0) {
@@ -1049,6 +1083,7 @@ export function buildServer(harness: Harness): McpServer {
         return json({
           count: suggestions.length,
           suggestions,
+          ...(practiceFiled > 0 ? { practice_filed: practiceFiled } : {}),
           method,
           guidance:
             suggestions.length === 0
