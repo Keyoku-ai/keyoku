@@ -852,7 +852,9 @@ export function buildServer(harness: Harness): McpServer {
           guidance:
             suggestions.length === 0
               ? "Not enough recurring patterns yet — keep working and run workflow_suggest again after more activity is recorded."
-              : `Approve a suggestion with workflow_approve { slug, name, description, steps } to create a runnable template.`,
+              : method === "heuristic"
+                ? "These are raw heuristic drafts — refine them before approving: merge overlapping fragments of the same workflow, drop coincidental sequences, replace run-specific values (commit messages, file paths) with {{placeholders}}, generalize agent_prompt steps to intent (e.g. 'fix the failing tests'), and write a real name/description. Then call workflow_approve { slug, name, description, steps }."
+                : "Model-refined drafts. Review and approve with workflow_approve { slug, name, description, steps }.",
         });
       } catch (err) {
         return fail(err);
