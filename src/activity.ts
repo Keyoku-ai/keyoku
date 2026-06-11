@@ -10,14 +10,26 @@ export interface ActivitySuggestion {
 
 function eventKey(event: ActivityEvent): string {
   const tool = event.tool ?? event.type;
-  let hint = event.summary.slice(0, 60);
-  // Strip absolute paths — keep filename + extension
-  hint = hint.replace(/(?:\/[^/\s]+)+\/([\w.-]+)/g, "*/$1");
-  // Strip git commit messages
-  hint = hint.replace(/"[^"]{15,}"/, '"..."');
+  // Normalize on the FULL summary, then truncate — truncating first leaves
+  // unterminated quotes/paths that defeat every rule below.
+  let hint = event.summary;
+  // Drop the duplicated tool prefix ("Bash: …" recorded under tool=Bash)
+  if (hint.startsWith(`${tool}: `)) hint = hint.slice(tool.length + 2);
+  // git commit messages are run-specific, never part of the pattern shape
+  hint = hint.replace(/(git commit)\b.*/, "$1 <msg>");
+  // Edits/Writes to different files in the same loop are the same kind of
+  // step — keep only the extension so the chain survives file variation
+  if (tool === "Edit" || tool === "Write") {
+    hint = hint.replace(/(?:\/[^/\s]+)+\/[\w.-]+?(\.[A-Za-z0-9]+)?\b/g, (_m, ext) => `*${ext ?? ""}`);
+  } else {
+    // Elsewhere keep the filename — which file you Read is signal
+    hint = hint.replace(/(?:\/[^/\s]+)+\/([\w.-]+)/g, "*/$1");
+  }
+  // Strip quoted strings, including ones left unterminated by upstream caps
+  hint = hint.replace(/"[^"]{8,}("|$)/g, '"…"').replace(/'[^']{8,}('|$)/g, "'…'");
   // Strip long hex hashes
   hint = hint.replace(/\b[0-9a-f]{7,}\b/g, "<hash>");
-  return `${tool}:${hint}`.slice(0, 60);
+  return `${tool}:${hint.slice(0, 60)}`;
 }
 
 function extractEntities(event: ActivityEvent): string[] {
@@ -58,7 +70,7 @@ export function detectPatterns(
     seq: string[];
   }
   const counts = new Map<string, Candidate>();
-  for (let seqLen = 2; seqLen <= 4; seqLen++) {
+  for (let seqLen = 2; seqLen <= 6; seqLen++) {
     const nextAllowed = new Map<string, number>();
     for (let i = 0; i <= recent.length - seqLen; i++) {
       const seq = keys.slice(i, i + seqLen);
