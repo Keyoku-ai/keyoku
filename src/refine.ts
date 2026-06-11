@@ -1,6 +1,6 @@
 import type { ActivitySuggestion } from "./activity.js";
 import type { SlmProvider } from "./slm.js";
-import type { ActivityEvent } from "./types.js";
+import type { ActivityEvent, KnowledgeEntry } from "./types.js";
 
 const STEP_TYPES = new Set(["bash", "agent_prompt", "mcp_call", "human_review"]);
 
@@ -16,14 +16,22 @@ export async function refineSuggestions(
   slm: SlmProvider,
   drafts: ActivitySuggestion[],
   recentEvents: ActivityEvent[],
+  knowledge: KnowledgeEntry[] = [],
 ): Promise<ActivitySuggestion[]> {
   if (drafts.length === 0) return drafts;
 
   const context = recentEvents.map((e) => `- ${e.summary}`).join("\n");
+  const knowledgeBlock =
+    knowledge.length > 0
+      ? `\nKnown context (operations and connectors the user works with):\n${knowledge
+          .map((k) => `- [${k.subject}] ${k.fact}`)
+          .join("\n")}\n`
+      : "";
   const prompt = `You refine draft workflow automations mined from a developer's activity log.
 
 Recent activity (newest last):
 ${context}
+${knowledgeBlock}
 
 Draft suggestions (heuristically mined, may contain noise):
 ${JSON.stringify(

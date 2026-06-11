@@ -1036,7 +1036,14 @@ export function buildServer(harness: Harness): McpServer {
         let method = "heuristic";
         const slm = resolveSlmFromEnv();
         if (slm && suggestions.length > 0) {
-          suggestions = await refineSuggestions(slm, suggestions, events.slice(-40));
+          // Ground the model: recent activity for situational context plus
+          // the knowledge layer (operation meanings, researched facts).
+          suggestions = await refineSuggestions(
+            slm,
+            suggestions,
+            events.slice(-40),
+            harness.store.listKnowledge().slice(-100),
+          );
           method = `heuristic+${slm.name}`;
         }
         return json({
