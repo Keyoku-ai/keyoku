@@ -841,7 +841,15 @@ export function buildServer(harness: Harness): McpServer {
       harness.store.saveTemplate(template);
     }
     logAudit("workflow_execute", exec.templateSlug, `completed ${exec.steps.length} steps`, true);
-    return json({ execution: summarizeExecution(exec), completed: true });
+    // Graduation hint at stability milestones: proven workflows deserve to
+    // be baked into the repo as agent skills (the practice → bake ladder).
+    const bakeHint =
+      template && [5, 10, 25].includes(template.timesRun)
+        ? {
+            bake_hint: `'${template.slug}' has now run ${template.timesRun}× — it has earned permanence. Bake it into the repo as a team-shareable skill: keyoku export ${template.slug}`,
+          }
+        : {};
+    return json({ execution: summarizeExecution(exec), completed: true, ...bakeHint });
   }
 
   // ----- workflow prompts catalog -----

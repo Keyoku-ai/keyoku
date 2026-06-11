@@ -440,6 +440,8 @@ export interface ActivityEvent {
   /** Files, endpoints, services involved — extracted by the recorder. */
   entities?: string[];
   sessionId?: string;
+  /** Working directory of the session when the event fired — project signal. */
+  cwd?: string;
   at: string;
 }
 

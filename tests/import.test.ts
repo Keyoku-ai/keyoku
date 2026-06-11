@@ -30,6 +30,7 @@ describe("keyoku import", () => {
         type: "assistant",
         timestamp: ts,
         sessionId: "sess-1",
+        cwd: "/Users/dev/Development/proj-a",
         message: { content: [{ type: "tool_use", name, input }] },
       });
     mkdirSync(join(transcripts, "proj-a"), { recursive: true });
@@ -55,6 +56,7 @@ describe("keyoku import", () => {
     expect(events).toHaveLength(3);
     expect(events[0].summary).toBe("Bash: npm test");
     expect(events[0].sessionId).toBe("sess-1");
+    expect(events[0].cwd).toBe("/Users/dev/Development/proj-a");
     expect(events[0].at).toBe("2026-06-01T10:00:00Z");
     expect(events[1].summary).toBe("Edit: /p/src/a.ts");
     expect(events[2].summary).toBe("MCP: github.create_pr");

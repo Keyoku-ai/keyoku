@@ -203,6 +203,7 @@ function buildToolEvent(
   toolInput: Record<string, unknown>,
   sessionId: string,
   at: string,
+  cwd?: string,
 ): ActivityEvent | null {
   if (!toolName) return null;
   let summary: string;
@@ -244,6 +245,7 @@ function buildToolEvent(
     ...(detail ? { detail } : {}),
     tool: toolName,
     ...(sessionId ? { sessionId } : {}),
+    ...(cwd ? { cwd } : {}),
     at,
   };
 }
@@ -287,7 +289,7 @@ async function importCmd(argv: string[]): Promise<void> {
     }
     for (const line of raw.split("\n")) {
       if (!line.includes('"tool_use"')) continue;
-      let obj: { type?: string; timestamp?: string; sessionId?: string; message?: { content?: unknown } };
+      let obj: { type?: string; timestamp?: string; sessionId?: string; cwd?: string; message?: { content?: unknown } };
       try {
         obj = JSON.parse(line);
       } catch {
@@ -299,7 +301,13 @@ async function importCmd(argv: string[]): Promise<void> {
       for (const block of content) {
         if (block?.type !== "tool_use" || typeof block.name !== "string") continue;
         scanned++;
-        const ev = buildToolEvent(block.name, block.input ?? {}, String(obj.sessionId ?? ""), String(obj.timestamp));
+        const ev = buildToolEvent(
+          block.name,
+          block.input ?? {},
+          String(obj.sessionId ?? ""),
+          String(obj.timestamp),
+          obj.cwd ? String(obj.cwd) : undefined,
+        );
         if (!ev) continue;
         const key = `${ev.sessionId ?? ""}|${ev.at}|${ev.summary}`;
         if (seen.has(key)) continue;
@@ -316,6 +324,77 @@ async function importCmd(argv: string[]): Promise<void> {
     `Imported ${recent.length} events from ${files.length} transcript file(s) (${scanned} tool calls scanned).` +
       (recent.length > 0 ? "\nRun workflow_suggest in your agent — your history is now minable." : ""),
   );
+}
+
+/** UserPromptSubmit hook: practice injection. Match the user's prompt and
+ * project against saved workflows and practice knowledge, and put 1–2 lines
+ * in front of the agent BEFORE it acts — workflows consulted, not invoked.
+ * Strict relevance threshold: silence is the default. */
+async function contextCmd(): Promise<void> {
+  try {
+    const chunks: Buffer[] = [];
+    for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+    const raw = Buffer.concat(chunks).toString("utf8").trim();
+    if (!raw) return;
+    let prompt = "";
+    let cwd = "";
+    try {
+      const o = JSON.parse(raw);
+      prompt = String(o.prompt ?? "");
+      cwd = String(o.cwd ?? "");
+    } catch {
+      prompt = raw;
+    }
+    if (!prompt) return;
+
+    const store = new Store();
+    const lines: string[] = [];
+
+    // Saved workflows matching the prompt (word overlap, ≥2 hits to speak)
+    const words = new Set(
+      prompt
+        .toLowerCase()
+        .split(/[^a-z0-9-]+/)
+        .filter((w) => w.length > 3),
+    );
+    if (words.size > 0) {
+      const scored = store
+        .listTemplates()
+        .map((t) => {
+          const hay = `${t.slug} ${t.name} ${t.description}`.toLowerCase();
+          let score = 0;
+          for (const w of words) if (hay.includes(w)) score += 1;
+          return { t, score };
+        })
+        .filter((x) => x.score >= 2)
+        .sort((a, b) => b.score - a.score);
+      if (scored[0]) {
+        lines.push(
+          `Saved workflow matches this request: '${scored[0].t.slug}' (${scored[0].t.name}) — prefer workflow_execute { slug: "${scored[0].t.slug}" } over redoing it manually.`,
+        );
+      }
+    }
+
+    // Project practice from the knowledge layer (cwd → practice:<project>)
+    const proj = cwd.match(/\/Development\/([^/]+)/)?.[1]?.toLowerCase();
+    if (proj) {
+      for (const p of store.listKnowledge(`practice:${proj}`).slice(-2)) {
+        lines.push(`House pattern in ${proj}: ${p.fact.slice(0, 200)}`);
+      }
+    }
+
+    if (lines.length === 0) return;
+    console.log(
+      JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "UserPromptSubmit",
+          additionalContext: `[keyoku] ${lines.slice(0, 2).join(" | ")}`,
+        },
+      }),
+    );
+  } catch {
+    /* never block a prompt */
+  }
 }
 
 /** SessionStart hook: one context line so the agent starts every session
@@ -413,7 +492,13 @@ async function record(): Promise<void> {
   const sessionId = String(hookData.session_id ?? "");
 
   // Append directly to the activity JSONL — no MCP server needed.
-  const event = buildToolEvent(toolName, toolInput, sessionId, new Date().toISOString());
+  const event = buildToolEvent(
+    toolName,
+    toolInput,
+    sessionId,
+    new Date().toISOString(),
+    String(hookData.cwd ?? "") || undefined,
+  );
   if (!event) return;
   const { enrichWithEntities } = await import("./activity.js");
   const store = new Store();
@@ -549,6 +634,16 @@ async function init(): Promise<void> {
   ssOthers.push({ hooks: [{ type: "command", command: briefCmd }] });
   hooks.SessionStart = ssOthers;
 
+  // UserPromptSubmit practice injection: saved workflows and house patterns
+  // are consulted before the agent acts — the practice layer's wire.
+  const contextCmdStr = hookCmd.replace(/ record$/, " context");
+  const promptSubmit = (Array.isArray(hooks.UserPromptSubmit) ? hooks.UserPromptSubmit : []) as unknown[];
+  const psOthers = promptSubmit.filter(
+    (h) => !(typeof h === "object" && h !== null && JSON.stringify(h).includes("keyoku")),
+  );
+  psOthers.push({ hooks: [{ type: "command", command: contextCmdStr }] });
+  hooks.UserPromptSubmit = psOthers;
+
   settings.hooks = hooks;
   writeJsonAtomic(settingsPath, settings);
 
@@ -636,6 +731,7 @@ Usage:
   keyoku import [--dir D]           Backfill activity from Claude Code transcripts
   keyoku export <slug> [--dir D]    Bake a workflow into ./.claude/skills as a skill
   keyoku brief                      Session-start context line (used by the SessionStart hook)
+  keyoku context                    Practice injection for a prompt (used by the UserPromptSubmit hook)
   keyoku approvals                  List queue; approve|deny <id> [reason] to decide
   keyoku audit [n]                  Show the last n audit entries
   keyoku help | version
@@ -669,6 +765,8 @@ async function main(): Promise<void> {
       return exportCmd(rest);
     case "brief":
       return brief();
+    case "context":
+      return contextCmd();
     case "init":
       return init();
     case "approvals":
