@@ -82,6 +82,17 @@ describe("workflow execution lifecycle", () => {
     expect(approved.template.slug).toBe("release-notes");
   });
 
+  it("publishes approved workflows as MCP prompts (the ambient catalog)", async () => {
+    const prompts = await client.listPrompts();
+    const names = prompts.prompts.map((p) => p.name);
+    expect(names).toContain("workflow-release-notes");
+    const got = await client.getPrompt({ name: "workflow-release-notes" });
+    const text = JSON.stringify(got.messages);
+    expect(text).toContain("workflow_execute");
+    expect(text).toContain("release-notes");
+    expect(names).toContain("keyoku-catalog");
+  });
+
   it("executes bash steps directly and pauses at the agent step", async () => {
     const run = await call("workflow_execute", { slug: "release-notes" });
     expect(run.waiting_for).toBe("agent");

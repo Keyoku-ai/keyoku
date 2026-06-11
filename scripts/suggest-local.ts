@@ -18,8 +18,9 @@ const events: ActivityEvent[] = readFileSync(path, "utf8")
     try { return [JSON.parse(l) as ActivityEvent]; } catch { return []; }
   });
 
-console.log(`Events: ${events.length} (from ${path})\n`);
-const suggestions = detectPatterns(events, 3, 300);
+const win = Number(process.env.KEYOKU_WINDOW ?? 5000);
+console.log(`Events: ${events.length} (from ${path}, window ${win})\n`);
+const suggestions = detectPatterns(events, 3, win);
 console.log(`Suggestions: ${suggestions.length}\n`);
 for (const s of suggestions) {
   console.log(`■ ${s.name}   [count=${s.count}, steps=${s.draftSteps.length}]`);

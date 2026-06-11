@@ -93,7 +93,13 @@ function redactCriteria(criteria: Criterion[]): Criterion[] {
 export function buildServer(harness: Harness): McpServer {
   const server = new McpServer(
     { name: "keyoku", version: VERSION },
-    { instructions: PROTOCOL },
+    {
+      instructions: PROTOCOL,
+      // Declared up front: the template store is usually empty at connect
+      // time, and prompts are registered dynamically as workflows are
+      // approved — without this the capability would never be advertised.
+      capabilities: { prompts: { listChanged: true } },
+    },
   );
 
   // M4: every consequential operation lands in the append-only audit trail.
@@ -815,6 +821,64 @@ export function buildServer(harness: Harness): McpServer {
     return json({ execution: summarizeExecution(exec), completed: true });
   }
 
+  // ----- workflow prompts catalog -----
+  // Every approved workflow is published as an MCP prompt; MCP hosts surface
+  // prompts natively (Claude Code renders them as slash commands), so the
+  // catalog is ambient and always current — no asking required.
+  // A static catalog prompt registered before connect — this installs the
+  // prompt handlers up front so per-workflow prompts can register dynamically
+  // after the transport is live (SDK installs handlers on first registration).
+  server.registerPrompt(
+    "keyoku-catalog",
+    {
+      title: "Keyoku workflow catalog",
+      description: "List your approved keyoku workflows and how to run them.",
+    },
+    async () => ({
+      messages: [
+        {
+          role: "user" as const,
+          content: {
+            type: "text" as const,
+            text: "Call workflow_template_list and present my approved keyoku workflows (name, slug, steps, timesRun). Remind me each can be run via workflow_execute { slug }.",
+          },
+        },
+      ],
+    }),
+  );
+
+  const workflowPrompts = new Map<string, { remove(): void }>();
+  function syncWorkflowPrompts(): void {
+    const templates = harness.store.listTemplates();
+    const live = new Set(templates.map((t) => t.slug));
+    for (const [slug, reg] of workflowPrompts) {
+      if (!live.has(slug)) {
+        reg.remove();
+        workflowPrompts.delete(slug);
+      }
+    }
+    for (const t of templates) {
+      if (workflowPrompts.has(t.slug)) continue;
+      const reg = server.registerPrompt(
+        `workflow-${t.slug}`,
+        { title: t.name, description: t.description },
+        async () => ({
+          messages: [
+            {
+              role: "user" as const,
+              content: {
+                type: "text" as const,
+                text: `Run the keyoku workflow '${t.slug}' (${t.name}). Call workflow_execute { slug: "${t.slug}" }; if it pauses (waiting_for agent or human), handle the step and resume with execution_complete until it reports completed. Description: ${t.description}`,
+              },
+            },
+          ],
+        }),
+      );
+      workflowPrompts.set(t.slug, reg);
+    }
+  }
+  syncWorkflowPrompts();
+
   server.registerTool(
     "activity_record",
     {
@@ -886,8 +950,10 @@ export function buildServer(harness: Harness): McpServer {
     },
     async ({ min_count }) => {
       try {
-        const events = harness.store.listActivity(300);
-        let suggestions = detectPatterns(events, min_count ?? 3);
+        // Mine a deep window — transcript import can backfill thousands of
+        // events, and per-session partitioning keeps the cost linear.
+        const events = harness.store.listActivity(5000);
+        let suggestions = detectPatterns(events, min_count ?? 3, 5000);
         let method = "heuristic";
         const slm = resolveSlmFromEnv();
         if (slm && suggestions.length > 0) {
@@ -961,6 +1027,7 @@ export function buildServer(harness: Harness): McpServer {
               timesRun: 0,
             };
         harness.store.saveTemplate(template);
+        syncWorkflowPrompts();
         logAudit("workflow_approve", slug, `${steps.length} steps`, true);
         return json({
           template: { id: template.id, slug: template.slug, name: template.name, steps: template.steps.length },
@@ -1018,6 +1085,7 @@ export function buildServer(harness: Harness): McpServer {
         const template = harness.store.getTemplate(slug);
         if (!template) return fail(new Error(`No template '${slug}'.`));
         harness.store.deleteTemplate(template.id);
+        syncWorkflowPrompts();
         logAudit("workflow_template_delete", slug, "", true);
         return json({ deleted: slug });
       } catch (err) {

@@ -179,26 +179,20 @@ async function learn(): Promise<void> {
   }
 }
 
-async function record(): Promise<void> {
-  // Called by Claude Code PostToolUse hook — reads JSON from stdin.
-  // Format: { tool_name, tool_input, tool_response, session_id }
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
-  const raw = Buffer.concat(chunks).toString("utf8").trim();
-  if (!raw) return; // nothing on stdin — no-op
-
-  let hookData: Record<string, unknown> = {};
-  try { hookData = JSON.parse(raw); } catch { return; } // malformed — skip silently
-
-  const toolName = String(hookData.tool_name ?? "");
-  const toolInput = (hookData.tool_input ?? {}) as Record<string, unknown>;
-  const sessionId = String(hookData.session_id ?? "");
-
-  // Build a human-readable summary from the tool name + key input fields.
-  let summary = toolName;
+/** Map a Claude Code tool call to an ActivityEvent. Shared by the live hook
+ * (record) and transcript backfill (import) so both produce identical events. */
+function buildToolEvent(
+  toolName: string,
+  toolInput: Record<string, unknown>,
+  sessionId: string,
+  at: string,
+): ActivityEvent | null {
+  if (!toolName) return null;
+  let summary: string;
   let detail: string | undefined;
   if (toolName === "Bash") {
     const cmd = String(toolInput.command ?? "").trim();
+    if (!cmd) return null;
     summary = `Bash: ${cmd.slice(0, 80)}`;
     detail = cmd.slice(0, 500);
   } else if (toolName === "Edit" || toolName === "Write") {
@@ -215,31 +209,118 @@ async function record(): Promise<void> {
     const mcpTool = parts.slice(2).join("__") || "tool";
     summary = `MCP: ${server}.${mcpTool}`;
     detail = JSON.stringify({ server, tool: mcpTool, args: toolInput }).slice(0, 500);
+  } else {
+    return null; // outside the v1 trace surface
   }
-
-  // Determine git-ness from Bash commands
   const type =
-    toolName === "Bash" && String(detail ?? "").match(/^git\s/)
+    toolName === "Bash" && /^git\s/.test(detail ?? "")
       ? ("git" as const)
       : toolName === "Bash"
         ? ("shell" as const)
         : ["Edit", "Write"].includes(toolName)
           ? ("file_change" as const)
           : ("tool_use" as const);
-
-  // Append directly to the activity JSONL — no MCP server needed.
-  const { enrichWithEntities } = await import("./activity.js");
-  const store = new Store();
-  const event: ActivityEvent = {
+  return {
     id: newId("ev"),
     type,
     summary,
     ...(detail ? { detail } : {}),
-    ...(toolName ? { tool: toolName } : {}),
+    tool: toolName,
     ...(sessionId ? { sessionId } : {}),
-    at: new Date().toISOString(),
+    at,
   };
-  store.appendActivity(enrichWithEntities(event));
+}
+
+/** Backfill activity from Claude Code session transcripts — kills the cold
+ * start: months of real tool calls become minable history in one command. */
+async function importCmd(argv: string[]): Promise<void> {
+  const { homedir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { readdirSync, readFileSync } = await import("node:fs");
+  const { enrichWithEntities } = await import("./activity.js");
+
+  const dirIdx = argv.indexOf("--dir");
+  const root =
+    dirIdx >= 0 && argv[dirIdx + 1] ? argv[dirIdx + 1] : join(homedir(), ".claude", "projects");
+  const limitIdx = argv.indexOf("--limit");
+  const limit = limitIdx >= 0 && Number(argv[limitIdx + 1]) > 0 ? Number(argv[limitIdx + 1]) : 10_000;
+
+  let files: string[] = [];
+  try {
+    files = (readdirSync(root, { recursive: true }) as string[])
+      .filter((f) => String(f).endsWith(".jsonl"))
+      .map((f) => join(root, String(f)));
+  } catch (err) {
+    console.error(`Cannot read ${root}: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(2);
+  }
+
+  const store = new Store();
+  // Dedupe against everything already recorded — live hook or prior imports.
+  const seen = new Set(store.listActivity().map((e) => `${e.sessionId ?? ""}|${e.at}|${e.summary}`));
+
+  const events: ActivityEvent[] = [];
+  let scanned = 0;
+  for (const file of files) {
+    let raw: string;
+    try {
+      raw = readFileSync(file, "utf8");
+    } catch {
+      continue;
+    }
+    for (const line of raw.split("\n")) {
+      if (!line.includes('"tool_use"')) continue;
+      let obj: { type?: string; timestamp?: string; sessionId?: string; message?: { content?: unknown } };
+      try {
+        obj = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (obj?.type !== "assistant" || !obj.timestamp) continue;
+      const content = obj.message?.content;
+      if (!Array.isArray(content)) continue;
+      for (const block of content) {
+        if (block?.type !== "tool_use" || typeof block.name !== "string") continue;
+        scanned++;
+        const ev = buildToolEvent(block.name, block.input ?? {}, String(obj.sessionId ?? ""), String(obj.timestamp));
+        if (!ev) continue;
+        const key = `${ev.sessionId ?? ""}|${ev.at}|${ev.summary}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        events.push(ev);
+      }
+    }
+  }
+
+  events.sort((a, b) => a.at.localeCompare(b.at));
+  const recent = events.slice(-limit);
+  for (const ev of recent) store.appendActivity(enrichWithEntities(ev));
+  console.log(
+    `Imported ${recent.length} events from ${files.length} transcript file(s) (${scanned} tool calls scanned).` +
+      (recent.length > 0 ? "\nRun workflow_suggest in your agent — your history is now minable." : ""),
+  );
+}
+
+async function record(): Promise<void> {
+  // Called by Claude Code PostToolUse hook — reads JSON from stdin.
+  // Format: { tool_name, tool_input, tool_response, session_id }
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  const raw = Buffer.concat(chunks).toString("utf8").trim();
+  if (!raw) return; // nothing on stdin — no-op
+
+  let hookData: Record<string, unknown> = {};
+  try { hookData = JSON.parse(raw); } catch { return; } // malformed — skip silently
+
+  const toolName = String(hookData.tool_name ?? "");
+  const toolInput = (hookData.tool_input ?? {}) as Record<string, unknown>;
+  const sessionId = String(hookData.session_id ?? "");
+
+  // Append directly to the activity JSONL — no MCP server needed.
+  const event = buildToolEvent(toolName, toolInput, sessionId, new Date().toISOString());
+  if (!event) return;
+  const { enrichWithEntities } = await import("./activity.js");
+  new Store().appendActivity(enrichWithEntities(event));
   // Exit 0 — hooks must not block Claude Code on failure
 }
 
@@ -408,6 +489,7 @@ Usage:
   keyoku watch <goal>|--all         Re-assess on an interval [--interval <seconds>]
   keyoku learn                      Mine patterns from activity (SLM or heuristic)
   keyoku record                     Record a PostToolUse hook event (reads stdin JSON)
+  keyoku import [--dir D]           Backfill activity from Claude Code transcripts
   keyoku approvals                  List queue; approve|deny <id> [reason] to decide
   keyoku audit [n]                  Show the last n audit entries
   keyoku help | version
@@ -435,6 +517,8 @@ async function main(): Promise<void> {
       return learn();
     case "record":
       return record();
+    case "import":
+      return importCmd(rest);
     case "init":
       return init();
     case "approvals":
