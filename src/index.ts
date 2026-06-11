@@ -390,7 +390,7 @@ function auditCmd(rest: string[]): void {
 }
 
 function help(): void {
-  console.log(`keyoku v${VERSION} — the workflow harness for coding agents
+  console.log(`keyoku v${VERSION} — the harness with muscle memory
 
 Usage:
   keyoku [serve]                    Run as an MCP server on stdio (default)
