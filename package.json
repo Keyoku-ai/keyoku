@@ -1,7 +1,7 @@
 {
   "name": "keyoku",
   "version": "0.1.0",
-  "description": "Always-on activity tracer and workflow automation layer for Claude Code and other coding agents. Watches what you do, learns your patterns, and turns them into reusable MCP-native workflows.",
+  "description": "The workflow harness for coding agents — watches what you do in Claude Code, Cursor, or Codex, learns your patterns, and turns them into reusable MCP-native workflows.",
   "type": "module",
   "bin": {
     "keyoku": "dist/index.js"

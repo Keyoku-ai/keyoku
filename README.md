@@ -7,7 +7,7 @@
   </picture>
 
   <p>
-    <strong>Your coding agent, with muscle memory.</strong><br>
+    <strong>The workflow harness for coding agents.</strong><br>
     <sub>Keyoku watches what you do in Claude Code, Cursor, or Codex, learns your patterns, and turns them into one-command workflows — automatically.</sub>
   </p>
 

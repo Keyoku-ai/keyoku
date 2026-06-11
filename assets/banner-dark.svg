@@ -68,7 +68,7 @@
   <!-- Tagline -->
   <text x="400" y="130" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif"
         font-size="18" fill="#c4b5fd" text-anchor="middle" letter-spacing="0.5" opacity="0.85">
-    Workflow Automation for Coding Agents
+    The Workflow Harness for Coding Agents
   </text>
 
   <!-- Subtitle pills -->

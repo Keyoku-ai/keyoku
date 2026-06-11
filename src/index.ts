@@ -390,7 +390,7 @@ function auditCmd(rest: string[]): void {
 }
 
 function help(): void {
-  console.log(`keyoku v${VERSION} — always-on activity tracer and workflow automation layer
+  console.log(`keyoku v${VERSION} — the workflow harness for coding agents
 
 Usage:
   keyoku [serve]                    Run as an MCP server on stdio (default)
