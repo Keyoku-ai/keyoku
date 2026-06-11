@@ -164,4 +164,4 @@ MIT — see [LICENSE](LICENSE).
 
 ## keyoku-engine
 
-The Go backend for teams: knowledge graph, pgvector embeddings, Ebbinghaus decay, LLM classification, cloud triggers, and cross-device sync. Coming soon at [github.com/Keyoku-ai/keyoku-engine](https://github.com/Keyoku-ai/keyoku-engine).
+The Go backend for teams: knowledge graph, pgvector embeddings, Ebbinghaus decay, LLM classification, cloud triggers, and cross-device sync. Available at [github.com/Keyoku-ai/keyoku-engine](https://github.com/Keyoku-ai/keyoku-engine).

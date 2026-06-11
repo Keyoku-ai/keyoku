@@ -1015,6 +1015,8 @@ export function buildServer(harness: Harness): McpServer {
 
         const step = execution.steps[step_index];
         if (!step) return fail(new Error(`No step ${step_index} in execution '${id}'.`));
+        if (step_index !== execution.currentStep)
+          return fail(new Error(`Expected step_index ${execution.currentStep}, got ${step_index}. Steps must be completed in order.`));
         step.result = result;
         step.status = ok ? "done" : "failed";
         step.completedAt = new Date().toISOString();

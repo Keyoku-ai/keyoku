@@ -53,7 +53,7 @@ describe("resolveSlmFromEnv", () => {
     const slm = resolveSlmFromEnv({ KEYOKU_SLM_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "a" });
     expect(slm).not.toBeNull();
     expect(slm?.name).toBe("anthropic");
-    expect(slm?.model).toBe("claude-haiku-4-5");
+    expect(slm?.model).toBe("claude-haiku-4-5-20251001");
   });
 
   it("returns null for an explicit anthropic request without ANTHROPIC_API_KEY", () => {
@@ -171,7 +171,7 @@ describe("createSlm", () => {
   it("builds an anthropic provider with the default model", () => {
     const slm = createSlm({ provider: "anthropic", apiKey: "sk-test" });
     expect(slm.name).toBe("anthropic");
-    expect(slm.model).toBe("claude-haiku-4-5");
+    expect(slm.model).toBe("claude-haiku-4-5-20251001");
     expect(typeof slm.complete).toBe("function");
   });
 

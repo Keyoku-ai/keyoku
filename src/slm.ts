@@ -21,7 +21,7 @@ export interface SlmConfig {
 }
 
 const GEMINI_DEFAULT_MODEL = "gemini-3.5-flash";
-const ANTHROPIC_DEFAULT_MODEL = "claude-haiku-4-5";
+const ANTHROPIC_DEFAULT_MODEL = "claude-haiku-4-5-20251001";
 const DEFAULT_MAX_TOKENS = 2048;
 const GEMINI_TIMEOUT_MS = 60_000;
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";

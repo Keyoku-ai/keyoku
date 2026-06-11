@@ -163,7 +163,7 @@ export class Store {
     return readFileSync(path, "utf8")
       .split("\n")
       .filter((line) => line.trim() !== "")
-      .map((line) => JSON.parse(line) as ActionRecord);
+      .flatMap((line) => { try { return [JSON.parse(line) as ActionRecord]; } catch { return []; } });
   }
 
   // ----- connectors -----
@@ -222,7 +222,7 @@ export class Store {
     const all = readFileSync(path, "utf8")
       .split("\n")
       .filter((line) => line.trim() !== "")
-      .map((line) => JSON.parse(line) as Observation);
+      .flatMap((line) => { try { return [JSON.parse(line) as Observation]; } catch { return []; } });
     // limit === 0 must mean "none", not "all" (slice(-0) returns everything).
     if (limit === undefined) return all;
     return limit <= 0 ? [] : all.slice(-limit);
@@ -310,13 +310,16 @@ export class Store {
   }
 
   appendActivity(event: ActivityEvent): void {
-    appendFileSync(this.activityFile(), `${JSON.stringify(event)}\n`, { mode: FILE_MODE });
-    const all = this.listActivity();
-    if (all.length > 10_000) {
-      const trimmed = all.slice(-8_000);
-      const tmp = `${this.activityFile()}.${process.pid}.tmp`;
+    const path = this.activityFile();
+    appendFileSync(path, `${JSON.stringify(event)}\n`, { mode: FILE_MODE });
+    // Only read the full file to check the cap when we're near it.
+    // A single line is ~200 bytes; 10 000 lines ≈ 2 MB. Stat is negligible.
+    const stat = (() => { try { return readFileSync(path, "utf8").split("\n").filter((l) => l.trim()).length; } catch { return 0; } })();
+    if (stat > 10_000) {
+      const trimmed = this.listActivity().slice(-8_000);
+      const tmp = `${path}.${process.pid}.tmp`;
       writeFileSync(tmp, trimmed.map((e) => JSON.stringify(e)).join("\n") + "\n", { mode: FILE_MODE });
-      renameSync(tmp, this.activityFile());
+      renameSync(tmp, path);
     }
   }
 
@@ -326,7 +329,7 @@ export class Store {
     const all = readFileSync(path, "utf8")
       .split("\n")
       .filter((l) => l.trim() !== "")
-      .map((l) => JSON.parse(l) as ActivityEvent);
+      .flatMap((l) => { try { return [JSON.parse(l) as ActivityEvent]; } catch { return []; } });
     if (limit === undefined) return all;
     return limit <= 0 ? [] : all.slice(-limit);
   }

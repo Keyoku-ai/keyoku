@@ -16,7 +16,9 @@ export async function executeBashStep(
     child.stdout?.on("data", (d: Buffer) => { stdout += d.toString(); });
     child.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
     const timer = setTimeout(() => {
-      child.kill();
+      child.kill("SIGTERM");
+      // Escalate to SIGKILL after 2s if still running — SIGTERM can be ignored.
+      setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* already exited */ } }, 2000);
       resolve({ result: `timed out after ${timeoutMs}ms`, ok: false });
     }, timeoutMs);
     child.on("close", (code) => {

@@ -251,26 +251,31 @@ async function init(): Promise<void> {
   const claudeDir = join(home, ".claude");
   mkdirSync(claudeDir, { recursive: true });
 
-  // 1. Claude Code MCP config (~/.claude/mcp.json or within settings)
-  const mcpPath = join(claudeDir, "mcp.json");
-  let mcpConfig: Record<string, unknown> = {};
-  if (existsSync(mcpPath)) {
-    try { mcpConfig = JSON.parse(readFileSync(mcpPath, "utf8")); } catch { /* use empty */ }
-  }
-  const mcpServers = (mcpConfig.mcpServers ?? {}) as Record<string, unknown>;
-  mcpServers["keyoku"] = { command: "node", args: [selfPath] };
-  mcpConfig.mcpServers = mcpServers;
-  writeFileSync(mcpPath, JSON.stringify(mcpConfig, null, 2));
-
-  // 2. Claude Code hooks (~/.claude/settings.json)
+  // Claude Code reads BOTH MCP servers and hooks from ~/.claude/settings.json.
+  // A separate mcp.json is NOT read by Claude Code — everything goes in settings.
   const settingsPath = join(claudeDir, "settings.json");
-  let settings: Record<string, unknown> = {};
-  if (existsSync(settingsPath)) {
-    try { settings = JSON.parse(readFileSync(settingsPath, "utf8")); } catch { /* use empty */ }
+
+  function readJsonFile(p: string): Record<string, unknown> {
+    if (!existsSync(p)) return {};
+    const raw = readFileSync(p, "utf8");
+    try { return JSON.parse(raw); }
+    catch {
+      throw new Error(
+        `${p} exists but could not be parsed as JSON. Fix or delete it first, then re-run keyoku init.`,
+      );
+    }
   }
-  const hooks = (settings.hooks ?? {}) as Record<string, unknown>;
+
+  const settings = readJsonFile(settingsPath);
+
+  // 1. MCP server entry
+  const mcpServers = ((settings.mcpServers ?? {}) as Record<string, unknown>);
+  mcpServers["keyoku"] = { command: "node", args: [selfPath] };
+  settings.mcpServers = mcpServers;
+
+  // 2. PostToolUse hook
+  const hooks = ((settings.hooks ?? {}) as Record<string, unknown>);
   const postToolUse = (Array.isArray(hooks.PostToolUse) ? hooks.PostToolUse : []) as unknown[];
-  // Check if already added
   const alreadyWired = postToolUse.some(
     (h) => typeof h === "object" && h !== null && JSON.stringify(h).includes("keyoku"),
   );
@@ -282,12 +287,12 @@ async function init(): Promise<void> {
   }
   hooks.PostToolUse = postToolUse;
   settings.hooks = hooks;
+
   writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
 
   console.log(`keyoku initialised.
 
-  MCP server added to:  ${mcpPath}
-  PostToolUse hook in:  ${settingsPath}
+  MCP server + PostToolUse hook written to: ${settingsPath}
 
   Restart Claude Code for changes to take effect.
   State lives in ~/.keyoku/

@@ -44,7 +44,7 @@ export function detectPatterns(
   windowSize = 300,
 ): ActivitySuggestion[] {
   const recent = events.slice(-windowSize);
-  if (recent.length < 4) return [];
+  if (recent.length < 2) return [];
 
   const keys = recent.map(eventKey);
   const counts = new Map<string, { count: number; exemplar: ActivityEvent[] }>();
@@ -101,7 +101,7 @@ export function detectPatterns(
   const seen = new Set<string>();
   return results
     .filter((s) => {
-      const key = s.draftSteps.map((st) => st.summary.slice(0, 30)).join("|");
+      const key = s.draftSteps.map((st) => st.summary.slice(0, 80)).join("|");
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
