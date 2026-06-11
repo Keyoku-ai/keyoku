@@ -42,7 +42,13 @@ The init command wires everything automatically:
 2. **Installs the activity hook** — a `PostToolUse` hook records every Bash/Edit/Write/Read to `~/.keyoku/activity.jsonl`
 3. **Stays local** — no cloud, no telemetry; state lives in `~/.keyoku` with the same file permissions as `~/.aws`
 
-Restart Claude Code and keyoku is live. Use your agent normally for a while, then ask it to run `workflow_suggest` — keyoku will show you the workflows it learned from watching you work.
+Restart Claude Code and keyoku is live. Then skip the cold start entirely:
+
+```bash
+npx keyoku import   # backfill months of history from your Claude Code transcripts
+```
+
+Now ask your agent to run `workflow_suggest` — keyoku mines your real history immediately instead of waiting days for new activity. Approved workflows appear as native slash commands (MCP prompts), and `keyoku export <slug>` bakes one into your repo as a Claude Code skill your whole team inherits.
 
 ## How It Works
 
@@ -96,6 +102,8 @@ Every execution persists step-by-step — crash-safe, fully inspectable via `exe
 ```
 keyoku [serve]          Start the MCP server on stdio (Claude Code does this automatically)
 keyoku init             Wire up the hook + MCP registration
+keyoku import           Backfill activity from Claude Code transcripts (kills the cold start)
+keyoku export <slug>    Bake a workflow into ./.claude/skills as a team-shareable skill
 keyoku status           Show goals, templates, connectors
 keyoku learn            Mine patterns from the activity log
 keyoku assess <goal>    One-shot convergence check

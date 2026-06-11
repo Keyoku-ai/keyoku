@@ -16,7 +16,15 @@ layer for Claude Code and other MCP coding agents.
   agent; human_review steps wait for sign-off; executions persist step-by-step.
 - **Goal convergence** (carried forward): machine-checkable criteria, probes,
   watch loop, approvals queue, audit trail, MCP connector manager.
-- 192 tests including an end-to-end MCP lifecycle suite; CI on every PR.
+- **Transcript import**: `keyoku import` backfills months of activity from
+  Claude Code session transcripts — workflows are minable minutes after
+  install instead of days.
+- **MCP prompts catalog**: approved workflows publish as MCP prompts (native
+  slash commands in Claude Code), kept current as templates change.
+- **Skill baking**: `keyoku export <slug>` writes a workflow into the repo as
+  a `.claude/skills` SKILL.md with provenance — reviewable and team-shareable.
+- 205 tests including end-to-end MCP lifecycle, connector gating, import, and
+  export suites; CI on every PR.
 
 The previous incarnation of this repository (an OpenClaw memory plugin,
 versions ≤ 1.6.x) is preserved in git history and tags.
