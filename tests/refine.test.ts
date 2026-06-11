@@ -14,6 +14,7 @@ const drafts: ActivitySuggestion[] = [
       { type: "bash", summary: "npm test", command: "npm test" },
       { type: "bash", summary: "git push", command: "git push" },
     ],
+    key: "Bash:npm test → Bash:git push",
   },
 ];
 

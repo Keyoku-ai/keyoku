@@ -54,7 +54,13 @@ Return ONLY JSON: {"suggestions":[{"slug":"...","name":"...","description":"..."
     const raw = await slm.complete(prompt, { json: true, maxTokens: 2048 });
     const parsed = JSON.parse(raw) as { suggestions?: unknown };
     if (!Array.isArray(parsed.suggestions)) return drafts;
-    const valid = parsed.suggestions.filter(isValidSuggestion).slice(0, 5);
+    const bySlug = new Map(drafts.map((d) => [d.slug, d.key]));
+    const valid = parsed.suggestions
+      .filter(isValidSuggestion)
+      .slice(0, 5)
+      // Preserve the stable pattern identity through refinement so each
+      // pattern is still surfaced exactly once.
+      .map((s) => ({ ...s, key: s.key || bySlug.get(s.slug) || s.slug }));
     return valid.length > 0 ? valid : drafts;
   } catch {
     return drafts;
@@ -64,6 +70,8 @@ Return ONLY JSON: {"suggestions":[{"slug":"...","name":"...","description":"..."
 function isValidSuggestion(s: unknown): s is ActivitySuggestion {
   if (typeof s !== "object" || s === null) return false;
   const v = s as Record<string, unknown>;
+  // `key` is intentionally NOT required here — the model doesn't know about
+  // it; we re-attach the draft's identity after validation.
   return (
     typeof v.slug === "string" &&
     typeof v.name === "string" &&

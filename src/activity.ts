@@ -6,6 +6,9 @@ export interface ActivitySuggestion {
   description: string;
   count: number;
   draftSteps: WorkflowStepTemplate[];
+  /** Stable identity of the underlying sequence — used to surface each
+   * detected pattern to the user exactly once. */
+  key: string;
 }
 
 function eventKey(event: ActivityEvent): string {
@@ -157,6 +160,7 @@ export function detectPatterns(
       description: `Detected ${c.count}× in recent activity (${c.seq.length} steps): ${c.seq.join(" → ")}`,
       count: c.count,
       draftSteps,
+      key: c.seq.join(" → "),
     };
   });
 }

@@ -43,6 +43,23 @@ async function serve(): Promise<void> {
   };
   await server.connect(new StdioServerTransport());
   log(`keyoku v${VERSION} serving on stdio (home: ${harness.store.dir})`);
+
+  // Background intelligence: while the server runs, ripeness is recomputed
+  // continuously and cached for the hooks to deliver into the conversation.
+  // The interval is unref'd so it never holds the process open on shutdown.
+  const { findRipe, loadSurfaced, saveRipe } = await import("./nudge.js");
+  const digest = () => {
+    try {
+      saveRipe(
+        harness.store.dir,
+        findRipe(harness.store.listActivity(2000), loadSurfaced(harness.store.dir)),
+      );
+    } catch {
+      /* background work must never break serving */
+    }
+  };
+  digest();
+  setInterval(digest, 60_000).unref();
 }
 
 async function status(): Promise<void> {
@@ -301,6 +318,20 @@ async function importCmd(argv: string[]): Promise<void> {
   );
 }
 
+/** SessionStart hook: one context line so the agent starts every session
+ * aware of the workflow catalog and any unsaved patterns. */
+async function brief(): Promise<void> {
+  try {
+    const { formatBrief, loadSurfaced, resolveRipe } = await import("./nudge.js");
+    const store = new Store();
+    const ripe = resolveRipe(store.dir, loadSurfaced(store.dir), () => store.listActivity(2000));
+    const line = formatBrief(store.listTemplates().length, ripe.length);
+    if (line) console.log(line);
+  } catch {
+    /* never block session start */
+  }
+}
+
 /** Bake an approved workflow into the current repo as a Claude Code skill —
  * the repo-resident, reviewable, team-shareable projection of the template.
  * The store stays canonical; this artifact is derived and carries provenance. */
@@ -385,7 +416,44 @@ async function record(): Promise<void> {
   const event = buildToolEvent(toolName, toolInput, sessionId, new Date().toISOString());
   if (!event) return;
   const { enrichWithEntities } = await import("./activity.js");
-  new Store().appendActivity(enrichWithEntities(event));
+  const store = new Store();
+  store.appendActivity(enrichWithEntities(event));
+
+  // Proactive surfacing: every Nth recorded event, check whether a pattern
+  // has newly crossed the suggestion threshold and inject a one-time nudge
+  // into the session via the PostToolUse additionalContext channel. The
+  // agent sees it and offers — nobody has to remember to ask.
+  try {
+    const every = Number(process.env.KEYOKU_NUDGE_EVERY ?? "25");
+    if (!Number.isFinite(every) || every <= 0) return;
+    const { readFileSync, writeFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const counterPath = join(store.dir, "hook.counter");
+    let n = 0;
+    try {
+      n = Number(readFileSync(counterPath, "utf8")) || 0;
+    } catch {
+      /* first run */
+    }
+    n += 1;
+    writeFileSync(counterPath, String(n));
+    if (n % every !== 0) return;
+
+    const { formatNudge, loadSurfaced, resolveRipe, saveSurfaced } = await import("./nudge.js");
+    const surfaced = loadSurfaced(store.dir);
+    const ripe = resolveRipe(store.dir, surfaced, () => store.listActivity(2000));
+    if (ripe.length === 0) return;
+    const top = ripe[0];
+    surfaced.add(top.key);
+    saveSurfaced(store.dir, surfaced);
+    console.log(
+      JSON.stringify({
+        hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: formatNudge(top) },
+      }),
+    );
+  } catch {
+    /* nudging must never break the session */
+  }
   // Exit 0 — hooks must not block Claude Code on failure
 }
 
@@ -470,6 +538,17 @@ async function init(): Promise<void> {
     hooks: [{ type: "command", command: hookCmd }],
   });
   hooks.PostToolUse = others;
+
+  // SessionStart brief: the agent opens every session knowing the workflow
+  // catalog and whether unsaved patterns are waiting.
+  const briefCmd = hookCmd.replace(/ record$/, " brief");
+  const sessionStart = (Array.isArray(hooks.SessionStart) ? hooks.SessionStart : []) as unknown[];
+  const ssOthers = sessionStart.filter(
+    (h) => !(typeof h === "object" && h !== null && JSON.stringify(h).includes("keyoku")),
+  );
+  ssOthers.push({ hooks: [{ type: "command", command: briefCmd }] });
+  hooks.SessionStart = ssOthers;
+
   settings.hooks = hooks;
   writeJsonAtomic(settingsPath, settings);
 
@@ -556,6 +635,7 @@ Usage:
   keyoku record                     Record a PostToolUse hook event (reads stdin JSON)
   keyoku import [--dir D]           Backfill activity from Claude Code transcripts
   keyoku export <slug> [--dir D]    Bake a workflow into ./.claude/skills as a skill
+  keyoku brief                      Session-start context line (used by the SessionStart hook)
   keyoku approvals                  List queue; approve|deny <id> [reason] to decide
   keyoku audit [n]                  Show the last n audit entries
   keyoku help | version
@@ -587,6 +667,8 @@ async function main(): Promise<void> {
       return importCmd(rest);
     case "export":
       return exportCmd(rest);
+    case "brief":
+      return brief();
     case "init":
       return init();
     case "approvals":
