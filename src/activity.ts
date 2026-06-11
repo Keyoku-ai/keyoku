@@ -84,7 +84,13 @@ export function detectPatterns(
     }
   }
 
-  const qualified = [...counts.values()].filter((c) => c.count >= minCount);
+  // A workflow must DO something. Sequences made entirely of inspection
+  // (ls, cat, grep, git status, Reads…) are how people look around, not how
+  // they work — they repeat constantly and mean nothing. Requiring at least
+  // one action step kills coincidence patterns without hurting real ones.
+  const qualified = [...counts.values()].filter(
+    (c) => c.count >= minCount && c.exemplar.some(isActionEvent),
+  );
 
   // Prefer the longest chain that still clears minCount — it automates the
   // most — then drop anything contained in (or containing) an accepted one,
@@ -106,6 +112,20 @@ export function detectPatterns(
           command: ev.detail.slice(0, 500),
         };
       }
+      if (ev.tool === "connector_call" && ev.detail) {
+        try {
+          const parsed = JSON.parse(ev.detail) as { connector?: string; tool?: string; args?: Record<string, unknown> };
+          if (parsed.connector && parsed.tool) {
+            return {
+              type: "mcp_call" as const,
+              summary: ev.summary.slice(0, 100),
+              connector: parsed.connector,
+              tool: parsed.tool,
+              ...(parsed.args ? { args: parsed.args } : {}),
+            };
+          }
+        } catch { /* fall through to agent_prompt */ }
+      }
       return {
         type: "agent_prompt" as const,
         summary: ev.summary.slice(0, 100),
@@ -125,6 +145,20 @@ export function detectPatterns(
       draftSteps,
     };
   });
+}
+
+const INSPECTION_RE =
+  /^(ls|cat|grep|rg|find|head|tail|pwd|which|wc|tree|echo|man|type|stat|du|df|env|printenv|git (status|diff|log|show|branch|blame|remote)|npm (ls|view|outdated|info)|docker (ps|images)|kubectl (get|describe))\b/;
+
+/** Does this event change anything, or is it just looking around? */
+function isActionEvent(ev: ActivityEvent): boolean {
+  if (ev.type === "file_change") return true;
+  if (ev.tool === "connector_call") return true;
+  if (ev.tool === "Bash" || ev.type === "shell" || ev.type === "git") {
+    const cmd = (ev.detail ?? ev.summary.replace(/^Bash: /, "")).trim();
+    return cmd !== "" && !INSPECTION_RE.test(cmd);
+  }
+  return false;
 }
 
 /** True if `haystack` contains `needle` as a contiguous run. */

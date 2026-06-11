@@ -414,6 +414,21 @@ export function buildServer(harness: Harness): McpServer {
         }
         const result = await harness.connectors.callTool(name, tool, args ?? {});
         logAudit("connector_call", name, `${tool} → ${result.isError ? "error" : "ok"}`, !result.isError);
+        // Feed the observation stream — connector usage is activity too, so
+        // repeated external workflows (file issue → post message → …) become
+        // detectable patterns that draft as runnable mcp_call steps.
+        if (!result.isError) {
+          harness.store.appendActivity(
+            enrichWithEntities({
+              id: newId("ev"),
+              type: "tool_use",
+              summary: `connector_call: ${name}.${tool}`,
+              detail: JSON.stringify({ connector: name, tool, args: args ?? {} }).slice(0, 500),
+              tool: "connector_call",
+              at: new Date().toISOString(),
+            }),
+          );
+        }
         return {
           content: [{ type: "text", text: result.text || "(empty result)" }],
           ...(result.isError ? { isError: true } : {}),
@@ -725,6 +740,40 @@ export function buildServer(harness: Harness): McpServer {
           s.error = "mcp_call step is missing connector or tool";
           s.completedAt = new Date().toISOString();
           return failAt(i, s.error);
+        }
+        // Workflow steps respect the same autonomy gate as connector_call —
+        // putting a tool in a template must not bypass approval.
+        const stepConnector = harness.connectors.get(s.connector);
+        if (!stepConnector) {
+          s.status = "failed";
+          s.error = `unknown connector '${s.connector}'`;
+          s.completedAt = new Date().toISOString();
+          return failAt(i, s.error);
+        }
+        const decision = gateCall(stepConnector, s.tool);
+        if (decision.action === "refuse") {
+          s.status = "failed";
+          s.error = decision.guidance;
+          s.completedAt = new Date().toISOString();
+          return failAt(i, s.error);
+        }
+        if (decision.action === "enqueue") {
+          const approval = enqueueApproval(harness.store, {
+            connector: s.connector,
+            tool: s.tool,
+            args: s.args ?? {},
+            reason: `workflow '${exec.templateSlug}' step ${i} — connector autonomy is 'approve'`,
+          });
+          s.status = "waiting_human";
+          exec.status = "waiting_human";
+          harness.store.saveExecution(exec);
+          return json({
+            execution: summarizeExecution(exec),
+            waiting_for: "human",
+            approval_id: approval.id,
+            step: { index: i, type: "mcp_call", summary: s.summary },
+            guidance: `Step ${i} needs approval (${approval.id}). Decide with approval_approve/approval_deny, then call execution_complete { id: "${exec.id}", step_index: ${i}, result: "<outcome>" } to continue.`,
+          });
         }
         const { result, ok } = await executeMcpStep(s.connector, s.tool, s.args ?? {}, harness.connectors);
         s.result = result;
