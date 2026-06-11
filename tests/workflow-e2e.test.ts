@@ -64,6 +64,16 @@ describe("activity → suggestion pipeline", () => {
   });
 });
 
+describe("on-demand capture", () => {
+  it("turns the last N session actions into a reviewable draft", async () => {
+    const captured = await call("workflow_capture", { last: 2, name: "Captured test" });
+    expect(captured._isError).toBe(false);
+    expect(captured.draft.steps).toHaveLength(2);
+    expect(captured.draft.slug).toBeTruthy();
+    expect(captured.guidance).toContain("workflow_approve");
+  });
+});
+
 describe("workflow execution lifecycle", () => {
   let executionId: string;
 

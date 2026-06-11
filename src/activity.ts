@@ -125,34 +125,7 @@ export function detectPatterns(
   }
 
   return accepted.map((c, idx) => {
-    const draftSteps: WorkflowStepTemplate[] = c.exemplar.map((ev) => {
-      if (ev.tool === "Bash" && ev.detail) {
-        return {
-          type: "bash" as const,
-          summary: ev.summary.slice(0, 100),
-          command: ev.detail.slice(0, 500),
-        };
-      }
-      if (ev.tool === "connector_call" && ev.detail) {
-        try {
-          const parsed = JSON.parse(ev.detail) as { connector?: string; tool?: string; args?: Record<string, unknown> };
-          if (parsed.connector && parsed.tool) {
-            return {
-              type: "mcp_call" as const,
-              summary: ev.summary.slice(0, 100),
-              connector: parsed.connector,
-              tool: parsed.tool,
-              ...(parsed.args ? { args: parsed.args } : {}),
-            };
-          }
-        } catch { /* fall through to agent_prompt */ }
-      }
-      return {
-        type: "agent_prompt" as const,
-        summary: ev.summary.slice(0, 100),
-        prompt: `Perform: ${ev.summary}`,
-      };
-    });
+    const draftSteps: WorkflowStepTemplate[] = c.exemplar.map(draftStep);
 
     const first = c.exemplar[0].summary.slice(0, 40);
     const last = c.exemplar[c.exemplar.length - 1].summary.slice(0, 40);
@@ -175,6 +148,37 @@ export function detectPatterns(
       kind,
     };
   });
+}
+
+/** Map one observed event to a draft workflow step. Shared by pattern
+ * detection and on-demand capture so both produce identical drafts. */
+export function draftStep(ev: ActivityEvent): WorkflowStepTemplate {
+  if (ev.tool === "Bash" && ev.detail) {
+    return {
+      type: "bash" as const,
+      summary: ev.summary.slice(0, 100),
+      command: ev.detail.slice(0, 500),
+    };
+  }
+  if (ev.tool === "connector_call" && ev.detail) {
+    try {
+      const parsed = JSON.parse(ev.detail) as { connector?: string; tool?: string; args?: Record<string, unknown> };
+      if (parsed.connector && parsed.tool) {
+        return {
+          type: "mcp_call" as const,
+          summary: ev.summary.slice(0, 100),
+          connector: parsed.connector,
+          tool: parsed.tool,
+          ...(parsed.args ? { args: parsed.args } : {}),
+        };
+      }
+    } catch { /* fall through to agent_prompt */ }
+  }
+  return {
+    type: "agent_prompt" as const,
+    summary: ev.summary.slice(0, 100),
+    prompt: `Perform: ${ev.summary}`,
+  };
 }
 
 const INSPECTION_RE =

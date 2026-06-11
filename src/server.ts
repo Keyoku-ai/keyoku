@@ -8,7 +8,7 @@ import {
   enqueueApproval,
   gateCall,
 } from "./approvals.js";
-import { detectPatterns, enrichWithEntities, type ActivitySuggestion } from "./activity.js";
+import { detectPatterns, draftStep, enrichWithEntities, type ActivitySuggestion } from "./activity.js";
 import { Brain } from "./brain.js";
 import { loadSurfaced, saveSurfaced } from "./nudge.js";
 import { redactConnector } from "./connectors.js";
@@ -19,7 +19,7 @@ import { relevantPatterns, runLearning } from "./learn.js";
 import { refineSuggestions } from "./refine.js";
 import { observationDigest, stateTransitions } from "./observe.js";
 import { resolveSlmFromEnv } from "./slm.js";
-import { newId } from "./store.js";
+import { newId, slugify } from "./store.js";
 import {
   ActionResultSchema,
   AutonomySchema,
@@ -1121,6 +1121,47 @@ export function buildServer(harness: Harness): McpServer {
               : method === "heuristic"
                 ? "These are raw heuristic drafts — refine them before approving: merge overlapping fragments of the same workflow, drop coincidental sequences, replace run-specific values (commit messages, file paths) with {{placeholders}}, generalize agent_prompt steps to intent (e.g. 'fix the failing tests'), and write a real name/description. Then call workflow_approve { slug, name, description, steps }."
                 : "Model-refined drafts. Review and approve with workflow_approve { slug, name, description, steps }.",
+        });
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "workflow_capture",
+    {
+      title: "Capture recent actions as a workflow draft",
+      description:
+        "On-demand capture for 'save what I just did': turns the last N actions of the current session into a workflow draft. No repetition needed — pattern detection requires 3×, capture requires the user vouching once. Returns a draft to review, clean up, and save with workflow_approve.",
+      inputSchema: {
+        last: z.number().int().min(1).max(50).optional().describe("How many recent actions to capture (default 10)."),
+        name: z.string().optional(),
+        slug: z
+          .string()
+          .regex(/^[a-z0-9][a-z0-9-_]*$/)
+          .optional(),
+      },
+    },
+    async ({ last, name, slug }) => {
+      try {
+        const all = harness.store.listActivity(500);
+        if (all.length === 0) return fail(new Error("No activity recorded yet."));
+        // "The current session" = the session of the most recent event.
+        const session = all[all.length - 1].sessionId;
+        const recent = all.filter((e) => e.sessionId === session).slice(-(last ?? 10));
+        const steps = recent.map(draftStep);
+        const draftName = name ?? `Captured: ${recent[0]?.summary.slice(0, 50) ?? "recent work"}`;
+        const draftSlug = slug ?? harness.store.uniqueSlug(slugify(draftName));
+        return json({
+          draft: {
+            slug: draftSlug,
+            name: draftName,
+            description: `Captured on demand from the last ${recent.length} actions of the current session.`,
+            steps,
+          },
+          guidance:
+            "Review with the user before saving: drop noise steps (Reads, inspections), parameterize run-specific values with {{placeholders}}, tighten the name/description, then call workflow_approve { slug, name, description, steps }.",
         });
       } catch (err) {
         return fail(err);

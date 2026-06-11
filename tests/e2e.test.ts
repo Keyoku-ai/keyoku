@@ -81,6 +81,7 @@ describe("keyoku-harness over MCP stdio", () => {
         "observation_list",
         "pattern_list",
         "workflow_approve",
+        "workflow_capture",
         "workflow_execute",
         "workflow_list",
         "workflow_suggest",
