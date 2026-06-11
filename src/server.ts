@@ -297,6 +297,21 @@ export function buildServer(harness: Harness): McpServer {
         });
         const connector = harness.connectors.get(name);
         const level = connector ? connectorAutonomy(connector) : "autonomous";
+        // Context layer v0: MCP servers self-describe — capture every tool
+        // description as knowledge at registration. Free grounding for the
+        // pattern annotator and for agents asking "what can this do?".
+        const now = new Date().toISOString();
+        for (const t of tools) {
+          if (!t.description) continue;
+          harness.store.appendKnowledge({
+            id: newId("kn"),
+            subject: `operation:${name}.${t.name}`,
+            kind: "operation",
+            fact: t.description.slice(0, 500),
+            source: "mcp-description",
+            at: now,
+          });
+        }
         logAudit("connector_add", name, `registered ${transport.type} connector (${tools.length} tools, autonomy ${level})`, true);
         return json({
           connector: name,
@@ -930,6 +945,70 @@ export function buildServer(harness: Harness): McpServer {
         let events = harness.store.listActivity(limit ?? 50);
         if (type) events = events.filter((e) => e.type === type);
         return json({ count: events.length, events });
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  // ----- knowledge (context layer v0) -----
+
+  server.registerTool(
+    "knowledge_submit",
+    {
+      title: "Submit knowledge to the context layer",
+      description:
+        "Store a researched or observed fact about a connector, operation, or domain. Use this to file findings from research the user asked for — e.g. a connector's auth model, rate limits, or dangerous operations — so future workflow suggestions are grounded in it.",
+      inputSchema: {
+        subject: z
+          .string()
+          .min(1)
+          .describe("e.g. 'connector:github', 'operation:github.create_issue', 'domain:deploys'"),
+        kind: z.enum(["connector", "operation", "note"]),
+        fact: z.string().min(1).max(2000),
+        source: z.enum(["agent-research", "user"]).optional(),
+      },
+    },
+    async ({ subject, kind, fact, source }) => {
+      try {
+        const entry = {
+          id: newId("kn"),
+          subject,
+          kind,
+          fact,
+          source: source ?? ("agent-research" as const),
+          at: new Date().toISOString(),
+        };
+        harness.store.appendKnowledge(entry);
+        logAudit("knowledge_submit", subject, fact.slice(0, 80), true);
+        return json({ stored: true, id: entry.id });
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "knowledge_query",
+    {
+      title: "Query the context layer",
+      description:
+        "Retrieve stored knowledge about connectors, operations, or domains. Filter by subject prefix and/or a text query.",
+      inputSchema: {
+        subject: z.string().optional().describe("Subject prefix filter, e.g. 'connector:github' or 'operation:'"),
+        query: z.string().optional().describe("Case-insensitive text match over facts."),
+        limit: z.number().int().positive().max(200).optional(),
+      },
+    },
+    async ({ subject, query, limit }) => {
+      try {
+        let entries = harness.store.listKnowledge(subject);
+        if (query) {
+          const q = query.toLowerCase();
+          entries = entries.filter((e) => e.fact.toLowerCase().includes(q) || e.subject.toLowerCase().includes(q));
+        }
+        entries = entries.slice(-(limit ?? 50));
+        return json({ count: entries.length, entries });
       } catch (err) {
         return fail(err);
       }

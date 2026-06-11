@@ -76,6 +76,8 @@ describe("keyoku-harness over MCP stdio", () => {
         "goal_update",
         "harness_learn",
         "harness_status",
+        "knowledge_query",
+        "knowledge_submit",
         "observation_list",
         "pattern_list",
         "workflow_approve",

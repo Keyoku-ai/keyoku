@@ -499,6 +499,23 @@ export type ExecutionStatus =
   | "waiting_agent"
   | "waiting_human";
 
+// ---------------------------------------------------------------------------
+// Knowledge — the context layer (v0). Facts about connectors, operations, and
+// the user's domain, layered on top of raw activity. Sources: MCP tool
+// self-descriptions (free, captured at connector_add), agent research briefs
+// (knowledge_submit), users. Graduates into the keyoku-engine context graph.
+// ---------------------------------------------------------------------------
+
+export interface KnowledgeEntry {
+  id: string;
+  /** e.g. "connector:github", "operation:github.create_issue", "domain:deploys" */
+  subject: string;
+  kind: "connector" | "operation" | "note";
+  fact: string;
+  source: "mcp-description" | "agent-research" | "user";
+  at: string;
+}
+
 export interface ExecutionStep {
   index: number;
   type: WorkflowStepType;

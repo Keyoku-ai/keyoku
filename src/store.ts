@@ -9,6 +9,7 @@ import type {
   AuditEntry,
   Connector,
   Goal,
+  KnowledgeEntry,
   Observation,
   Pattern,
   WorkflowArtifact,
@@ -334,6 +335,26 @@ export class Store {
       .flatMap((l) => { try { return [JSON.parse(l) as ActivityEvent]; } catch { return []; } });
     if (limit === undefined) return all;
     return limit <= 0 ? [] : all.slice(-limit);
+  }
+
+  // ----- knowledge (context layer v0: append-only JSONL) -----
+
+  private knowledgeFile(): string {
+    return join(this.dir, "knowledge.jsonl");
+  }
+
+  appendKnowledge(entry: KnowledgeEntry): void {
+    appendFileSync(this.knowledgeFile(), `${JSON.stringify(entry)}\n`, { mode: FILE_MODE });
+  }
+
+  listKnowledge(subjectPrefix?: string): KnowledgeEntry[] {
+    const path = this.knowledgeFile();
+    if (!existsSync(path)) return [];
+    const all = readFileSync(path, "utf8")
+      .split("\n")
+      .filter((l) => l.trim() !== "")
+      .flatMap((l) => { try { return [JSON.parse(l) as KnowledgeEntry]; } catch { return []; } });
+    return subjectPrefix ? all.filter((e) => e.subject.startsWith(subjectPrefix)) : all;
   }
 
   // ----- workflow templates (approved recipes) -----

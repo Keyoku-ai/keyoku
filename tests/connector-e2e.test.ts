@@ -63,6 +63,24 @@ describe("connector plug-and-play", () => {
     expect(added.autonomy).toBe("autonomous");
   });
 
+  it("captures tool descriptions as knowledge at registration", async () => {
+    const known = await call("knowledge_query", { subject: "operation:fake-github." });
+    expect(known.count).toBeGreaterThanOrEqual(2);
+    expect(JSON.stringify(known.entries)).toContain("Create an issue");
+  });
+
+  it("stores and retrieves agent-research knowledge", async () => {
+    const stored = await call("knowledge_submit", {
+      subject: "connector:fake-github",
+      kind: "connector",
+      fact: "Rate limit: 5000 requests/hour; issues API needs repo scope.",
+    });
+    expect(stored.stored).toBe(true);
+    const found = await call("knowledge_query", { query: "rate limit" });
+    expect(found.count).toBe(1);
+    expect(found.entries[0].source).toBe("agent-research");
+  });
+
   it("calls a connector tool and records it as activity", async () => {
     const res = await call("connector_call", { name: "fake-github", tool: "repo_list" });
     expect(res._isError).toBe(false);
