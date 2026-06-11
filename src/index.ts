@@ -207,6 +207,14 @@ async function record(): Promise<void> {
     detail = filePath;
   } else if (toolName === "Read") {
     summary = `Read: ${String(toolInput.file_path ?? "")}`;
+  } else if (toolName.startsWith("mcp__")) {
+    // MCP tool names are mcp__<server>__<tool> — record which external
+    // server the agent used so connector usage becomes learnable context.
+    const parts = toolName.split("__");
+    const server = parts[1] ?? "unknown";
+    const mcpTool = parts.slice(2).join("__") || "tool";
+    summary = `MCP: ${server}.${mcpTool}`;
+    detail = JSON.stringify({ server, tool: mcpTool, args: toolInput }).slice(0, 500);
   }
 
   // Determine git-ness from Bash commands
@@ -312,7 +320,7 @@ async function init(): Promise<void> {
     (h) => !(typeof h === "object" && h !== null && JSON.stringify(h).includes("keyoku")),
   );
   others.push({
-    matcher: "Bash|Edit|Write|Read",
+    matcher: "Bash|Edit|Write|Read|mcp__.*",
     hooks: [{ type: "command", command: hookCmd }],
   });
   hooks.PostToolUse = others;
