@@ -184,3 +184,73 @@ describe("createSlm", () => {
     );
   });
 });
+
+describe("openai-compat provider", () => {
+  it("resolves from env when explicitly requested with base URL + model", () => {
+    const slm = resolveSlmFromEnv({
+      KEYOKU_SLM_PROVIDER: "openai-compat",
+      KEYOKU_SLM_BASE_URL: "http://localhost:11434/v1",
+      KEYOKU_SLM_MODEL: "qwen3:4b",
+    });
+    expect(slm?.name).toBe("openai-compat");
+    expect(slm?.model).toBe("qwen3:4b");
+  });
+
+  it("returns null when base URL or model is missing", () => {
+    expect(
+      resolveSlmFromEnv({ KEYOKU_SLM_PROVIDER: "openai-compat", KEYOKU_SLM_BASE_URL: "http://x/v1" }),
+    ).toBeNull();
+    expect(
+      resolveSlmFromEnv({ KEYOKU_SLM_PROVIDER: "openai-compat", KEYOKU_SLM_MODEL: "m" }),
+    ).toBeNull();
+  });
+
+  it("wins auto-detection over cloud keys when configured (local-first)", () => {
+    const slm = resolveSlmFromEnv({
+      KEYOKU_SLM_BASE_URL: "http://localhost:1234/v1",
+      KEYOKU_SLM_MODEL: "local-model",
+      GEMINI_API_KEY: "g",
+      ANTHROPIC_API_KEY: "a",
+    });
+    expect(slm?.name).toBe("openai-compat");
+  });
+
+  it("posts OpenAI-shaped requests and parses choices", async () => {
+    const fetchMock = vi.fn(async () =>
+      httpResponse(200, JSON.stringify({ choices: [{ message: { content: "hi there" } }] })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const slm = createSlm({
+      provider: "openai-compat",
+      apiKey: "tok",
+      model: "qwen3:4b",
+      baseUrl: "http://localhost:11434/v1/",
+    });
+    const text = await slm.complete("hello", { json: true, maxTokens: 256 });
+
+    expect(text).toBe("hi there");
+    const { url, init } = lastCall(fetchMock);
+    expect(url).toBe("http://localhost:11434/v1/chat/completions");
+    expect(init.headers.authorization).toBe("Bearer tok");
+    const body = JSON.parse(init.body);
+    expect(body.model).toBe("qwen3:4b");
+    expect(body.max_tokens).toBe(256);
+    expect(body.messages[0].content).toContain("raw JSON only");
+  });
+
+  it("omits the auth header without a key and surfaces HTTP errors", async () => {
+    const fetchMock = vi.fn(async () => httpResponse(500, "upstream exploded"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const slm = createSlm({
+      provider: "openai-compat",
+      apiKey: "",
+      model: "m",
+      baseUrl: "http://localhost:9999/v1",
+    });
+    await expect(slm.complete("hi")).rejects.toThrow(/HTTP 500/);
+    const { init } = lastCall(fetchMock);
+    expect(init.headers.authorization).toBeUndefined();
+  });
+});
