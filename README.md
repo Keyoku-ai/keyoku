@@ -136,7 +136,9 @@ The division of labor: **heuristics** generate candidates for free, the **small 
 |---|---|---|
 | `KEYOKU_HOME` | `~/.keyoku` | State directory |
 | `GEMINI_API_KEY` / `ANTHROPIC_API_KEY` | — | Enable model-refined suggestions |
-| `KEYOKU_SLM_PROVIDER` | auto | `gemini`, `anthropic`, or `none` |
+| `KEYOKU_SLM_PROVIDER` | auto | `gemini`, `anthropic`, `openai-compat`, or `none` |
+| `KEYOKU_SLM_BASE_URL` / `KEYOKU_SLM_MODEL` | — | Any OpenAI-compatible endpoint (Ollama, LM Studio, LiteLLM, Groq, …) |
+| `KEYOKU_ENGINE_URL` | — | Connect a running [keyoku-engine](https://github.com/Keyoku-ai/keyoku-engine): knowledge mirrors into it and queries upgrade to semantic search |
 | `KEYOKU_DEBUG` | — | Full error stacks |
 
 ## Security

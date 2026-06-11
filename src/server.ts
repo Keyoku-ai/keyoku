@@ -9,6 +9,7 @@ import {
   gateCall,
 } from "./approvals.js";
 import { detectPatterns, enrichWithEntities, type ActivitySuggestion } from "./activity.js";
+import { Brain } from "./brain.js";
 import { loadSurfaced, saveSurfaced } from "./nudge.js";
 import { redactConnector } from "./connectors.js";
 import type { Harness } from "./engine.js";
@@ -109,6 +110,14 @@ export function buildServer(harness: Harness): McpServer {
       capabilities: { prompts: { listChanged: true } },
     },
   );
+
+  // The brain (keyoku-engine) is opt-in via KEYOKU_ENGINE_URL. When present,
+  // knowledge is mirrored into it and queries upgrade to semantic search.
+  const brain = Brain.fromEnv();
+  function fileKnowledge(entry: Parameters<typeof harness.store.appendKnowledge>[0]): void {
+    harness.store.appendKnowledge(entry);
+    if (brain) void brain.remember(entry);
+  }
 
   // M4: every consequential operation lands in the append-only audit trail.
   // audit() never throws, so this can't break the operation it records.
@@ -311,7 +320,7 @@ export function buildServer(harness: Harness): McpServer {
         const now = new Date().toISOString();
         for (const t of tools) {
           if (!t.description) continue;
-          harness.store.appendKnowledge({
+          fileKnowledge({
             id: newId("kn"),
             subject: `operation:${name}.${t.name}`,
             kind: "operation",
@@ -995,7 +1004,7 @@ export function buildServer(harness: Harness): McpServer {
           source: source ?? ("agent-research" as const),
           at: new Date().toISOString(),
         };
-        harness.store.appendKnowledge(entry);
+        fileKnowledge(entry);
         logAudit("knowledge_submit", subject, fact.slice(0, 80), true);
         return json({ stored: true, id: entry.id });
       } catch (err) {
@@ -1018,13 +1027,26 @@ export function buildServer(harness: Harness): McpServer {
     },
     async ({ subject, query, limit }) => {
       try {
+        // With an engine configured, text queries upgrade to semantic search
+        // over the mirrored knowledge; any failure falls back to local.
+        if (brain && query) {
+          const hits = await brain.search(query, limit ?? 50);
+          if (hits !== null) {
+            const filtered = subject ? hits.filter((h) => h.subject.startsWith(subject)) : hits;
+            return json({
+              count: filtered.length,
+              method: "engine-semantic",
+              entries: filtered.map((h) => ({ subject: h.subject, fact: h.fact, score: h.score })),
+            });
+          }
+        }
         let entries = harness.store.listKnowledge(subject);
         if (query) {
           const q = query.toLowerCase();
           entries = entries.filter((e) => e.fact.toLowerCase().includes(q) || e.subject.toLowerCase().includes(q));
         }
         entries = entries.slice(-(limit ?? 50));
-        return json({ count: entries.length, entries });
+        return json({ count: entries.length, method: "local", entries });
       } catch (err) {
         return fail(err);
       }
@@ -1062,7 +1084,7 @@ export function buildServer(harness: Harness): McpServer {
           for (const p of practice) {
             if (surfaced.has(p.key)) continue;
             surfaced.add(p.key);
-            harness.store.appendKnowledge({
+            fileKnowledge({
               id: newId("kn"),
               subject: `practice:${practiceSubject(p)}`,
               kind: "note",
