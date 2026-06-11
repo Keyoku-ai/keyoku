@@ -1248,6 +1248,65 @@ export function buildServer(harness: Harness): McpServer {
   );
 
   server.registerTool(
+    "workflow_update",
+    {
+      title: "Update a workflow template",
+      description:
+        "Edit an approved workflow in place — rename, redescribe, or replace steps — without losing its identity, run count, or published slash command.",
+      inputSchema: {
+        slug: z.string(),
+        name: z.string().min(1).optional(),
+        description: z.string().min(1).optional(),
+        steps: z
+          .array(
+            z.object({
+              type: z.enum(["bash", "agent_prompt", "mcp_call", "human_review"]),
+              summary: z.string().min(1),
+              command: z.string().optional(),
+              cwd: z.string().optional(),
+              prompt: z.string().optional(),
+              connector: z.string().optional(),
+              tool: z.string().optional(),
+              args: z.record(z.unknown()).optional(),
+              message: z.string().optional(),
+            }),
+          )
+          .min(1)
+          .optional(),
+      },
+    },
+    async ({ slug, name, description, steps }) => {
+      try {
+        const template = harness.store.getTemplate(slug);
+        if (!template) return fail(new Error(`No template '${slug}'.`));
+        if (!name && !description && !steps)
+          return fail(new Error("Nothing to update — pass name, description, and/or steps."));
+        if (name) template.name = name;
+        if (description) template.description = description;
+        if (steps) template.steps = steps as WorkflowStepTemplate[];
+        template.updatedAt = new Date().toISOString();
+        harness.store.saveTemplate(template);
+        // Refresh the published prompt so the catalog reflects the edit.
+        workflowPrompts.get(template.slug)?.remove();
+        workflowPrompts.delete(template.slug);
+        syncWorkflowPrompts();
+        logAudit(
+          "workflow_update",
+          slug,
+          [name && "name", description && "description", steps && "steps"].filter(Boolean).join("+"),
+          true,
+        );
+        return json({
+          updated: slug,
+          template: { slug: template.slug, name: template.name, steps: template.steps.length, timesRun: template.timesRun },
+        });
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.registerTool(
     "workflow_template_list",
     {
       title: "List approved workflow templates",
@@ -1408,6 +1467,37 @@ export function buildServer(harness: Harness): McpServer {
 
         const template = harness.store.getTemplate(execution.templateSlug);
         return advanceExecution(execution, template, step_index + 1);
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "execution_cancel",
+    {
+      title: "Cancel a workflow execution",
+      description:
+        "Stop a running or paused execution. The current step is marked failed with a cancellation note; the execution ends as failed.",
+      inputSchema: { id: z.string().describe("Execution id from workflow_execute / execution_list.") },
+    },
+    async ({ id }) => {
+      try {
+        const execution = harness.store.getExecution(id);
+        if (!execution) return fail(new Error(`No execution '${id}'.`));
+        if (execution.status === "done" || execution.status === "failed")
+          return fail(new Error(`Execution '${id}' is already ${execution.status}.`));
+        const step = execution.steps[execution.currentStep];
+        if (step) {
+          step.status = "failed";
+          step.error = "cancelled by user";
+          step.completedAt = new Date().toISOString();
+        }
+        execution.status = "failed";
+        execution.completedAt = new Date().toISOString();
+        harness.store.saveExecution(execution);
+        logAudit("execution_cancel", execution.templateSlug, `cancelled at step ${execution.currentStep}`, true);
+        return json({ cancelled: true, execution: summarizeExecution(execution) });
       } catch (err) {
         return fail(err);
       }

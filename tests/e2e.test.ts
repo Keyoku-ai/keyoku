@@ -65,6 +65,7 @@ describe("keyoku-harness over MCP stdio", () => {
         "connector_remove",
         "connector_set_autonomy",
         "connector_tools",
+        "execution_cancel",
         "execution_complete",
         "execution_list",
         "goal_assess",
@@ -87,6 +88,7 @@ describe("keyoku-harness over MCP stdio", () => {
         "workflow_suggest",
         "workflow_template_delete",
         "workflow_template_list",
+        "workflow_update",
       ].sort(),
     );
     expect(client.getInstructions()).toContain("convergence harness");

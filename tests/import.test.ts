@@ -16,11 +16,17 @@ afterAll(() => {
   rmSync(transcripts, { recursive: true, force: true });
 });
 
+const emptyCodex = mkdtempSync(join(tmpdir(), "keyoku-no-codex-"));
+
 function runImport(): string {
-  return execFileSync(process.execPath, [ENTRY, "import", "--dir", transcripts], {
-    env: { ...process.env, KEYOKU_HOME: home } as NodeJS.ProcessEnv,
-    encoding: "utf8",
-  });
+  return execFileSync(
+    process.execPath,
+    [ENTRY, "import", "--dir", transcripts, "--codex-dir", emptyCodex],
+    {
+      env: { ...process.env, KEYOKU_HOME: home } as NodeJS.ProcessEnv,
+      encoding: "utf8",
+    },
+  );
 }
 
 describe("keyoku import", () => {
@@ -73,5 +79,57 @@ describe("keyoku import", () => {
   it("is idempotent — re-running imports nothing new", () => {
     const out = runImport();
     expect(out).toContain("Imported 0 events");
+  });
+
+  it("imports Codex rollout sessions (both line shapes) with cwd + redaction", () => {
+    const codexDir = mkdtempSync(join(tmpdir(), "keyoku-codex-src-"));
+    mkdirSync(join(codexDir, "2026", "06"), { recursive: true });
+    writeFileSync(
+      join(codexDir, "2026", "06", "rollout-x.jsonl"),
+      [
+        JSON.stringify({ id: "codex-sess-1", timestamp: "2026-06-02T09:00:00Z" }),
+        JSON.stringify({
+          timestamp: "2026-06-02T09:00:05Z",
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "<environment_context><cwd>/Users/dev/Development/codex-proj</cwd></environment_context>" }],
+          },
+        }),
+        // wrapped shape
+        JSON.stringify({
+          timestamp: "2026-06-02T09:01:00Z",
+          type: "response_item",
+          payload: { type: "function_call", name: "shell", arguments: JSON.stringify({ command: ["bash", "-lc", "npm run build"] }) },
+        }),
+        // bare shape, no timestamp (inherits last seen), with a secret
+        JSON.stringify({
+          type: "function_call",
+          name: "shell",
+          arguments: JSON.stringify({ command: ["bash", "-lc", "export API_TOKEN=supersecret123 && deploy"] }),
+        }),
+      ].join("\n"),
+    );
+
+    const out = execFileSync(process.execPath, [ENTRY, "import", "--dir", transcripts, "--codex-dir", codexDir], {
+      env: { ...process.env, KEYOKU_HOME: home } as NodeJS.ProcessEnv,
+      encoding: "utf8",
+    });
+    expect(out).toContain("1 Codex transcript file(s)");
+    expect(out).toContain("Imported 2 events");
+
+    const events = readFileSync(join(home, "activity.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    const codexEvents = events.filter((e) => e.sessionId === "codex-sess-1");
+    expect(codexEvents).toHaveLength(2);
+    expect(codexEvents[0].summary).toBe("Bash: npm run build");
+    expect(codexEvents[0].cwd).toBe("/Users/dev/Development/codex-proj");
+    expect(codexEvents[1].at).toBe("2026-06-02T09:01:00Z"); // inherited timestamp
+    expect(codexEvents[1].detail).toContain("«redacted»");
+    expect(codexEvents[1].detail).not.toContain("supersecret123");
+    rmSync(codexDir, { recursive: true, force: true });
   });
 });

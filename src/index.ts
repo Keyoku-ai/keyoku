@@ -318,6 +318,73 @@ async function importCmd(argv: string[]): Promise<void> {
     }
   }
 
+  // Codex sessions: rollout-*.jsonl under ~/.codex/sessions (or --codex-dir).
+  // Two line shapes exist in the wild: bare items ({"type":"function_call",…})
+  // and response_item-wrapped ({"type":"response_item","payload":{…}}).
+  const codexIdx = argv.indexOf("--codex-dir");
+  const codexRoot =
+    codexIdx >= 0 && argv[codexIdx + 1] ? argv[codexIdx + 1] : join(homedir(), ".codex", "sessions");
+  let codexFiles: string[] = [];
+  try {
+    codexFiles = (readdirSync(codexRoot, { recursive: true }) as string[])
+      .filter((f) => String(f).endsWith(".jsonl"))
+      .map((f) => join(codexRoot, String(f)));
+  } catch {
+    /* codex not installed */
+  }
+  let codexScanned = 0;
+  for (const file of codexFiles) {
+    let raw: string;
+    try {
+      raw = readFileSync(file, "utf8");
+    } catch {
+      continue;
+    }
+    let sid = "";
+    let cwd: string | undefined;
+    let lastTs = "";
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) continue;
+      let obj: Record<string, unknown>;
+      try {
+        obj = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (typeof obj.timestamp === "string") lastTs = obj.timestamp;
+      if (!sid && typeof obj.id === "string") sid = obj.id;
+      const item = (obj.type === "response_item" ? obj.payload : obj) as Record<string, unknown> | null;
+      if (!item || typeof item !== "object") continue;
+      if (!cwd) {
+        const m = line.match(/<cwd>([^<]+)<\/cwd>/);
+        if (m) cwd = m[1];
+      }
+      if (item.type !== "function_call" || typeof item.name !== "string") continue;
+      if (!/shell|exec|command/i.test(item.name)) continue;
+      let cmd = "";
+      try {
+        const a = JSON.parse(String(item.arguments ?? "{}")) as { command?: unknown };
+        const c = a.command;
+        cmd = Array.isArray(c)
+          ? c.length >= 3 && /^(bash|sh|zsh)$/.test(String(c[0]))
+            ? String(c[c.length - 1])
+            : c.map(String).join(" ")
+          : String(c ?? "");
+      } catch {
+        continue;
+      }
+      if (!cmd) continue;
+      codexScanned += 1;
+      const ev = buildToolEvent("Bash", { command: cmd }, sid || file, lastTs || new Date(0).toISOString(), cwd);
+      if (!ev) continue;
+      const key = `${ev.sessionId ?? ""}|${ev.at}|${ev.summary}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      events.push(ev);
+    }
+  }
+  scanned += codexScanned;
+
   events.sort((a, b) => a.at.localeCompare(b.at));
   const recent = events.slice(-limit);
   for (const ev of recent) store.appendActivity(enrichWithEntities(ev));
@@ -362,7 +429,7 @@ async function importCmd(argv: string[]): Promise<void> {
   }
 
   console.log(
-    `Imported ${recent.length} events from ${files.length} transcript file(s) (${scanned} tool calls scanned).` +
+    `Imported ${recent.length} events from ${files.length} Claude + ${codexFiles.length} Codex transcript file(s) (${scanned} tool calls scanned).` +
       (conventionsFiled > 0 ? `\nFiled ${conventionsFiled} convention section(s) from CLAUDE.md into the knowledge layer.` : "") +
       (recent.length > 0 ? "\nRun workflow_suggest in your agent — your history is now minable." : ""),
   );
@@ -374,6 +441,7 @@ async function importCmd(argv: string[]): Promise<void> {
  * Strict relevance threshold: silence is the default. */
 async function contextCmd(): Promise<void> {
   try {
+    if (await isPaused()) return;
     const chunks: Buffer[] = [];
     for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
     const raw = Buffer.concat(chunks).toString("utf8").trim();
@@ -443,6 +511,7 @@ async function contextCmd(): Promise<void> {
  * aware of the workflow catalog and any unsaved patterns. */
 async function brief(): Promise<void> {
   try {
+    if (await isPaused()) return;
     const { formatBrief, loadSurfaced, resolveRipe } = await import("./nudge.js");
     const store = new Store();
     const ripe = resolveRipe(store.dir, loadSurfaced(store.dir), () => store.listActivity(2000));
@@ -458,7 +527,7 @@ async function brief(): Promise<void> {
  * The store stays canonical; this artifact is derived and carries provenance. */
 async function exportCmd(argv: string[]): Promise<void> {
   const { join } = await import("node:path");
-  const { mkdirSync, writeFileSync } = await import("node:fs");
+  const { mkdirSync, readFileSync, writeFileSync } = await import("node:fs");
 
   const slug = argv.find((a) => !a.startsWith("-"));
   if (!slug) {
@@ -491,6 +560,45 @@ async function exportCmd(argv: string[]): Promise<void> {
     })
     .join("\n");
 
+  // --agents-md [file]: bake into an AGENTS.md managed block instead — the
+  // Codex-native (and agent-agnostic) projection. Sections are keyed by slug
+  // so re-exports update in place.
+  const agentsIdx = argv.indexOf("--agents-md");
+  if (agentsIdx >= 0) {
+    const next = argv[agentsIdx + 1];
+    const target = next && !next.startsWith("-") && next !== slug ? next : join(process.cwd(), "AGENTS.md");
+    const START = "<!-- keyoku:workflows -->";
+    const END = "<!-- /keyoku:workflows -->";
+    const section = `### keyoku:${template.slug} — ${template.name}\n\n${template.description}\n\nRun via the keyoku MCP server: call \`workflow_execute { "slug": "${template.slug}" }\`; resume pauses with \`execution_complete\`. Generated by keyoku (run ${template.timesRun}×) — re-export to update, do not hand-edit.\n\nSteps:\n${steps}\n`;
+    let doc = "";
+    try {
+      doc = readFileSync(target, "utf8");
+    } catch {
+      /* new file */
+    }
+    let before: string;
+    let inside: string;
+    let after: string;
+    const s = doc.indexOf(START);
+    const e = doc.indexOf(END);
+    if (s >= 0 && e > s) {
+      before = doc.slice(0, s + START.length);
+      inside = doc.slice(s + START.length, e);
+      after = doc.slice(e);
+    } else {
+      before = `${doc.replace(/\n*$/, doc.trim() ? "\n\n" : "")}${START}`;
+      inside = "\n";
+      after = `${END}\n`;
+    }
+    const slugRe = new RegExp(`^\\s*### keyoku:${template.slug}\\b`);
+    const kept = inside.split(/\n(?=### keyoku:)/).filter((c) => c.trim() !== "" && !slugRe.test(c));
+    const newInside = `${["", ...kept].join("\n").replace(/\n*$/, "\n")}\n${section}`;
+    writeFileSync(target, `${before}${newInside}${after}`);
+    console.log(`Baked '${template.slug}' → ${target} (AGENTS.md managed block)
+Codex and every AGENTS.md-reading agent now knows this workflow.`);
+    return;
+  }
+
   const skill = `---
 name: ${template.slug}
 description: ${template.description.replace(/\n/g, " ")} (learned by keyoku from observed activity; prefer running it via the keyoku MCP server)
@@ -518,7 +626,99 @@ ${steps}
 Commit it to share the workflow with your team; the keyoku store remains the living source of truth.`);
 }
 
+/** Privacy switch: while ~/.keyoku/paused exists, nothing records and the
+ * hooks inject nothing. One command each way. */
+async function isPaused(): Promise<boolean> {
+  const { existsSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { resolveHome } = await import("./store.js");
+  return existsSync(join(resolveHome(), "paused"));
+}
+
+async function pause(): Promise<void> {
+  const { writeFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const store = new Store();
+  writeFileSync(join(store.dir, "paused"), new Date().toISOString());
+  console.log("keyoku paused — nothing will be recorded or injected until `keyoku resume`.");
+}
+
+async function resume(): Promise<void> {
+  const { rmSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const store = new Store();
+  rmSync(join(store.dir, "paused"), { force: true });
+  console.log("keyoku resumed — recording and context injection are active again.");
+}
+
+/** Health check for the whole installation — the support-thread killer. */
+async function doctor(): Promise<void> {
+  const { homedir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { existsSync, readFileSync } = await import("node:fs");
+  const { resolveSlmFromEnv } = await import("./slm.js");
+  const store = new Store();
+  let failures = 0;
+  const check = (ok: boolean | "info", label: string, detail = ""): void => {
+    const mark = ok === true ? "✓" : ok === "info" ? "–" : "✗";
+    if (ok === false) failures += 1;
+    console.log(`  ${mark} ${label}${detail ? ` — ${detail}` : ""}`);
+  };
+  console.log("keyoku doctor\n");
+
+  let settings = "";
+  try { settings = readFileSync(join(homedir(), ".claude", "settings.json"), "utf8"); } catch { /* missing */ }
+  check(settings.includes(" record"), "PostToolUse hook (recording)");
+  check(settings.includes(" brief"), "SessionStart hook (brief)");
+  check(settings.includes(" context"), "UserPromptSubmit hook (practice injection)");
+
+  let claudeJson = "";
+  try { claudeJson = readFileSync(join(homedir(), ".claude.json"), "utf8"); } catch { /* missing */ }
+  check(claudeJson.includes('"keyoku"'), "MCP server registered in ~/.claude.json");
+
+  const codexCfg = join(homedir(), ".codex", "config.toml");
+  if (existsSync(codexCfg)) {
+    let toml = "";
+    try { toml = readFileSync(codexCfg, "utf8"); } catch { /* unreadable */ }
+    check(toml.includes("[mcp_servers.keyoku]"), "Codex MCP registration (~/.codex/config.toml)", "run keyoku init to wire");
+  } else {
+    check("info", "Codex not detected", "skipping");
+  }
+
+  const paused = existsSync(join(store.dir, "paused"));
+  check(!paused, paused ? "recording PAUSED" : "recording active", paused ? "run `keyoku resume`" : "");
+
+  const activity = store.listActivity();
+  check(
+    activity.length > 0,
+    `activity log: ${activity.length} events`,
+    activity.length > 0 ? `last at ${activity[activity.length - 1].at}` : "run `keyoku import` or use your agent",
+  );
+
+  const slm = resolveSlmFromEnv();
+  check("info", `SLM tier: ${slm ? `${slm.name} (${slm.model})` : "none — agent-as-refiner handles refinement"}`);
+
+  const engineUrl = process.env.KEYOKU_ENGINE_URL?.trim();
+  if (engineUrl) {
+    let ok = false;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 1500);
+      const res = await fetch(`${engineUrl.replace(/\/+$/, "")}/api/v1/health`, { signal: controller.signal });
+      clearTimeout(timer);
+      ok = res.ok;
+    } catch { /* unreachable */ }
+    check(ok, `engine reachable at ${engineUrl}`);
+  } else {
+    check("info", "engine not configured", "set KEYOKU_ENGINE_URL to enable the brain");
+  }
+
+  console.log(failures === 0 ? "\nAll core checks passed." : `\n${failures} check(s) failed.`);
+  process.exitCode = failures === 0 ? 0 : 1;
+}
+
 async function record(): Promise<void> {
+  if (await isPaused()) return;
   // Called by Claude Code PostToolUse hook — reads JSON from stdin.
   // Format: { tool_name, tool_input, tool_response, session_id }
   const chunks: Buffer[] = [];
@@ -584,7 +784,7 @@ async function record(): Promise<void> {
   // Exit 0 — hooks must not block Claude Code on failure
 }
 
-async function init(): Promise<void> {
+async function init(argv: string[] = []): Promise<void> {
   const { homedir } = await import("node:os");
   const { join } = await import("node:path");
   const { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } = await import("node:fs");
@@ -689,10 +889,33 @@ async function init(): Promise<void> {
   settings.hooks = hooks;
   writeJsonAtomic(settingsPath, settings);
 
+  // Codex: same MCP server, wired into ~/.codex/config.toml automatically
+  // when Codex is installed (or forced with --codex).
+  const codexCfgPath = join(home, ".codex", "config.toml");
+  let codexLine = "Codex:            not detected (rerun with --codex after installing)";
+  if (existsSync(codexCfgPath) || argv.includes("--codex")) {
+    let toml = "";
+    try {
+      toml = readFileSync(codexCfgPath, "utf8");
+    } catch {
+      mkdirSync(join(home, ".codex"), { recursive: true });
+    }
+    if (toml.includes("[mcp_servers.keyoku]")) {
+      codexLine = "Codex:            already wired";
+    } else {
+      writeFileSync(
+        codexCfgPath,
+        `${toml.replace(/\n*$/, toml ? "\n\n" : "")}[mcp_servers.keyoku]\ncommand = "node"\nargs = ["${selfPath}"]\n`,
+      );
+      codexLine = `Codex:            MCP server added to ${codexCfgPath}`;
+    }
+  }
+
   console.log(`keyoku initialised.
 
   MCP server:       ${mcpHow}
   PostToolUse hook: ${settingsPath} (${hookCmd})
+  ${codexLine}
 
   Restart Claude Code for changes to take effect.
   State lives in ~/.keyoku/
@@ -770,8 +993,10 @@ Usage:
   keyoku watch <goal>|--all         Re-assess on an interval [--interval <seconds>]
   keyoku learn                      Mine patterns from activity (SLM or heuristic)
   keyoku record                     Record a PostToolUse hook event (reads stdin JSON)
-  keyoku import [--dir D]           Backfill activity from Claude Code transcripts
-  keyoku export <slug> [--dir D]    Bake a workflow into ./.claude/skills as a skill
+  keyoku import [--dir D]           Backfill activity from Claude Code + Codex transcripts
+  keyoku export <slug> [--agents-md] Bake a workflow into ./.claude/skills (or AGENTS.md)
+  keyoku pause | resume             Privacy switch — stop/start all recording & injection
+  keyoku doctor                     Verify hooks, MCP registration, engine, and activity
   keyoku brief                      Session-start context line (used by the SessionStart hook)
   keyoku context                    Practice injection for a prompt (used by the UserPromptSubmit hook)
   keyoku approvals                  List queue; approve|deny <id> [reason] to decide
@@ -809,8 +1034,14 @@ async function main(): Promise<void> {
       return brief();
     case "context":
       return contextCmd();
+    case "pause":
+      return pause();
+    case "resume":
+      return resume();
+    case "doctor":
+      return doctor();
     case "init":
-      return init();
+      return init(rest);
     case "approvals":
       return approvals(rest);
     case "audit":

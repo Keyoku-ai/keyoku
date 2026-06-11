@@ -152,6 +152,36 @@ describe("workflow execution lifecycle", () => {
     expect(executions.executions.some((e: any) => e.id === executionId && e.status === "done")).toBe(true);
   });
 
+  it("workflow_update edits in place and refreshes the published prompt", async () => {
+    const updated = await call("workflow_update", {
+      slug: "greet",
+      name: "Greeter v2",
+      description: "Updated parameterized echo",
+    });
+    expect(updated.updated).toBe("greet");
+    const list = await call("workflow_template_list", {});
+    expect(list.templates.find((t: any) => t.slug === "greet").name).toBe("Greeter v2");
+    const prompts = await client.listPrompts();
+    const entry = prompts.prompts.find((p: any) => p.name === "workflow-greet") as any;
+    expect(entry?.description).toBe("Updated parameterized echo");
+  });
+
+  it("execution_cancel stops a paused execution", async () => {
+    await call("workflow_approve", {
+      slug: "cancellable",
+      name: "Cancellable",
+      description: "pauses at an agent step",
+      steps: [{ type: "agent_prompt", summary: "think", prompt: "Think about it" }],
+    });
+    const run = await call("workflow_execute", { slug: "cancellable" });
+    expect(run.waiting_for).toBe("agent");
+    const cancelled = await call("execution_cancel", { id: run.execution.id });
+    expect(cancelled.cancelled).toBe(true);
+    expect(cancelled.execution.status).toBe("failed");
+    const again = await call("execution_cancel", { id: run.execution.id });
+    expect(again._isError).toBe(true);
+  });
+
   it("fails the execution when a bash step exits non-zero", async () => {
     await call("workflow_approve", {
       slug: "doomed",
