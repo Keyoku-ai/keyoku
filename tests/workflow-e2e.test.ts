@@ -74,6 +74,25 @@ describe("on-demand capture", () => {
   });
 });
 
+describe("workflow params", () => {
+  it("fills {{placeholders}} and refuses to run with holes", async () => {
+    await call("workflow_approve", {
+      slug: "greet",
+      name: "Greeter",
+      description: "Parameterized echo",
+      steps: [{ type: "bash", summary: "greet", command: "echo {{greeting}}-ok" }],
+    });
+
+    const holey = await call("workflow_execute", { slug: "greet" });
+    expect(holey._isError).toBe(true);
+    expect(JSON.stringify(holey)).toContain("greeting");
+
+    const run = await call("workflow_execute", { slug: "greet", params: { greeting: "hello" } });
+    expect(run.completed).toBe(true);
+    expect(run.execution.steps[0].result).toBe("hello-ok");
+  });
+});
+
 describe("workflow execution lifecycle", () => {
   let executionId: string;
 

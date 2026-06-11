@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { detectPatterns, enrichWithEntities } from "../src/activity.js";
+import { detectPatterns, enrichWithEntities, redactSecrets } from "../src/activity.js";
 import type { ActivityEvent } from "../src/types.js";
 
 let n = 0;
@@ -135,6 +135,24 @@ describe("session partitioning", () => {
     const found = detectPatterns(events, 3);
     expect(found).toHaveLength(1);
     expect(found[0].count).toBe(3);
+  });
+});
+
+describe("redactSecrets", () => {
+  it("masks credential assignments and bearer tokens", () => {
+    expect(redactSecrets("export GITHUB_TOKEN=ghp_abc123def && git push")).toBe(
+      "export GITHUB_TOKEN=«redacted» && git push",
+    );
+    expect(redactSecrets("curl -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.x.y'")).toContain(
+      "Bearer «redacted»",
+    );
+    expect(redactSecrets('{"api_key": "sk-live-12345678"}')).toContain("«redacted»");
+    expect(redactSecrets("password: hunter22")).toBe("password: «redacted»");
+  });
+
+  it("leaves benign text untouched", () => {
+    const benign = "git commit -m 'update key layout docs' && npm test";
+    expect(redactSecrets(benign)).toBe(benign);
   });
 });
 

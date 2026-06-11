@@ -150,6 +150,19 @@ export function detectPatterns(
   });
 }
 
+// Secrets must never enter the activity log — they would propagate into
+// drafts, baked skills (committed to repos!), and the engine mirror. Redact
+// at record time: key=value/key: value assignments whose key smells like a
+// credential, and bearer tokens. Conservative by design — losing a file path
+// to over-redaction is fine; leaking a token is not.
+const SECRET_ASSIGNMENT_RE =
+  /([\w-]*(?:token|secret|passwd|password|api[_-]?key|access[_-]?key|credential|auth)[\w-]*\s*[:=]\s*)(["']?)[^\s"']{4,}\2/gi;
+const BEARER_RE = /\b(bearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi;
+
+export function redactSecrets(text: string): string {
+  return text.replace(SECRET_ASSIGNMENT_RE, "$1«redacted»").replace(BEARER_RE, "$1«redacted»");
+}
+
 /** Map one observed event to a draft workflow step. Shared by pattern
  * detection and on-demand capture so both produce identical drafts. */
 export function draftStep(ev: ActivityEvent): WorkflowStepTemplate {

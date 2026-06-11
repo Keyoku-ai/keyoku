@@ -6,6 +6,7 @@ import { Harness } from "./engine.js";
 import { runLearning } from "./learn.js";
 import { buildServer, VERSION } from "./server.js";
 import { resolveSlmFromEnv } from "./slm.js";
+import { redactSecrets } from "./activity.js";
 import { newId, Store } from "./store.js";
 import type { ActivityEvent } from "./types.js";
 
@@ -209,7 +210,7 @@ function buildToolEvent(
   let summary: string;
   let detail: string | undefined;
   if (toolName === "Bash") {
-    const cmd = String(toolInput.command ?? "").trim();
+    const cmd = redactSecrets(String(toolInput.command ?? "").trim());
     if (!cmd) return null;
     summary = `Bash: ${cmd.slice(0, 80)}`;
     detail = cmd.slice(0, 500);
@@ -226,7 +227,7 @@ function buildToolEvent(
     const server = parts[1] ?? "unknown";
     const mcpTool = parts.slice(2).join("__") || "tool";
     summary = `MCP: ${server}.${mcpTool}`;
-    detail = JSON.stringify({ server, tool: mcpTool, args: toolInput }).slice(0, 500);
+    detail = redactSecrets(JSON.stringify({ server, tool: mcpTool, args: toolInput })).slice(0, 500);
   } else {
     return null; // outside the v1 trace surface
   }

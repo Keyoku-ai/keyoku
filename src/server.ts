@@ -8,7 +8,7 @@ import {
   enqueueApproval,
   gateCall,
 } from "./approvals.js";
-import { detectPatterns, draftStep, enrichWithEntities, type ActivitySuggestion } from "./activity.js";
+import { detectPatterns, draftStep, enrichWithEntities, redactSecrets, type ActivitySuggestion } from "./activity.js";
 import { Brain } from "./brain.js";
 import { loadSurfaced, saveSurfaced } from "./nudge.js";
 import { redactConnector } from "./connectors.js";
@@ -90,6 +90,22 @@ function redactCriteria(criteria: Criterion[]): Criterion[] {
         }
       : c,
   );
+}
+
+/** Fill {{placeholders}}; unresolved keys are collected, not guessed. */
+function fillPlaceholders(
+  text: string | undefined,
+  params: Record<string, string>,
+  missing: Set<string>,
+): string | undefined {
+  if (!text) return text;
+  return text.replace(/\{\{\s*([\w-]+)\s*\}\}/g, (_m, key: string) => {
+    if (params[key] === undefined) {
+      missing.add(key);
+      return `{{${key}}}`;
+    }
+    return params[key];
+  });
 }
 
 /** Subject for a practice knowledge entry — project dir name when visible. */
@@ -461,7 +477,7 @@ export function buildServer(harness: Harness): McpServer {
               id: newId("ev"),
               type: "tool_use",
               summary: `connector_call: ${name}.${tool}`,
-              detail: JSON.stringify({ connector: name, tool, args: args ?? {} }).slice(0, 500),
+              detail: redactSecrets(JSON.stringify({ connector: name, tool, args: args ?? {} })).slice(0, 500),
               tool: "connector_call",
               at: new Date().toISOString(),
             }),
@@ -1297,13 +1313,33 @@ export function buildServer(harness: Harness): McpServer {
       inputSchema: {
         slug: z.string().describe("Template slug from workflow_template_list."),
         triggered_by: z.enum(["on_demand", "hook"]).optional(),
+        params: z
+          .record(z.string())
+          .optional()
+          .describe('Values for {{placeholders}} in the template, e.g. { "commit_message": "fix: …" }.'),
       },
     },
-    async ({ slug, triggered_by }) => {
+    async ({ slug, triggered_by, params }) => {
       try {
         const template = harness.store.getTemplate(slug);
         if (!template)
           return fail(new Error(`No template '${slug}'. Use workflow_template_list to see available templates.`));
+
+        // {{placeholders}} become real here: fill from params, refuse to run
+        // with holes — a half-substituted command is worse than no run.
+        const missing = new Set<string>();
+        const filled = template.steps.map((s) => ({
+          ...s,
+          command: fillPlaceholders(s.command, params ?? {}, missing),
+          prompt: fillPlaceholders(s.prompt, params ?? {}, missing),
+          message: fillPlaceholders(s.message, params ?? {}, missing),
+        }));
+        if (missing.size > 0)
+          return fail(
+            new Error(
+              `Template '${slug}' needs params: ${[...missing].join(", ")}. Ask the user for values, then call workflow_execute { slug: "${slug}", params: { ... } }.`,
+            ),
+          );
 
         const now = new Date().toISOString();
         const execution: WorkflowExecution = {
@@ -1311,7 +1347,7 @@ export function buildServer(harness: Harness): McpServer {
           templateId: template.id,
           templateSlug: template.slug,
           status: "running",
-          steps: template.steps.map((s, i) => ({
+          steps: filled.map((s, i) => ({
             index: i,
             type: s.type,
             summary: s.summary,
