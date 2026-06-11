@@ -320,8 +320,49 @@ async function importCmd(argv: string[]): Promise<void> {
   events.sort((a, b) => a.at.localeCompare(b.at));
   const recent = events.slice(-limit);
   for (const ev of recent) store.appendActivity(enrichWithEntities(ev));
+
+  // Conventions ingestion: CLAUDE.md files are ground truth the user already
+  // wrote — file each project's sections into the knowledge layer once, so
+  // declared conventions ground refinement alongside observed patterns.
+  const { basename } = await import("node:path");
+  const roots = new Set<string>();
+  for (const ev of recent) {
+    if (!ev.cwd) continue;
+    const m = ev.cwd.match(/^(.*\/Development\/[^/]+)/);
+    roots.add(m ? m[1] : ev.cwd);
+  }
+  let conventionsFiled = 0;
+  for (const dir of roots) {
+    const project = basename(dir).toLowerCase();
+    const subject = `conventions:${project}`;
+    if (store.listKnowledge(subject).length > 0) continue; // idempotent
+    let text: string;
+    try {
+      text = readFileSync(join(dir, "CLAUDE.md"), "utf8");
+    } catch {
+      continue;
+    }
+    const sections = text
+      .split(/\n(?=## )/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 10);
+    for (const section of sections) {
+      store.appendKnowledge({
+        id: newId("kn"),
+        subject,
+        kind: "note",
+        fact: section.slice(0, 600),
+        source: "user",
+        at: new Date().toISOString(),
+      });
+      conventionsFiled += 1;
+    }
+  }
+
   console.log(
     `Imported ${recent.length} events from ${files.length} transcript file(s) (${scanned} tool calls scanned).` +
+      (conventionsFiled > 0 ? `\nFiled ${conventionsFiled} convention section(s) from CLAUDE.md into the knowledge layer.` : "") +
       (recent.length > 0 ? "\nRun workflow_suggest in your agent — your history is now minable." : ""),
   );
 }
