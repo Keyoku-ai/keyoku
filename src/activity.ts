@@ -58,9 +58,19 @@ export function detectPatterns(
   const recent = events.slice(-windowSize);
   if (recent.length < 2) return [];
 
-  const keys = recent.map(eventKey);
+  // Mine WITHIN each session, count ACROSS sessions. Concurrent sessions
+  // interleave in the global log — without partitioning, an edit in project A
+  // followed by an edit in project B reads as a false adjacency and the
+  // detector stitches unrelated work into "patterns".
+  const bySession = new Map<string, ActivityEvent[]>();
+  for (const e of recent) {
+    const k = e.sessionId ?? "_";
+    const group = bySession.get(k);
+    if (group) group.push(e);
+    else bySession.set(k, [e]);
+  }
 
-  // Count candidate sequences of length 2–4. Two rules keep counts honest:
+  // Count candidate sequences of length 2–6. Two rules keep counts honest:
   // occurrences never overlap (A,B,A,B,A,B is three A→B's, not five), and
   // sequences whose events are all identical are skipped — a formatter
   // rewriting the same file ten times is one action repeating, not a workflow.
@@ -70,17 +80,21 @@ export function detectPatterns(
     seq: string[];
   }
   const counts = new Map<string, Candidate>();
-  for (let seqLen = 2; seqLen <= 6; seqLen++) {
-    const nextAllowed = new Map<string, number>();
-    for (let i = 0; i <= recent.length - seqLen; i++) {
-      const seq = keys.slice(i, i + seqLen);
-      if (new Set(seq).size === 1) continue;
-      const key = seq.join(" → ");
-      if (i < (nextAllowed.get(key) ?? 0)) continue;
-      nextAllowed.set(key, i + seqLen);
-      const existing = counts.get(key);
-      if (existing) existing.count++;
-      else counts.set(key, { count: 1, exemplar: recent.slice(i, i + seqLen), seq });
+  for (const group of bySession.values()) {
+    if (group.length < 2) continue;
+    const keys = group.map(eventKey);
+    for (let seqLen = 2; seqLen <= 6; seqLen++) {
+      const nextAllowed = new Map<string, number>();
+      for (let i = 0; i <= group.length - seqLen; i++) {
+        const seq = keys.slice(i, i + seqLen);
+        if (new Set(seq).size === 1) continue;
+        const key = seq.join(" → ");
+        if (i < (nextAllowed.get(key) ?? 0)) continue;
+        nextAllowed.set(key, i + seqLen);
+        const existing = counts.get(key);
+        if (existing) existing.count++;
+        else counts.set(key, { count: 1, exemplar: group.slice(i, i + seqLen), seq });
+      }
     }
   }
 

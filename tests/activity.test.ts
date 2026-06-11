@@ -85,6 +85,34 @@ describe("detectPatterns", () => {
   });
 });
 
+describe("session partitioning", () => {
+  it("does not stitch interleaved concurrent sessions into false patterns", () => {
+    // Session A edits project A, session B edits project B — interleaved in
+    // the global log. Cross-session adjacencies must never become patterns.
+    const events: ActivityEvent[] = [];
+    for (let i = 0; i < 4; i++) {
+      events.push({ ...ev("Write: /proj-a/api/handler.go", "Write"), sessionId: "sess-a" });
+      events.push({ ...ev("Edit: /proj-b/src/page.tsx", "Edit"), sessionId: "sess-b" });
+      events.push({ ...ev("Edit: /proj-b/src/layout.tsx", "Edit"), sessionId: "sess-b" });
+    }
+    // Within sess-a: only identical Writes (skipped). Within sess-b: only
+    // alternating identical-keyed .tsx edits. No real cross-step workflow.
+    const cross = detectPatterns(events, 3);
+    expect(cross.filter((s) => s.name.includes("handler.go") && s.name.includes("tsx"))).toEqual([]);
+  });
+
+  it("counts the same workflow across sessions", () => {
+    const events: ActivityEvent[] = [];
+    for (const sess of ["s1", "s2", "s3"]) {
+      events.push({ ...ev("Bash: npm test", "Bash", "npm test"), sessionId: sess });
+      events.push({ ...ev("Bash: git push", "Bash", "git push"), sessionId: sess });
+    }
+    const found = detectPatterns(events, 3);
+    expect(found).toHaveLength(1);
+    expect(found[0].count).toBe(3);
+  });
+});
+
 describe("enrichWithEntities", () => {
   it("extracts CLI keywords and file extensions from summaries", () => {
     const e = enrichWithEntities(ev("Bash: git push && npm run build src/index.ts", "Bash"));
