@@ -1,28 +1,10 @@
-# Dependencies
 node_modules/
-
-# Build output
 dist/
-
-# Database
-*.db
-*.db-wal
-*.db-shm
-
-# Environment
+*.js.map
 .env
-.env.local
-.env.*.local
-
-# OS
+.env.*
+!.env.example
+*.log
 .DS_Store
-Thumbs.db
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# Test artifacts
-coverage/
+*.tmp
+*.tgz
