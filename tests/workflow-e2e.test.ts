@@ -38,7 +38,7 @@ beforeAll(async () => {
     new StdioClientTransport({
       command: process.execPath,
       args: [ENTRY, "serve"],
-      env: { ...process.env, KEYOKU_HOME: home } as Record<string, string>,
+      env: { ...process.env, KEYOKU_HOME: home, KEYOKU_SLM_PROVIDER: "none" } as Record<string, string>,
       stderr: "ignore",
     }),
   );

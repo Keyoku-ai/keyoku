@@ -14,6 +14,7 @@ import type { Harness } from "./engine.js";
 import { executeBashStep, executeMcpStep } from "./executor.js";
 import { buildCreateGuidance, buildRecordGuidance, PROTOCOL } from "./guidance.js";
 import { relevantPatterns, runLearning } from "./learn.js";
+import { refineSuggestions } from "./refine.js";
 import { observationDigest, stateTransitions } from "./observe.js";
 import { resolveSlmFromEnv } from "./slm.js";
 import { newId } from "./store.js";
@@ -829,7 +830,7 @@ export function buildServer(harness: Harness): McpServer {
     {
       title: "Suggest workflows from observed activity",
       description:
-        "Runs the sliding-window pattern detector over recent activity and returns up to 5 draft workflow templates inferred from recurring sequences. No model needed — heuristic only. Approve drafts with workflow_approve.",
+        "Suggest workflows from recent activity. Heuristic mining proposes candidate sequences; when an SLM is configured (GEMINI_API_KEY or ANTHROPIC_API_KEY) the model refines them — filtering noise, naming them properly, and parameterizing commands. Falls back to heuristic-only with no key. Approve drafts with workflow_approve.",
       inputSchema: {
         min_count: z.number().int().min(2).max(20).optional().describe("Min occurrences to qualify (default 3)."),
       },
@@ -837,10 +838,17 @@ export function buildServer(harness: Harness): McpServer {
     async ({ min_count }) => {
       try {
         const events = harness.store.listActivity(300);
-        const suggestions = detectPatterns(events, min_count ?? 3);
+        let suggestions = detectPatterns(events, min_count ?? 3);
+        let method = "heuristic";
+        const slm = resolveSlmFromEnv();
+        if (slm && suggestions.length > 0) {
+          suggestions = await refineSuggestions(slm, suggestions, events.slice(-40));
+          method = `heuristic+${slm.name}`;
+        }
         return json({
           count: suggestions.length,
           suggestions,
+          method,
           guidance:
             suggestions.length === 0
               ? "Not enough recurring patterns yet — keep working and run workflow_suggest again after more activity is recorded."
