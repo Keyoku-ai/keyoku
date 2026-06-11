@@ -15,7 +15,7 @@ const ENTRY = join(__dirname, "..", "dist", "index.js");
 
 let engine: Server;
 let engineUrl: string;
-const remembered: Array<{ entity_id: string; content: string; source: string }> = [];
+const seeded: Array<{ memories: Array<{ entity_id: string; content: string; type: string; tags: string[] }> }> = [];
 
 let home: string;
 let client: Client;
@@ -26,9 +26,9 @@ beforeAll(async () => {
     req.on("data", (c) => (body += c));
     req.on("end", () => {
       res.setHeader("content-type", "application/json");
-      if (req.url === "/api/v1/remember") {
-        remembered.push(JSON.parse(body));
-        res.end(JSON.stringify({ stored: true }));
+      if (req.url === "/api/v1/seed") {
+        seeded.push(JSON.parse(body));
+        res.end(JSON.stringify({ created: 1, ids: ["mem_1"] }));
       } else if (req.url === "/api/v1/search") {
         res.end(
           JSON.stringify({
@@ -118,10 +118,12 @@ describe("engine integration through the MCP server", () => {
     expect(res.stored).toBe(true);
     // mirroring is fire-and-forget; give it a beat
     await new Promise((r) => setTimeout(r, 200));
-    expect(remembered.length).toBeGreaterThan(0);
-    expect(remembered[0].entity_id).toBe("keyoku-harness");
-    expect(remembered[0].content).toBe("[connector:github] Rate limited at 5000 req/h");
-    expect(remembered[0].source).toBe("keyoku-harness:agent-research");
+    expect(seeded.length).toBeGreaterThan(0);
+    const mem = seeded[0].memories[0];
+    expect(mem.entity_id).toBe("keyoku-harness");
+    expect(mem.content).toBe("[connector:github] Rate limited at 5000 req/h");
+    expect(mem.type).toBe("CONTEXT");
+    expect(mem.tags).toContain("agent-research");
   });
 
   it("upgrades knowledge_query text searches to engine semantics", async () => {

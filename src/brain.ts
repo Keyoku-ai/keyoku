@@ -49,14 +49,29 @@ export class Brain {
     }
   }
 
-  /** Mirror a knowledge entry into the engine. Fire-and-forget safe. */
+  /** Mirror a knowledge entry into the engine. Fire-and-forget safe.
+   * Uses /api/v1/seed — the extraction-free door: our facts are already
+   * structured, so no engine-side LLM is needed (only the embedder, which
+   * the engine supports locally via Ollama). */
   async remember(entry: KnowledgeEntry): Promise<boolean> {
+    const importance: Record<KnowledgeEntry["source"], number> = {
+      user: 0.8,
+      "agent-research": 0.7,
+      "pattern-mining": 0.6,
+      "mcp-description": 0.4,
+    };
     try {
-      await this.post("/api/v1/remember", {
-        entity_id: ENTITY,
-        content: `[${entry.subject}] ${entry.fact}`,
-        source: `keyoku-harness:${entry.source}`,
-        created_at: entry.at,
+      await this.post("/api/v1/seed", {
+        memories: [
+          {
+            entity_id: ENTITY,
+            content: `[${entry.subject}] ${entry.fact}`,
+            type: "CONTEXT",
+            importance: importance[entry.source] ?? 0.5,
+            tags: ["keyoku-harness", entry.kind, entry.source],
+            created_at: entry.at,
+          },
+        ],
       });
       return true;
     } catch {
