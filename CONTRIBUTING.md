@@ -1,85 +1,36 @@
-# Contributing to keyoku
+# Contributing to Keyoku
 
-Thank you for your interest in contributing! This guide will help you get started.
+Thanks for helping make Keyoku better.
 
-## Reporting Bugs
-
-Open a [GitHub Issue](https://github.com/keyoku-ai/keyoku/issues/new?template=bug_report.md) with:
-
-- A clear description of the bug
-- Steps to reproduce
-- Expected vs actual behavior
-- Node.js version and OS
-
-## Suggesting Features
-
-Open a [feature request](https://github.com/keyoku-ai/keyoku/issues/new?template=feature_request.md) describing:
-
-- The problem you're trying to solve
-- Your proposed solution
-- Any alternatives you've considered
-
-## Development Setup
+## Development setup
 
 ```bash
-# Clone the repo
-git clone https://github.com/keyoku-ai/keyoku.git
+git clone https://github.com/Keyoku-ai/keyoku.git
 cd keyoku
-
-# Install dependencies
 npm install
-
-# Build all packages
-npm run build
-
-# Run tests
-npm test
+npm run build      # tsup → dist/
+npm test           # builds, then runs the full vitest suite (incl. MCP e2e)
+npm run typecheck  # tsc --noEmit
 ```
 
-Requires Node.js 20+.
+Node 20+ required. State during manual testing goes to `$KEYOKU_HOME` — set it
+to a temp dir (`KEYOKU_HOME=/tmp/keyoku-dev node dist/index.js serve`) so you
+don't pollute your real `~/.keyoku`.
 
-## Project Structure
+## Project layout
 
-```
-packages/
-├── types/     — Shared TypeScript type definitions
-├── memory/    — HTTP client for keyoku-engine
-└── openclaw/  — OpenClaw plugin for persistent memory
-```
+- `src/server.ts` — MCP tool surface (the API)
+- `src/activity.ts` — pattern detection over the activity stream
+- `src/refine.ts` — optional SLM refinement of suggestions
+- `src/executor.ts` — bash / mcp_call step execution
+- `src/store.ts` — JSON-file persistence under `~/.keyoku`
+- `src/index.ts` — CLI (`serve`, `init`, `record`, …)
+- `tests/` — unit + end-to-end tests (e2e drives a real MCP stdio session)
 
-## Contributor License Agreement (CLA)
+## Pull requests
 
-All contributors must sign our [Contributor License Agreement](CLA.md) before their pull request can be merged. When you open your first PR, a bot will comment with instructions — simply reply with the required comment to sign.
+- Every behavior change needs a test. CI (typecheck + full suite) must pass.
+- Keep PRs focused; explain *why* in the description, not just what.
+- New MCP tools must be added to the tool-surface snapshot in `tests/e2e.test.ts`.
 
-## Pull Request Process
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feat/my-feature`)
-3. Make your changes
-4. Run `npm run build` and `npm test` to verify
-5. Commit with a descriptive message (see below)
-6. Push to your fork and open a PR
-7. Sign the CLA if you haven't already (the bot will prompt you)
-
-## Commit Messages
-
-Use [Conventional Commits](https://www.conventionalcommits.org/):
-
-```
-feat(memory): add batch search support
-fix(openclaw): handle empty heartbeat response
-docs: update quick start guide
-test(types): add type validation tests
-chore: update dependencies
-```
-
-## Code Style
-
-- Use TypeScript strict mode
-- Follow existing patterns in the codebase
-- Add tests for new functionality
-- Keep functions focused and well-named
-
-## License
-
-By contributing, you agree that your contributions will be licensed under the [MIT License](LICENSE).
+By contributing you agree your contributions are licensed under the MIT license.

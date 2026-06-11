@@ -1,31 +1,22 @@
 # Changelog
 
-All notable changes to keyoku will be documented in this file.
+## 0.1.0 — 2026-06-10 (relaunch)
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Keyoku is reinvented as an always-on activity tracer and workflow automation
+layer for Claude Code and other MCP coding agents.
 
-## [1.3.0] - 2026-03-13
+- **Activity tracing**: PostToolUse hook records every Bash/Edit/Write/Read to
+  `~/.keyoku/activity.jsonl`; `keyoku init` wires hook + MCP server in one step.
+- **Pattern detection**: non-overlapping sliding-window mining of repeated
+  sequences; identical-run suppression; longest-chain collapsing.
+- **Model-assisted suggestions**: with an SLM key configured, drafts are
+  filtered, named, and parameterized by the model; heuristic-only otherwise.
+- **Workflow execution**: bash and mcp_call steps run directly (per-step cwd,
+  timeouts); agent_prompt steps pause and hand off to the connected coding
+  agent; human_review steps wait for sign-off; executions persist step-by-step.
+- **Goal convergence** (carried forward): machine-checkable criteria, probes,
+  watch loop, approvals queue, audit trail, MCP connector manager.
+- 192 tests including an end-to-end MCP lifecycle suite; CI on every PR.
 
-### Changed
-- **Keyoku-driven heartbeat** — heartbeat logic moved from OpenClaw plugin to keyoku-engine's watcher; plugin now uses `before_prompt_build` hook for lightweight context injection instead of managing its own heartbeat loop
-- Bumped all packages to v1.3.0
-
-### Added
-- Heartbeat setup, migration, and service unit tests
-- Natural language format for context injection
-- ESLint + Prettier configuration with type safety fixes
-
-### Fixed
-- Auto-capture pipeline, entity ID resolution, and client timeout handling
-- Workspace dependency version sync
-
-## [1.0.0] - 2025-03-10
-
-### Added
-- Full heartbeat system with extended signals (sentiment, relationships, knowledge gaps, patterns)
-- Incremental capture mode (per-message memory extraction)
-- LLM analysis support for heartbeat context
-- Self-contained OpenClaw plugin with lifecycle management
-- `@keyoku/types` v1.0.0 — Shared TypeScript type definitions
-- `@keyoku/memory` v1.0.0 — HTTP client for keyoku-engine
-- `@keyoku/openclaw` v1.0.0 — OpenClaw plugin with auto-recall, auto-capture, and heartbeat
+The previous incarnation of this repository (an OpenClaw memory plugin,
+versions ≤ 1.6.x) is preserved in git history and tags.

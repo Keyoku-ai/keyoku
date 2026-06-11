@@ -9,7 +9,7 @@ labels: bug
 A clear description of what the bug is.
 
 **Package**
-Which package is affected? (`@keyoku/types`, `@keyoku/memory`, `@keyoku/openclaw`)
+Which area is affected? (activity tracing, pattern detection, workflow execution, connectors, CLI)
 
 **To reproduce**
 Steps to reproduce the behavior:

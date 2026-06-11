@@ -1,52 +1,63 @@
 {
   "name": "keyoku",
-  "version": "1.6.0",
-  "description": "TypeScript SDK for AI memory — auto-recall, auto-capture, and intelligent heartbeat",
-  "private": true,
+  "version": "0.1.0",
+  "description": "Always-on activity tracer and workflow automation layer for Claude Code and other coding agents. Watches what you do, learns your patterns, and turns them into reusable MCP-native workflows.",
   "type": "module",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/keyoku-ai/keyoku.git"
+  "bin": {
+    "keyoku": "dist/index.js"
   },
-  "homepage": "https://github.com/keyoku-ai/keyoku",
-  "bugs": {
-    "url": "https://github.com/keyoku-ai/keyoku/issues"
-  },
-  "keywords": [
-    "ai",
-    "memory",
-    "agents",
-    "semantic-search",
-    "vector-search",
-    "llm",
-    "openclaw"
-  ],
-  "license": "MIT",
-  "workspaces": [
-    "packages/types",
-    "packages/memory",
-    "packages/openclaw"
+  "main": "dist/index.js",
+  "exports": { ".": "./dist/index.js" },
+  "files": [
+    "dist/*.js",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
-    "build": "npm run build --workspaces",
-    "clean": "rm -rf packages/*/dist",
-    "test": "vitest run",
-    "lint": "eslint packages/*/src",
-    "format": "prettier --write 'packages/*/src/**/*.ts'",
-    "format:check": "prettier --check 'packages/*/src/**/*.ts'",
-    "verify:openclaw-pack": "node scripts/verify-openclaw-pack.js"
+    "build": "tsup",
+    "dev": "tsx src/index.ts serve",
+    "test": "npm run build && vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "keyoku",
+    "mcp",
+    "model-context-protocol",
+    "claude-code",
+    "cursor",
+    "agents",
+    "workflow",
+    "activity-tracing",
+    "automation"
+  ],
+  "author": "Keyoku <support@keyoku.ai>",
+  "license": "MIT",
+  "homepage": "https://keyoku.ai",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Keyoku-ai/keyoku"
+  },
+  "bugs": {
+    "url": "https://github.com/Keyoku-ai/keyoku/issues"
   },
   "engines": {
     "node": ">=20"
   },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.104.1",
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "jmespath": "^0.16.0",
+    "yaml": "^2.9.0",
+    "zod": "^3.25.0"
+  },
   "devDependencies": {
-    "@eslint/js": "^9.39.4",
-    "@types/node": "^25.4.0",
-    "eslint": "^9.39.4",
-    "eslint-config-prettier": "^10.1.8",
-    "prettier": "^3.8.1",
-    "typescript": "^5.9.3",
-    "typescript-eslint": "^8.57.0",
-    "vitest": "^4.0.18"
+    "@types/jmespath": "^0.15.2",
+    "@types/node": "^20.10.0",
+    "tsup": "^8.0.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.3.0",
+    "vitest": "^1.0.0"
   }
 }
