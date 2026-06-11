@@ -39,8 +39,9 @@ npx keyoku init
 The init command wires everything automatically:
 
 1. **Registers the MCP server** — via `claude mcp add --scope user`, so Claude Code connects on next launch
-2. **Installs the activity hook** — a `PostToolUse` hook records every Bash/Edit/Write/Read to `~/.keyoku/activity.jsonl`
-3. **Stays local** — no cloud, no telemetry; state lives in `~/.keyoku` with the same file permissions as `~/.aws`
+2. **Installs the hooks** — activity recording (every Bash/Edit/Write/Read/MCP call), a session-start brief, and prompt-time practice injection
+3. **Wires Codex too** — when `~/.codex` exists, the MCP server lands in `config.toml` automatically (same tools, same workflows)
+4. **Stays local** — no cloud, no telemetry; state lives in `~/.keyoku` with the same file permissions as `~/.aws`. `keyoku pause` stops everything instantly.
 
 Restart Claude Code and keyoku is live. Then skip the cold start entirely:
 
@@ -90,10 +91,12 @@ Every execution persists step-by-step — crash-safe, fully inspectable via `exe
 |---|---|
 | `activity_record` / `activity_list` | Log and browse the observation stream |
 | `workflow_suggest` | Mine patterns → model-refined draft workflows |
-| `workflow_approve` | Save an approved template |
+| `workflow_capture` | "Save what I just did" — last N session actions become a draft |
+| `workflow_approve` / `workflow_update` | Save or edit templates (slash commands stay current) |
 | `workflow_template_list` / `workflow_template_delete` | Manage the catalog |
-| `workflow_execute` | Run a template |
-| `execution_complete` / `execution_list` | Resume paused runs; browse history |
+| `workflow_execute` | Run a template (`params` fill `{{placeholders}}`) |
+| `execution_complete` / `execution_cancel` / `execution_list` | Resume, stop, browse runs |
+| `knowledge_submit` / `knowledge_query` | The context layer — research, conventions, practice |
 | `goal_create` / `goal_assess` / … | Goals with machine-checkable success criteria |
 | `connector_add` / `connector_call` / … | Plug in external MCP servers (GitHub, GCP, …) with autonomy gating |
 
@@ -102,8 +105,10 @@ Every execution persists step-by-step — crash-safe, fully inspectable via `exe
 ```
 keyoku [serve]          Start the MCP server on stdio (Claude Code does this automatically)
 keyoku init             Wire up the hook + MCP registration
-keyoku import           Backfill activity from Claude Code transcripts (kills the cold start)
-keyoku export <slug>    Bake a workflow into ./.claude/skills as a team-shareable skill
+keyoku import           Backfill activity from Claude Code + Codex transcripts (kills the cold start)
+keyoku export <slug>    Bake a workflow into ./.claude/skills — or AGENTS.md with --agents-md
+keyoku pause | resume   Privacy switch: stop/start all recording and injection
+keyoku doctor           Verify hooks, MCP registrations, engine, and activity health
 keyoku status           Show goals, templates, connectors
 keyoku learn            Mine patterns from the activity log
 keyoku assess <goal>    One-shot convergence check
