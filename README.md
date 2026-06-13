@@ -30,11 +30,16 @@
 
 ## Get Started
 
-One command. That's it.
+Install it once, then wire it up:
 
 ```bash
-npx keyoku init
+npm install -g keyoku
+keyoku init
 ```
+
+> A global install keeps keyoku on a durable path. Running `npx keyoku init`
+> from the throwaway npx cache is refused — npm can evict that directory and
+> break the hooks — so install globally first.
 
 The init command wires everything automatically:
 
@@ -46,7 +51,7 @@ The init command wires everything automatically:
 Restart Claude Code and keyoku is live. Then skip the cold start entirely:
 
 ```bash
-npx keyoku import   # backfill months of history from your Claude Code transcripts
+keyoku import   # backfill months of history from your Claude Code transcripts
 ```
 
 Now ask your agent to run `workflow_suggest` — keyoku mines your real history immediately instead of waiting days for new activity. Approved workflows appear as native slash commands (MCP prompts), and `keyoku export <slug>` bakes one into your repo as a Claude Code skill your whole team inherits.

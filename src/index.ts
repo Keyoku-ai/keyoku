@@ -791,8 +791,33 @@ async function init(argv: string[] = []): Promise<void> {
   const { fileURLToPath } = await import("node:url");
   const { execSync, spawnSync } = await import("node:child_process");
 
-  // Resolve the absolute path to this dist/index.js
-  const selfPath = fileURLToPath(import.meta.url);
+  // Resolve a DURABLE absolute path to this dist/index.js. Under `npx keyoku
+  // init` the running script lives in the evictable ~/.npm/_npx/<hash> cache —
+  // npm can prune it at any time, which would break the MCP server and every
+  // hook. When we detect that, resolve the global install instead, and abort
+  // with guidance if there isn't one: a setup written from the npx cache is a
+  // time bomb, not a convenience.
+  const runningPath = fileURLToPath(import.meta.url);
+  let selfPath = runningPath;
+  if (/[/\\]_npx[/\\]/.test(runningPath)) {
+    let durable: string | undefined;
+    try {
+      const globalRoot = execSync("npm root -g", { encoding: "utf8" }).trim();
+      const candidate = join(globalRoot, "keyoku", "dist", "index.js");
+      if (existsSync(candidate)) durable = candidate;
+    } catch {
+      /* npm not resolvable — fall through to the guidance below */
+    }
+    if (!durable) {
+      throw new Error(
+        "keyoku is running from the temporary npx cache (~/.npm/_npx/…), which " +
+          "npm can evict at any time.\nA setup written from here would silently " +
+          "break later. Install keyoku durably first, then re-run init:\n\n" +
+          "  npm install -g keyoku\n  keyoku init\n",
+      );
+    }
+    selfPath = durable;
+  }
 
   const home = homedir();
   const claudeDir = join(home, ".claude");
@@ -843,15 +868,13 @@ async function init(argv: string[] = []): Promise<void> {
     if (Object.keys(stray).length === 0) delete settings.mcpServers;
   }
 
-  // Prefer the PATH-resolved bin — it survives package upgrades. Fall back to
-  // the absolute dist path for local checkouts.
-  let hookCmd = `node ${selfPath} record`;
-  try {
-    execSync("command -v keyoku", { stdio: "ignore", shell: "/bin/sh" });
-    hookCmd = "keyoku record";
-  } catch {
-    /* not on PATH — keep the absolute path */
-  }
+  // Always wire hooks to the absolute durable entry path. We deliberately do
+  // NOT probe `command -v keyoku`: under `npx keyoku init` npx injects an
+  // ephemeral `keyoku` onto PATH for the lifetime of the process, so the probe
+  // returns a false positive and we'd bake in a bare `keyoku record` that can
+  // never resolve once npx exits. An absolute `node <path>` has no PATH
+  // dependence and survives upgrades (global node_modules/keyoku is stable).
+  const hookCmd = `node ${selfPath} record`;
 
   const hooks = (settings.hooks ?? {}) as Record<string, unknown>;
   const postToolUse = (Array.isArray(hooks.PostToolUse) ? hooks.PostToolUse : []) as unknown[];
