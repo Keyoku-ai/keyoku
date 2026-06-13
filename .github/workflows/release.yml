@@ -21,6 +21,17 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
-      - run: npm publish --provenance --access public
+      # Idempotent: a version already on npm (e.g. published from a maintainer's
+      # CLI) is skipped instead of hard-failing the release. With NPM_TOKEN set
+      # (or npm Trusted Publishing configured) CI publishes new versions with
+      # provenance; without it, this step no-ops on already-published versions.
+      - name: Publish to npm (skip if version already published)
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "keyoku@${VERSION}" version >/dev/null 2>&1; then
+            echo "keyoku@${VERSION} is already on npm — skipping publish."
+          else
+            npm publish --provenance --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
