@@ -223,7 +223,7 @@ describe("the convergence loop", () => {
     expect(drifted.guidance).toContain("BLOCKED");
   });
 
-  it("recording on a converged goal is rejected", async () => {
+  it("build-then-verify: a goal that converges with no records promotes no hollow workflow, but retroactive records become muscle memory", async () => {
     const goal = harness.createGoal({
       objective: "always true",
       criteria: [
@@ -234,10 +234,75 @@ describe("the convergence loop", () => {
         },
       ],
     });
-    await harness.assess(goal.slug);
-    expect(() => harness.recordAction(goal.slug, { summary: "pointless" })).toThrow(
-      /already converged/,
+    // Converges on the first assess with nothing recorded: no hollow workflow,
+    // and the guidance nudges the agent to record what it did.
+    const conv = await harness.assess(goal.slug);
+    expect(conv.converged).toBe(true);
+    expect(harness.store.listWorkflows()).toHaveLength(0);
+    expect(conv.guidance).toMatch(/goal_record/);
+
+    // Retroactive record is ACCEPTED (not thrown), does not spend the budget,
+    // keeps the goal converged, and promotes the workflow with the captured step.
+    const before = harness.getGoal(goal.slug).usedIterations;
+    const { goal: after } = harness.recordAction(goal.slug, {
+      summary: "Did the real work",
+      tool: "Bash",
+    });
+    expect(after.usedIterations).toBe(before); // retroactive: no budget spent
+    expect(after.status).toBe("converged");
+    const workflows = harness.store.listWorkflows();
+    expect(workflows).toHaveLength(1);
+    expect(workflows[0].steps.map((s) => s.summary)).toEqual(["Did the real work"]);
+  });
+
+  it("muscle memory is REUSED — a similar goal gets the converged workflow suggested", async () => {
+    const stateA = join(dir, "a.txt");
+    writeFileSync(stateA, "ready");
+    const a = harness.createGoal(
+      fileGoal(stateA, { objective: "make the deploy pipeline green", slug: "deploy-green" }),
     );
+    await harness.assess(a.slug); // converges (build-then-verify)
+    harness.recordAction(a.slug, { summary: "Bumped the node version in CI", tool: "Edit" });
+
+    const stateB = join(dir, "b.txt");
+    writeFileSync(stateB, "nope");
+    const b = harness.createGoal(
+      fileGoal(stateB, { objective: "make the deploy pipeline pass", slug: "deploy-pass" }),
+    );
+    const report = await harness.assess(b.slug);
+    expect(report.converged).toBe(false);
+    expect(report.suggestedWorkflows.map((s) => s.slug)).toContain("deploy-green");
+    expect(report.guidance).toContain("Bumped the node version in CI");
+  });
+
+  it("captures failed approaches as pitfalls and surfaces them to similar goals", async () => {
+    const state = join(dir, "p.txt");
+    writeFileSync(state, "ready");
+    const g = harness.createGoal(
+      fileGoal(state, { objective: "fix the flaky auth test", slug: "fix-flaky-auth" }),
+    );
+    harness.recordAction(g.slug, { summary: "Tried bumping the timeout", result: "failure" });
+    harness.recordAction(g.slug, {
+      summary: "Pinned the system clock",
+      result: "success",
+      tool: "Edit",
+    });
+    await harness.assess(g.slug); // converges with one failure + one success recorded
+
+    const wf = harness.store.getWorkflow("fix-flaky-auth");
+    expect(wf?.steps.map((s) => s.summary)).toEqual(["Pinned the system clock"]);
+    expect(wf?.pitfalls).toEqual(["Tried bumping the timeout"]);
+
+    const state2 = join(dir, "p2.txt");
+    writeFileSync(state2, "nope");
+    const g2 = harness.createGoal(
+      fileGoal(state2, {
+        objective: "fix the flaky auth integration test",
+        slug: "fix-flaky-auth-2",
+      }),
+    );
+    const report = await harness.assess(g2.slug);
+    expect(report.guidance).toContain("avoid (failed before): Tried bumping the timeout");
   });
 
   it("abandoned goals refuse assess and record until resumed", async () => {

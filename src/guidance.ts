@@ -73,6 +73,9 @@ export function buildGuidance(
   opts: {
     driftDetected: boolean;
     patterns?: { name: string; description: string; steps: string[]; stability: number }[];
+    // When converged: true if a reusable workflow actually exists, false if the
+    // goal converged with nothing recorded (so there's nothing to learn yet).
+    workflowPromoted?: boolean;
   },
 ): string {
   const unmet = evaluations.filter((e) => !e.pass);
@@ -83,9 +86,15 @@ export function buildGuidance(
     lines.push(
       `CONVERGED ✓ — all ${evaluations.length} criteria for '${goal.slug}' pass.`,
     );
-    lines.push(
-      "The action trace has been promoted to a reusable workflow (see workflow_list).",
-    );
+    if (opts.workflowPromoted === false) {
+      lines.push(
+        "No actions were recorded, so there is no workflow to learn yet. If you did real work to get here, call goal_record for each step NOW — records are accepted after convergence and do not spend the budget — so this run becomes a reusable workflow (muscle memory).",
+      );
+    } else {
+      lines.push(
+        "The action trace has been promoted to a reusable workflow (see workflow_list).",
+      );
+    }
     lines.push(
       "Report the outcome to the user. Re-run goal_assess any time to verify the state still holds; if it drifts, the loop resumes.",
     );
@@ -120,6 +129,9 @@ export function buildGuidance(
       lines.push(
         `  • '${s.slug}' (converged ${s.convergences}x, similarity ${s.similarity.toFixed(2)}): ${steps}`,
       );
+      if (s.pitfalls && s.pitfalls.length > 0) {
+        lines.push(`    avoid (failed before): ${s.pitfalls.join("; ")}`);
+      }
     }
   }
 
@@ -154,6 +166,9 @@ export function buildCreateGuidance(goal: Goal): string {
 }
 
 export function buildRecordGuidance(goal: Goal): string {
+  if (goal.status === "converged") {
+    return "Recorded retroactively onto the converged goal and folded into its reusable workflow (workflow_list) — this is how a build-then-verify run becomes muscle memory. Add one record per real step; retroactive records do not spend the iteration budget.";
+  }
   if (goal.status === "blocked") {
     return `Recorded — but the iteration budget (${goal.maxIterations}) is now exhausted and the goal is BLOCKED. Ask the user whether to raise the budget via goal_update or stop.`;
   }

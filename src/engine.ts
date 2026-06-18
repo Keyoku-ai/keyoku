@@ -289,7 +289,13 @@ export class Harness {
       unmetCount: evaluations.filter((e) => !e.pass).length,
       suggestedWorkflows: suggestions,
       relevantPatterns: patterns,
-      guidance: buildGuidance(fresh, evaluations, suggestions, { driftDetected, patterns }),
+      guidance: buildGuidance(fresh, evaluations, suggestions, {
+        driftDetected,
+        patterns,
+        // Honest convergence message: only claim a workflow was learned if one
+        // actually exists (a zero-action convergence has none — nudge to record).
+        workflowPromoted: converged ? this.store.getWorkflow(fresh.slug) != null : undefined,
+      }),
     };
 
     // Perception (M2): every assessment becomes episodic memory the learning
@@ -313,24 +319,28 @@ export class Harness {
 
   recordAction(ref: string, input: RecordActionInput): { record: ActionRecord; goal: Goal } {
     const goal = this.getGoal(ref);
-    if (goal.status === "blocked") {
-      throw new Error(
-        `Goal '${goal.slug}' is blocked: its iteration budget (${goal.maxIterations}) is exhausted. Raise it with goal_update {maxIterations} or abandon the goal.`,
-      );
-    }
-    if (goal.status === "converged") {
-      throw new Error(
-        `Goal '${goal.slug}' is already converged — there is nothing to act on. Run goal_assess first; if the state drifted, the goal reactivates and recording resumes.`,
-      );
-    }
     if (goal.status === "abandoned") {
       throw new Error(
         `Goal '${goal.slug}' is abandoned. Resume it with goal_update {status: 'active'} before recording actions.`,
       );
     }
-    goal.usedIterations += 1;
-    if (goal.usedIterations >= goal.maxIterations) {
-      goal.status = "blocked";
+    // A converged goal still accepts records — retroactively. This is how a
+    // "build-then-verify" run (do the work, THEN assess once) captures the trace
+    // that ACHIEVED convergence so it becomes a reusable workflow ("muscle
+    // memory" — the product's promise). Retroactive records document what already
+    // happened: they do NOT consume the corrective-action budget, do NOT change
+    // status, and re-promote the workflow so the steps are actually learned.
+    const retroactive = goal.status === "converged";
+    if (goal.status === "blocked") {
+      throw new Error(
+        `Goal '${goal.slug}' is blocked: its iteration budget (${goal.maxIterations}) is exhausted. Raise it with goal_update {maxIterations} or abandon the goal.`,
+      );
+    }
+    if (!retroactive) {
+      goal.usedIterations += 1;
+      if (goal.usedIterations >= goal.maxIterations) {
+        goal.status = "blocked";
+      }
     }
     goal.updatedAt = new Date().toISOString();
 
@@ -346,12 +356,15 @@ export class Harness {
     };
     this.store.appendRecord(record);
     this.store.saveGoal(goal);
+    // The trace of a converged goal just grew — refresh its workflow so the
+    // retroactively-captured steps become muscle memory.
+    if (retroactive) this.promoteWorkflow(goal);
     return { record, goal };
   }
 
   // ----- learning slice: trace → workflow, workflow → suggestion -----
 
-  private promoteWorkflow(goal: Goal): WorkflowArtifact {
+  private promoteWorkflow(goal: Goal): WorkflowArtifact | null {
     const trace = this.store.listRecords(goal.id);
     const steps = trace
       .filter((r) => r.result !== "failure")
@@ -360,8 +373,18 @@ export class Harness {
         ...(r.tool ? { tool: r.tool } : {}),
         result: r.result,
       }));
+    // Failed approaches are negative muscle memory — capture them so a similar
+    // goal doesn't repeat the dead ends.
+    const failures = trace.filter((r) => r.result === "failure").map((r) => r.summary);
 
     const existing = this.store.getWorkflow(goal.slug);
+    // Promote only when there is something to learn — steps, pitfalls, or an
+    // existing workflow to preserve. A truly empty convergence (nothing recorded)
+    // learns nothing and must not become a hollow artifact; a retroactive
+    // goal_record then promotes it.
+    if (steps.length === 0 && failures.length === 0 && !existing) return null;
+    // Deduped, newest-last, capped — pitfalls accumulate across re-convergences.
+    const pitfalls = [...new Set([...(existing?.pitfalls ?? []), ...failures])].slice(-20);
     const now = new Date().toISOString();
     const workflow: WorkflowArtifact = existing
       ? {
@@ -371,6 +394,7 @@ export class Harness {
           // (steady-state check) shouldn't erase the learned steps.
           steps: steps.length > 0 ? steps : existing.steps,
           criteria: goal.criteria.map((c) => c.description),
+          ...(pitfalls.length > 0 ? { pitfalls } : {}),
           stats: {
             convergences: existing.stats.convergences + 1,
             // The trace is cumulative (all records ever), so this is an
@@ -385,6 +409,7 @@ export class Harness {
           objective: goal.objective,
           steps,
           criteria: goal.criteria.map((c) => c.description),
+          ...(pitfalls.length > 0 ? { pitfalls } : {}),
           stats: { convergences: 1, totalActions: trace.length },
           createdAt: now,
           updatedAt: now,
@@ -397,13 +422,14 @@ export class Harness {
     const goalTokens = tokens(`${goal.objective} ${goal.slug}`);
     return this.store
       .listWorkflows()
-      .filter((w) => w.slug !== goal.slug)
+      .filter((w) => w.slug !== goal.slug && w.steps.length > 0)
       .map((w) => ({
         slug: w.slug,
         objective: w.objective,
         similarity: jaccard(goalTokens, tokens(`${w.objective} ${w.slug}`)),
         convergences: w.stats.convergences,
         steps: w.steps,
+        ...(w.pitfalls && w.pitfalls.length > 0 ? { pitfalls: w.pitfalls } : {}),
       }))
       .filter((s) => s.similarity >= 0.2)
       .sort((a, b) => b.similarity - a.similarity)

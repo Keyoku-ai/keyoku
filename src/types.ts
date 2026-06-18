@@ -248,6 +248,10 @@ export interface WorkflowArtifact {
   steps: WorkflowStep[];
   /** Descriptions of the criteria this workflow satisfied. */
   criteria: string[];
+  /** Approaches that FAILED on the way to convergence — negative muscle memory,
+   *  so a similar goal doesn't repeat the dead ends. Optional for back-compat with
+   *  workflows persisted before this field existed. */
+  pitfalls?: string[];
   stats: {
     /** Times a goal with this slug converged. Acts as the stability score. */
     convergences: number;
@@ -263,6 +267,7 @@ export interface WorkflowSuggestion {
   similarity: number;
   convergences: number;
   steps: WorkflowStep[];
+  pitfalls?: string[];
 }
 
 // ---------------------------------------------------------------------------

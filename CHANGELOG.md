@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+## 2.1.0 — 2026-06-18
+
+- **Muscle memory for build-then-verify runs** (closes a gap vs. the "converged
+  goals become reusable workflows" promise): `goal_record` is now **accepted on a
+  converged goal** — retroactively capturing the trace that *achieved* convergence
+  (the common do-the-work-then-assess-once pattern). Retroactive records don't spend
+  the iteration budget, don't change status, and re-promote the workflow. A goal that
+  converges with **no** recorded actions no longer promotes a **hollow (stepless)
+  workflow**, and the converged guidance is honest about it — nudging `goal_record`
+  so the run still becomes a reusable workflow. Stepless workflows are never
+  suggested. (engine + guidance; regression test in `tests/engine.test.ts`.)
+- **Pitfalls — negative muscle memory.** Workflows now capture the approaches that
+  **failed** on the way to convergence (`result: "failure"` records), accumulated and
+  deduped across re-convergences. When a similar goal is assessed, the guidance surfaces
+  them as `avoid (failed before): …` alongside the steps to follow — so an agent doesn't
+  repeat a known dead end. Verified end-to-end through the MCP server (capture → reuse).
+- **Built-in quality validation.** A protocol-level e2e regression test
+  (`tests/mcp-e2e.test.ts`) drives the real MCP server over stdio through the whole
+  build-then-verify → reuse → pitfalls loop. A deterministic, CI-gating **eval**
+  (`npm run eval`, `evals/`) measures muscle-memory retrieval quality —
+  precision@1, pitfall-surface rate, and false-positive rate — and fails the build on a
+  regression, with a generated `evals/REPORT.md`.
+
 - **Codex out of the box**: `keyoku import` reads `~/.codex/sessions`
   rollouts (both line shapes, cwd-aware, redacted); `keyoku init` wires the
   MCP server into `~/.codex/config.toml`; `keyoku export --agents-md` bakes

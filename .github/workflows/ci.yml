@@ -17,3 +17,4 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      - run: npm run eval # gate on muscle-memory retrieval quality, not just correctness
