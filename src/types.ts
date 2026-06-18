@@ -228,6 +228,27 @@ export interface ActionRecord {
   tool?: string;
   result: ActionResult;
   at: string;
+  /** Provenance: "recorded" = an explicit goal_record corrective action;
+   *  "activity" = captured live from the activity stream while this goal was
+   *  the focus (goal_focus). Absent means recorded (back-compat). */
+  source?: "recorded" | "activity";
+}
+
+// ---------------------------------------------------------------------------
+// Focus — the live-capture pointer. While a goal is "focused" (goal_focus),
+// the activity recorder also appends each real action to that goal's trace, so
+// build-then-verify runs become muscle memory live, not just at convergence.
+// Scoped so concurrent sessions/projects sharing one ~/.keyoku don't bleed in.
+// ---------------------------------------------------------------------------
+
+export interface FocusState {
+  goalId: string;
+  goalSlug: string;
+  /** Project dir where focus was set; auto-record only captures matching cwds. */
+  cwd?: string;
+  /** Session that set focus; auto-record prefers matching sessions. */
+  sessionId?: string;
+  at: string;
 }
 
 // ---------------------------------------------------------------------------

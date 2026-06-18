@@ -11,11 +11,13 @@ import { newId, slugify, type Store } from "./store.js";
 import type {
   ActionRecord,
   ActionResult,
+  ActivityEvent,
   Autonomy,
   ConvergenceReport,
   Criterion,
   CriterionEvaluation,
   CriterionInput,
+  FocusState,
   Goal,
   WorkflowArtifact,
   WorkflowStep,
@@ -232,7 +234,43 @@ export class Harness {
   deleteGoal(ref: string): Goal {
     const goal = this.getGoal(ref);
     this.store.deleteGoal(goal.id);
+    const focus = this.store.getFocus();
+    if (focus && focus.goalId === goal.id) this.store.setFocus(null);
     return goal;
+  }
+
+  // ----- focus (live capture) -----
+
+  /** Mark a goal as the live-capture focus: while focused, the activity
+   * recorder also appends each real action to this goal's trace (source:
+   * "activity"), so the run becomes muscle memory live. Scoped to the given
+   * cwd/session so concurrent work on one ~/.keyoku doesn't bleed in. */
+  setFocus(ref: string, scope: { cwd?: string; sessionId?: string } = {}): FocusState {
+    const goal = this.getGoal(ref);
+    if (goal.status !== "active") {
+      throw new Error(
+        `Can only focus an active goal — '${goal.slug}' is ${goal.status}. Reactivate it first if you mean to keep working on it.`,
+      );
+    }
+    const focus: FocusState = {
+      goalId: goal.id,
+      goalSlug: goal.slug,
+      ...(scope.cwd ? { cwd: scope.cwd } : {}),
+      ...(scope.sessionId ? { sessionId: scope.sessionId } : {}),
+      at: new Date().toISOString(),
+    };
+    this.store.setFocus(focus);
+    return focus;
+  }
+
+  clearFocus(): FocusState | null {
+    const focus = this.store.getFocus();
+    this.store.setFocus(null);
+    return focus;
+  }
+
+  getFocus(): FocusState | null {
+    return this.store.getFocus();
   }
 
   // ----- the assess step -----
@@ -310,6 +348,9 @@ export class Harness {
       fresh.status = "converged";
       fresh.convergedAt = now;
       this.promoteWorkflow(fresh);
+      // Focus is per-goal intent; once converged, stop live-capturing to it.
+      const focus = this.store.getFocus();
+      if (focus && focus.goalId === fresh.id) this.store.setFocus(null);
     } else if (driftDetected) {
       // Reconverging after drift still costs iterations — an exhausted budget
       // means the regression needs a human, not a silently re-armed agent.
@@ -438,6 +479,7 @@ export class Harness {
         summary: r.summary,
         ...(r.tool ? { tool: r.tool } : {}),
         result: r.result,
+        ...(r.source ? { source: r.source } : {}),
       }));
     // Failed approaches are negative muscle memory — capture them so a similar
     // goal doesn't repeat the dead ends.
@@ -657,5 +699,59 @@ export class Harness {
       .map((sl) => bySlug.get(sl))
       .filter((s): s is WorkflowSuggestion => Boolean(s));
     return ordered.length > 0 ? ordered : suggestions;
+  }
+}
+
+/**
+ * Live capture: if a goal is focused (goal_focus) and this activity event is
+ * real work that belongs to the focus, append it to the goal's trace as a
+ * source:"activity" record. Called from BOTH the PostToolUse hook and the
+ * activity_record MCP tool so either entry point feeds muscle memory live.
+ *
+ * Safe by construction: only ACTION events (never inspection or the harness's
+ * own mcp__keyoku__* calls), only ACTIVE goals, scoped to the focus's session
+ * or cwd-subtree so concurrent work on one ~/.keyoku doesn't bleed in, deduped
+ * against the previous record, and appended WITHOUT spending the corrective
+ * iteration budget (observed ≠ corrective). Never throws — a recording failure
+ * must not break the hook.
+ */
+export function autoRecordToFocusGoal(store: Store, event: ActivityEvent): void {
+  try {
+    const focus = store.getFocus();
+    if (!focus) return;
+    const tool = event.tool ?? "";
+    if (tool.startsWith("mcp__keyoku__") || tool.startsWith("keyoku")) return;
+    if (!isActionEvent(event)) return;
+    // Attribution: prefer an exact session match; else require the event's cwd
+    // to sit in the focus cwd-subtree. An unscoped focus (no cwd/session)
+    // accepts everything — best-effort.
+    const sessionMatch = focus.sessionId !== undefined && event.sessionId === focus.sessionId;
+    const a = event.cwd;
+    const b = focus.cwd;
+    const cwdMatch =
+      b !== undefined && a !== undefined && (a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`));
+    const unscoped = focus.sessionId === undefined && focus.cwd === undefined;
+    if (!sessionMatch && !cwdMatch && !unscoped) return;
+    const goal = store.getGoal(focus.goalId);
+    if (!goal || goal.status !== "active") return; // never live-record to a non-active goal
+    const summary = event.summary.slice(0, 200);
+    // Dedup against the immediately previous record (a formatter saving one file
+    // ten times is one step).
+    const recs = store.listRecords(goal.id);
+    const last = recs[recs.length - 1];
+    if (last && last.summary === summary && last.tool === event.tool) return;
+    store.appendRecord({
+      id: newId("act"),
+      goalId: goal.id,
+      iteration: goal.usedIterations, // observed, not a corrective iteration
+      summary,
+      ...(event.detail ? { detail: event.detail.slice(0, 500) } : {}),
+      ...(event.tool ? { tool: event.tool } : {}),
+      result: "success",
+      source: "activity",
+      at: event.at,
+    });
+  } catch {
+    // best-effort: recording must never break the hook
   }
 }

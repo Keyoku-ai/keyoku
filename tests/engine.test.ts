@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { ConnectorManager } from "../src/connectors.js";
-import { Harness, type CreateGoalInput } from "../src/engine.js";
+import { Harness, autoRecordToFocusGoal, type CreateGoalInput } from "../src/engine.js";
 import { Store } from "../src/store.js";
 import type { SlmProvider } from "../src/slm.js";
 import type { ActivityEvent } from "../src/types.js";
@@ -626,5 +626,71 @@ describe("workflow suggestions", () => {
     expect(report.suggestedWorkflows).toHaveLength(1);
     expect(report.suggestedWorkflows[0].slug).toBe(done.slug);
     expect(report.guidance).toContain("run terraform apply");
+  });
+});
+
+describe("live capture (goal_focus + auto-record)", () => {
+  const echoGoal = (objective: string): CreateGoalInput => ({
+    objective,
+    criteria: [
+      {
+        description: "echo ok",
+        probe: { kind: "command", run: "echo ok", parse: "text" },
+        assert: { op: "eq", value: "ok" },
+      },
+    ],
+  });
+  let seq = 0;
+  const ev = (over: Partial<ActivityEvent>): ActivityEvent => ({
+    id: `ev${seq++}`,
+    type: "tool_use",
+    summary: "x",
+    at: new Date().toISOString(),
+    ...over,
+  });
+
+  it("captures real actions into the focused goal's trace, ignoring noise and out-of-scope work", () => {
+    const goal = harness.createGoal(echoGoal("live capture"));
+    harness.setFocus(goal.slug, { cwd: "/proj-a" });
+
+    autoRecordToFocusGoal(harness.store, ev({ type: "file_change", tool: "Edit", summary: "Edit: a.ts", cwd: "/proj-a" }));
+    autoRecordToFocusGoal(harness.store, ev({ type: "shell", tool: "Bash", summary: "Bash: make", detail: "make", cwd: "/proj-a/sub" })); // subdir kept
+    autoRecordToFocusGoal(harness.store, ev({ tool: "Read", summary: "Read: a.ts", cwd: "/proj-a" })); // inspection — ignored
+    autoRecordToFocusGoal(harness.store, ev({ type: "shell", tool: "Bash", summary: "Bash: ls", detail: "ls -la", cwd: "/proj-a" })); // inspection cmd — ignored
+    autoRecordToFocusGoal(harness.store, ev({ tool: "mcp__keyoku__goal_assess", summary: "assess", cwd: "/proj-a" })); // bookkeeping — ignored
+    autoRecordToFocusGoal(harness.store, ev({ type: "file_change", tool: "Edit", summary: "Edit: other.ts", cwd: "/proj-b" })); // wrong project — ignored
+
+    const recs = harness.store.listRecords(goal.id);
+    expect(recs.map((r) => r.summary)).toEqual(["Edit: a.ts", "Bash: make"]);
+    expect(recs.every((r) => r.source === "activity")).toBe(true);
+    // Auto-records must NOT spend the corrective-iteration budget.
+    expect(harness.getGoal(goal.slug).usedIterations).toBe(0);
+  });
+
+  it("dedups the immediately repeated action", () => {
+    const goal = harness.createGoal(echoGoal("dedup"));
+    harness.setFocus(goal.slug, { cwd: "/p" });
+    autoRecordToFocusGoal(harness.store, ev({ type: "file_change", tool: "Edit", summary: "Edit: x.ts", cwd: "/p" }));
+    autoRecordToFocusGoal(harness.store, ev({ type: "file_change", tool: "Edit", summary: "Edit: x.ts", cwd: "/p" }));
+    expect(harness.store.listRecords(goal.id)).toHaveLength(1);
+  });
+
+  it("a focused goal that converges promotes a workflow from live steps and clears focus", async () => {
+    const goal = harness.createGoal(echoGoal("focus converge"));
+    harness.setFocus(goal.slug, { cwd: "/p" });
+    autoRecordToFocusGoal(harness.store, ev({ type: "shell", tool: "Bash", summary: "Bash: build", detail: "make", cwd: "/p" }));
+
+    const conv = await harness.assess(goal.slug);
+    expect(conv.converged).toBe(true);
+    const wf = harness.store.getWorkflow(goal.slug);
+    expect(wf?.steps.map((s) => s.summary)).toEqual(["Bash: build"]);
+    expect(wf?.steps.every((s) => s.source === "activity")).toBe(true);
+    expect(harness.getFocus()).toBeNull(); // cleared on convergence
+  });
+
+  it("refuses to focus a non-active goal", () => {
+    const goal = harness.createGoal(echoGoal("inactive"));
+    harness.updateGoal(goal.slug, { status: "abandoned" });
+    expect(() => harness.setFocus(goal.slug)).toThrow(/active/);
   });
 });

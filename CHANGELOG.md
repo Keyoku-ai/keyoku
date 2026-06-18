@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 2.6.0 — 2026-06-18
+
+- **Live muscle memory — `goal_focus` + auto-record** (capture lane). Until now a
+  build-then-verify run only became a workflow at convergence (via activity
+  backfill). Now you can declare intent up front: `goal_focus { goal }` (MCP) or
+  `keyoku focus <goal>` (CLI) marks a goal as the live-capture target, and from
+  then on every **real action** (Bash/Edit/Write/connector — never inspection or
+  the harness's own `mcp__keyoku__*` calls) is appended to that goal's trace **as
+  it happens**, labeled `source:"activity"`, **without** spending the corrective
+  iteration budget. Capture is **scoped** to the focus's session/cwd-subtree so
+  concurrent work on one `~/.keyoku` never bleeds in, deduped against the previous
+  action, and **auto-clears on convergence** (or `goal_unfocus` / `keyoku focus
+  --clear`). An explicit `goal_record` still wins; backfill remains the safety net
+  when nothing was focused. New `goal_focus`/`goal_unfocus` MCP tools, `keyoku
+  focus` CLI, `ActionRecord.source`, focus persistence in the store. Regression
+  tests in `tests/engine.test.ts`.
+
 ## 2.5.0 — 2026-06-18
 
 - **Backfill attribution + long-build fidelity** (capture lane, follow-up to the

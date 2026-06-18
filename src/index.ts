@@ -110,6 +110,34 @@ async function assess(ref: string | undefined): Promise<void> {
   }
 }
 
+async function focusCmd(rest: string[]): Promise<void> {
+  const harness = buildHarness();
+  try {
+    const arg = rest[0];
+    if (arg === "--clear" || arg === "clear") {
+      const prev = harness.clearFocus();
+      console.log(prev ? `Focus cleared (was '${prev.goalSlug}').` : "No focus was set.");
+      return;
+    }
+    if (!arg) {
+      const f = harness.getFocus();
+      console.log(
+        f
+          ? `Focused: ${f.goalSlug}${f.cwd ? ` (cwd ${f.cwd})` : ""} since ${f.at}`
+          : "No goal focused. Set one with: keyoku focus <goal>",
+      );
+      return;
+    }
+    const f = harness.setFocus(arg, { cwd: process.cwd() });
+    console.log(`Focused '${f.goalSlug}'. Actions under ${f.cwd ?? "any dir"} are now captured into its trace live.`);
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exitCode = 2;
+  } finally {
+    await harness.connectors.closeAll();
+  }
+}
+
 async function watch(ref: string | undefined, argv: string[]): Promise<void> {
   const all = ref === "--all" || argv.includes("--all");
   if (!all && (!ref || ref.startsWith("-"))) {
@@ -745,8 +773,12 @@ async function record(): Promise<void> {
   );
   if (!event) return;
   const { enrichWithEntities } = await import("./activity.js");
+  const { autoRecordToFocusGoal } = await import("./engine.js");
   const store = new Store();
-  store.appendActivity(enrichWithEntities(event));
+  const enriched = enrichWithEntities(event);
+  store.appendActivity(enriched);
+  // Live muscle memory: if a goal is focused, capture this action into its trace.
+  autoRecordToFocusGoal(store, enriched);
 
   // Proactive surfacing: every Nth recorded event, check whether a pattern
   // has newly crossed the suggestion threshold and inject a one-time nudge
@@ -1049,6 +1081,8 @@ async function main(): Promise<void> {
       return watch(rest[0], rest);
     case "learn":
       return learn();
+    case "focus":
+      return focusCmd(rest);
     case "record":
       return record();
     case "import":

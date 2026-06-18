@@ -8,6 +8,7 @@ import type {
   ApprovalRequest,
   AuditEntry,
   Connector,
+  FocusState,
   Goal,
   KnowledgeEntry,
   Observation,
@@ -144,6 +145,33 @@ export class Store {
     for (let i = 2; ; i++) {
       if (!taken.has(`${base}-${i}`)) return `${base}-${i}`;
     }
+  }
+
+  // ----- focus (live-capture pointer; single small JSON, last-writer-wins) -----
+
+  private focusFile(): string {
+    return join(this.dir, "focus.json");
+  }
+
+  getFocus(): FocusState | null {
+    const path = this.focusFile();
+    if (!existsSync(path)) return null;
+    try {
+      return JSON.parse(readFileSync(path, "utf8")) as FocusState;
+    } catch {
+      return null; // a corrupt focus pointer must never break recording
+    }
+  }
+
+  setFocus(focus: FocusState | null): void {
+    const path = this.focusFile();
+    if (focus === null) {
+      rmSync(path, { force: true });
+      return;
+    }
+    const tmp = `${path}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify(focus, null, 2), { mode: FILE_MODE });
+    renameSync(tmp, path);
   }
 
   // ----- action records (append-only JSONL per goal) -----

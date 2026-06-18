@@ -12,6 +12,7 @@ import { detectPatterns, draftStep, enrichWithEntities, redactSecrets, type Acti
 import { Brain } from "./brain.js";
 import { loadSurfaced, saveSurfaced } from "./nudge.js";
 import { redactConnector } from "./connectors.js";
+import { autoRecordToFocusGoal } from "./engine.js";
 import type { Harness } from "./engine.js";
 import { executeBashStep, executeMcpStep } from "./executor.js";
 import { buildCreateGuidance, buildRecordGuidance, PROTOCOL } from "./guidance.js";
@@ -298,6 +299,53 @@ export function buildServer(harness: Harness): McpServer {
           goalStatus: goal.status,
           guidance: buildRecordGuidance(goal),
         });
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "goal_focus",
+    {
+      title: "Focus a goal for live capture",
+      description:
+        "Declare that you are now working toward this goal. While focused, every real action you take (Bash/Edit/Write/connector — not inspection) is captured into the goal's trace LIVE as a source:'activity' record, so a build-then-verify run becomes a reusable workflow without you calling goal_record by hand. Capture is scoped to this session/project so it won't absorb other work. Clears automatically when the goal converges; call goal_unfocus to stop early.",
+      inputSchema: {
+        goal: GOAL_REF,
+        cwd: z.string().optional().describe("Project dir to scope capture to (default: the server's cwd)."),
+        sessionId: z.string().optional().describe("Session to scope capture to."),
+      },
+    },
+    async ({ goal: ref, cwd, sessionId }) => {
+      try {
+        const focus = harness.setFocus(ref, {
+          cwd: cwd ?? process.cwd(),
+          ...(sessionId ? { sessionId } : {}),
+        });
+        logAudit("goal_focus", focus.goalSlug, focus.cwd ?? "", true);
+        return json({
+          focused: focus,
+          guidance: `Now capturing actions toward '${focus.goalSlug}' live (scope: ${focus.cwd ?? "any"}). They land in the trace as source:"activity" and become the learned workflow on convergence. Call goal_unfocus to stop.`,
+        });
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "goal_unfocus",
+    {
+      title: "Stop live capture",
+      description: "Stop capturing activity into the focused goal's trace.",
+      inputSchema: {},
+    },
+    async () => {
+      try {
+        const prev = harness.clearFocus();
+        logAudit("goal_unfocus", prev?.goalSlug ?? "", "", true);
+        return json({ cleared: prev?.goalSlug ?? null });
       } catch (err) {
         return fail(err);
       }
@@ -964,6 +1012,8 @@ export function buildServer(harness: Harness): McpServer {
         };
         event = enrichWithEntities(event);
         harness.store.appendActivity(event);
+        // Live muscle memory: if a goal is focused, capture this action too.
+        autoRecordToFocusGoal(harness.store, event);
         return json({ recorded: true, id: event.id });
       } catch (err) {
         return fail(err);

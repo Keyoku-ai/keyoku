@@ -103,6 +103,7 @@ Every execution persists step-by-step — crash-safe, fully inspectable via `exe
 | `execution_complete` / `execution_cancel` / `execution_list` | Resume, stop, browse runs |
 | `knowledge_submit` / `knowledge_query` | The context layer — research, conventions, practice |
 | `goal_create` / `goal_assess` / … | Goals with machine-checkable success criteria |
+| `goal_focus` / `goal_unfocus` | Live capture — record real actions into a goal's trace as you work |
 | `connector_add` / `connector_call` / … | Plug in external MCP servers (GitHub, GCP, …) with autonomy gating |
 
 ## CLI
@@ -116,6 +117,7 @@ keyoku pause | resume   Privacy switch: stop/start all recording and injection
 keyoku doctor           Verify hooks, MCP registrations, engine, and activity health
 keyoku status           Show goals, templates, connectors
 keyoku learn            Mine patterns from the activity log
+keyoku focus <goal>     Live-capture actions into a goal's trace (--clear to stop; no arg to show)
 keyoku assess <goal>    One-shot convergence check
 keyoku watch <goal>     Re-assess on an interval
 keyoku approvals        Approve/deny gated connector calls
