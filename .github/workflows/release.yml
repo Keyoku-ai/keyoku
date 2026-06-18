@@ -15,23 +15,35 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           registry-url: https://registry.npmjs.org
+      # npm >= 11.5 is required for OIDC Trusted Publishing (tokenless + provenance).
+      - run: npm install -g npm@latest
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
-      # Idempotent: a version already on npm (e.g. published from a maintainer's
-      # CLI) is skipped instead of hard-failing the release. With NPM_TOKEN set
-      # (or npm Trusted Publishing configured) CI publishes new versions with
-      # provenance; without it, this step no-ops on already-published versions.
-      - name: Publish to npm (skip if version already published)
+      - run: npm run eval # quality gate: muscle-memory retrieval, not just correctness
+      # Publish path, in order of preference:
+      #   1. npm Trusted Publishing (OIDC, tokenless, provenance) — configure once at
+      #      npmjs.com → package 'keyoku' → Settings → Trusted Publishing → add this repo
+      #      (Keyoku-ai/keyoku) + workflow 'release.yml'. Then this just works.
+      #   2. NPM_TOKEN secret (Automation type) as a fallback.
+      # Idempotent (skips a version already on npm), and degrades to a loud warning
+      # instead of a red build when neither auth path is configured (maintainer then
+      # publishes via CLI). It never silently claims success.
+      - name: Publish to npm
         run: |
           VERSION=$(node -p "require('./package.json').version")
           if npm view "keyoku@${VERSION}" version >/dev/null 2>&1; then
-            echo "keyoku@${VERSION} is already on npm — skipping publish."
+            echo "keyoku@${VERSION} already on npm — skipping publish."
+            exit 0
+          fi
+          if npm publish --provenance --access public; then
+            echo "Published keyoku@${VERSION} with provenance."
           else
-            npm publish --provenance --access public
+            echo "::warning title=npm publish skipped::Could not publish keyoku@${VERSION} — enable Trusted Publishing for Keyoku-ai/keyoku (release.yml) at npmjs.com, or set the NPM_TOKEN secret. Until then publish from the maintainer CLI: npm publish --access public"
+            exit 0
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
