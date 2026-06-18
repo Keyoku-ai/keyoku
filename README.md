@@ -152,6 +152,7 @@ The division of labor: **heuristics** generate candidates for free, the **small 
 | `KEYOKU_WF_MIN_SIMILARITY` | `0.2` | Jaccard floor for suggesting a learned workflow on a new goal |
 | `KEYOKU_WF_SUGGEST_LIMIT` | `2` | Max learned workflows surfaced per assessment |
 | `KEYOKU_BACKFILL_LOOKBACK_MIN` | `45` | Minutes before a goal's creation to scan for build-then-verify work |
+| `KEYOKU_BACKFILL_HEAD_STEPS` | `8` | Setup steps kept from the front when a backfilled workflow is capped |
 | `KEYOKU_DEBUG` | — | Full error stacks |
 
 ## Security

@@ -69,6 +69,31 @@ const MAX_BACKFILL_STEPS = 30;
 // actions sit just before createdAt. (Real-data check: two converged goals had
 // 2–4s lifetimes because all work preceded goal_create.) A lookback knob.
 const BACKFILL_LOOKBACK_MS = envInt("KEYOKU_BACKFILL_LOOKBACK_MIN", 45) * 60_000;
+// When more steps are inferred than the cap allows, keep the first HEAD (setup)
+// plus the most recent tail — a long build shouldn't lose how it was set up.
+const BACKFILL_HEAD_STEPS = envInt("KEYOKU_BACKFILL_HEAD_STEPS", 8);
+
+/** Same project subtree: equal, or one is a path-prefix of the other — so
+ * monorepo subdirs stay together while sibling projects don't merge. */
+function sameProject(a: string, b: string): boolean {
+  return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
+}
+
+/** Cap a step list keeping the first `head` (setup) and the most recent
+ * `max - head` (build/verify); a marker records the omission so the draft stays
+ * honest about the gap. Lists at or under `max` pass through unchanged. */
+function capHeadTail(steps: WorkflowStep[], max: number, head: number): WorkflowStep[] {
+  if (steps.length <= max) return steps;
+  const h = Math.max(0, Math.min(head, max - 1));
+  const tail = steps.slice(-(max - h));
+  const omitted = steps.length - h - tail.length;
+  const marker: WorkflowStep = {
+    summary: `… ${omitted} intermediate step${omitted === 1 ? "" : "s"} omitted …`,
+    result: "success",
+    source: "activity",
+  };
+  return [...steps.slice(0, h), marker, ...tail];
+}
 
 const MAX_ACTUAL_CHARS = 2_000;
 
@@ -471,7 +496,8 @@ export class Harness {
    * (build-then-verify). Scope = action events — mutating Bash / Edit / Write /
    * connector calls, never inspection or the harness's own bookkeeping —
    * within [createdAt − lookback, convergedAt], narrowed to the dominant session
-   * so concurrent projects don't bleed in. Deterministic and synchronous: it lifts
+   * and cwd-subtree so concurrent projects don't bleed in, then capped head+tail
+   * so a long build keeps its setup. Deterministic and synchronous: it lifts
    * what actually happened from the activity log, it does not decide anything.
    * The log interleaves concurrent sessions, so this is a best-effort draft
    * (labeled source:"activity"), not a verified trace; the SLM-backed
@@ -517,7 +543,27 @@ export class Harness {
         dominant = s;
       }
     }
-    const scoped = candidates.filter((e) => (e.sessionId ?? "_") === dominant);
+    let scoped = candidates.filter((e) => (e.sessionId ?? "_") === dominant);
+    // Within that session, narrow to the dominant cwd-subtree for precise
+    // attribution — one session can touch several projects. Events without a cwd
+    // are kept: we can't attribute them, and dropping them would lose real work.
+    const withCwd = scoped.filter((e) => e.cwd);
+    if (withCwd.length > 0) {
+      const perCwd = new Map<string, number>();
+      for (const e of withCwd) {
+        const c = e.cwd as string;
+        perCwd.set(c, (perCwd.get(c) ?? 0) + 1);
+      }
+      let domCwd = "";
+      let bestCwd = -1;
+      for (const [c, n] of perCwd) {
+        if (n > bestCwd) {
+          bestCwd = n;
+          domCwd = c;
+        }
+      }
+      scoped = scoped.filter((e) => !e.cwd || sameProject(e.cwd, domCwd));
+    }
     // Collapse consecutive identical actions (a formatter rewriting one file ten
     // times is one step, not ten), then cap to the most recent steps.
     const steps: WorkflowStep[] = [];
@@ -534,7 +580,7 @@ export class Harness {
         source: "activity" as const,
       });
     }
-    return steps.slice(-MAX_BACKFILL_STEPS);
+    return capHeadTail(steps, MAX_BACKFILL_STEPS, BACKFILL_HEAD_STEPS);
   }
 
   suggestWorkflows(goal: Goal): WorkflowSuggestion[] {

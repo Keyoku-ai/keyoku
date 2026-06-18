@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 2.5.0 — 2026-06-18
+
+- **Backfill attribution + long-build fidelity** (capture lane, follow-up to the
+  v2.2.0 activity-backfill). Two refinements:
+  - **cwd-subtree scoping** on top of the existing dominant-session scoping — one
+    session can touch several projects, so within the dominant session the
+    backfill now keeps only the dominant cwd's subtree (monorepo subdirs stay,
+    sibling projects drop). Events with no cwd are kept (unattributable, not noise).
+  - **Head + tail capping** — instead of keeping only the most recent
+    `MAX_BACKFILL_STEPS`, keep the first `KEYOKU_BACKFILL_HEAD_STEPS` (default 8,
+    the setup) plus the recent tail, with an omission marker between, so a long
+    build doesn't lose how it was set up.
+  Both stay deterministic and synchronous; the convergence core is untouched.
+  Regression tests in `tests/engine.test.ts`.
+
 ## 2.4.0 — 2026-06-18
 
 - **Lite-model re-rank is now ON by default (cached).** Supersedes 2.3.0's opt-in: when a

@@ -331,6 +331,77 @@ describe("the convergence loop", () => {
     expect(wf?.steps.map((s) => s.summary)).toEqual(["Edit: src/early.ts", "Bash: npm run build"]);
   });
 
+  it("backfill scopes to the dominant cwd-subtree within the session", async () => {
+    const goal = harness.createGoal({
+      objective: "cwd scoping",
+      criteria: [
+        {
+          description: "echo ok",
+          probe: { kind: "command", run: "echo ok", parse: "text" },
+          assert: { op: "eq", value: "ok" },
+        },
+      ],
+    });
+    const created = Date.parse(harness.getGoal(goal.slug).createdAt);
+    const at = (deltaMs: number): string => new Date(created + deltaMs).toISOString();
+    let seq = 0;
+    const ev = (over: Partial<ActivityEvent>): ActivityEvent => ({
+      id: `e${seq++}`,
+      type: "tool_use",
+      summary: "x",
+      at: at(-1_000),
+      sessionId: "s1",
+      ...over,
+    });
+    // Dominant project /proj-a (2 events) + a subdir of it — all MUST be kept:
+    harness.store.appendActivity(ev({ type: "file_change", tool: "Edit", summary: "Edit: a1.ts", cwd: "/proj-a", at: at(-5_000) }));
+    harness.store.appendActivity(ev({ type: "file_change", tool: "Edit", summary: "Edit: a2.ts", cwd: "/proj-a", at: at(-4_000) }));
+    harness.store.appendActivity(ev({ type: "shell", tool: "Bash", summary: "Bash: build a", detail: "make", cwd: "/proj-a/sub", at: at(-3_000) }));
+    // Sibling project /proj-b — MUST be dropped:
+    harness.store.appendActivity(ev({ type: "file_change", tool: "Edit", summary: "Edit: b1.ts", cwd: "/proj-b", at: at(-2_000) }));
+    // No cwd — unattributable, MUST be kept:
+    harness.store.appendActivity(ev({ type: "shell", tool: "Bash", summary: "Bash: no cwd step", detail: "node deploy.js", at: at(-1_500) }));
+
+    const conv = await harness.assess(goal.slug);
+    expect(conv.converged).toBe(true);
+    const summaries = harness.store.getWorkflow(goal.slug)?.steps.map((s) => s.summary) ?? [];
+    expect(summaries).toEqual(["Edit: a1.ts", "Edit: a2.ts", "Bash: build a", "Bash: no cwd step"]);
+    expect(summaries).not.toContain("Edit: b1.ts");
+  });
+
+  it("backfill keeps first-N setup steps and the recent tail when capped", async () => {
+    const goal = harness.createGoal({
+      objective: "head tail cap",
+      criteria: [
+        {
+          description: "echo ok",
+          probe: { kind: "command", run: "echo ok", parse: "text" },
+          assert: { op: "eq", value: "ok" },
+        },
+      ],
+    });
+    const created = Date.parse(harness.getGoal(goal.slug).createdAt);
+    for (let i = 0; i < 50; i++) {
+      harness.store.appendActivity({
+        id: `e${i}`,
+        type: "shell",
+        tool: "Bash",
+        summary: `Bash: step ${String(i).padStart(2, "0")}`,
+        detail: `cmd ${i}`,
+        sessionId: "s1",
+        at: new Date(created - (50 - i) * 1_000).toISOString(),
+      });
+    }
+    const conv = await harness.assess(goal.slug);
+    expect(conv.converged).toBe(true);
+    const steps = harness.store.getWorkflow(goal.slug)?.steps ?? [];
+    expect(steps.length).toBe(31); // 30 cap + 1 omission marker
+    expect(steps[0].summary).toBe("Bash: step 00"); // setup preserved
+    expect(steps[7].summary).toBe("Bash: step 07");
+    expect(steps.some((s) => /omitted/.test(s.summary))).toBe(true);
+    expect(steps[steps.length - 1].summary).toBe("Bash: step 49"); // recent tail
+  });
+
   it("muscle memory is REUSED — a similar goal gets the converged workflow suggested", async () => {
     const stateA = join(dir, "a.txt");
     writeFileSync(stateA, "ready");
