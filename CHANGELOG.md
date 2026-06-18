@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 2.7.0 — 2026-06-18
+
 - **Replayable muscle memory — learned steps carry the command** (capture lane).
   `WorkflowStep` gained `detail`, and both the backfill and the recorded/live
   paths now carry the action's actual command into the learned step instead of
