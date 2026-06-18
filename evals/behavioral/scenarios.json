@@ -1,0 +1,39 @@
+{
+  "_doc": "Behavioral-lift scenarios. Each goal has PROJECT-SPECIFIC muscle memory (a non-obvious good step + a real dead-end pitfall) that a naive agent cannot guess. The equipped condition receives exactly what keyoku's assess guidance injects. We measure whether the equipped plan adopts the good step and guards the pitfall, vs naive.",
+  "S-DEPLOY": {
+    "goal": "deploy the production service to kubernetes",
+    "memory": {
+      "slug": "deploy-staging-k8s",
+      "convergences": 3,
+      "similarity": 0.61,
+      "step": "run `make preflight` first (the repo's required pre-deploy gate), then apply the chart",
+      "pitfall": "deployed without running make preflight — shipped a broken config"
+    },
+    "good_signal": ["preflight"],
+    "pitfall_signal": ["preflight"]
+  },
+  "S-DB": {
+    "goal": "migrate the orders table to the new schema",
+    "memory": {
+      "slug": "migrate-postgres-schema",
+      "convergences": 2,
+      "similarity": 0.55,
+      "step": "snapshot to the `migrations-backup` bucket first, then run the migration",
+      "pitfall": "ran the migration with no snapshot — irrecoverable data loss"
+    },
+    "good_signal": ["snapshot", "backup", "migrations-backup"],
+    "pitfall_signal": ["snapshot", "backup"]
+  },
+  "S-FLAKY": {
+    "goal": "fix the flaky auth test",
+    "memory": {
+      "slug": "fix-flaky-tests",
+      "convergences": 4,
+      "similarity": 0.7,
+      "step": "pin the system clock via the FakeClock test helper",
+      "pitfall": "bumped the test timeout — only masks the flake, it comes back"
+    },
+    "good_signal": ["fakeclock", "clock"],
+    "pitfall_signal": ["timeout"]
+  }
+}
