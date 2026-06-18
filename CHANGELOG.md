@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+## 2.9.0 — 2026-06-18
+
+- **`keyoku backfill` — repair hollow muscle memory.** A real-data audit found
+  every learned workflow was hollow (0 steps) despite 74–351 logged action
+  events per goal: the work was in the activity log but, under builds predating
+  activity-backfill, was never lifted into steps. `keyoku backfill` (alias
+  `repair`; `--dry-run` to preview) re-runs the current capture (recorded trace
+  if any, else activity-backfill) over every converged goal whose workflow is
+  empty, and populates its steps **without** bumping the convergence count.
+  Applied to the maintainer's store it recovered 23–31 steps per workflow across
+  all 5 hollow ones. New `Harness.repairWorkflows()`; regression tests.
+- **Semantic recall — reuse fires on differently-worded goals.** Lexical overlap
+  (jaccard) maxed at ~0.08 between real goals and relevant workflows — below any
+  sane floor — so suggestions never surfaced for verbose, natural-language
+  objectives. When a lite model is configured, the engine now hands it a WIDE
+  overlap-ranked candidate pool (no hard lexical floor) and lets it filter by
+  MEANING — the no-heuristics principle applied to recall, not just re-ranking.
+  Strictly additive and fail-safe: no model / `KEYOKU_SLM_SUGGEST=0` / any model
+  error ⇒ the deterministic lexical result, so the offline path never regresses.
+  New `Harness.suggestRelevant()` + overlap-coefficient recall; the assess loop
+  now routes through it. `KEYOKU_WF_RECALL_POOL` (default 12) bounds pool size.
+  Note: semantic recall needs `GEMINI_API_KEY` or `ANTHROPIC_API_KEY` in the
+  server env; without one, recall stays lexical (and can't match paraphrase).
+  Regression test with an injected fake model.
+
 ## 2.8.0 — 2026-06-18
 
 - **Self-pruning muscle memory — workflows that never recur sink** (retrieval

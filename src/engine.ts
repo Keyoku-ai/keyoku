@@ -45,6 +45,17 @@ function jaccard(a: Set<string>, b: Set<string>): number {
   return intersection / (a.size + b.size - intersection);
 }
 
+/** Overlap coefficient (Szymkiewicz–Simpson): intersection / size of the
+ *  SMALLER set. Unlike jaccard it isn't punished by length asymmetry — a short
+ *  goal vs a long verbose workflow objective — so it's the better RECALL net for
+ *  building the model's candidate pool. (Jaccard stays the offline floor.) */
+function overlap(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let intersection = 0;
+  for (const t of a) if (b.has(t)) intersection++;
+  return intersection / Math.min(a.size, b.size);
+}
+
 // Workflow-suggestion tuning. Surfacing a learned workflow on a new goal is a
 // recall decision, not a correctness one — so the relevance bar is a knob, not
 // a magic number baked into the loop. Lower it to cast a wider net, raise it to
@@ -61,6 +72,10 @@ function envInt(name: string, fallback: number): number {
 }
 const WORKFLOW_SUGGESTION_MIN_SIMILARITY = envFloat("KEYOKU_WF_MIN_SIMILARITY", 0.2);
 const WORKFLOW_SUGGESTION_LIMIT = envInt("KEYOKU_WF_SUGGEST_LIMIT", 2);
+// Semantic recall pool: how many workflows-with-steps to hand the lite model as
+// candidates (ranked by overlap coefficient, NO hard lexical floor — the model
+// decides relevance, per the no-heuristics principle). Bounds tokens/latency.
+const RECALL_POOL_LIMIT = envInt("KEYOKU_WF_RECALL_POOL", 12);
 
 // Self-pruning. A workflow that keeps matching new goals on shared words but
 // whose steps never actually recur in those goals is a noisy match — it should
@@ -387,9 +402,7 @@ export class Harness {
     fresh.updatedAt = now;
     this.store.saveGoal(fresh);
 
-    const suggestions = converged
-      ? []
-      : await this.rerankSuggestions(fresh, this.suggestWorkflows(fresh));
+    const suggestions = converged ? [] : await this.suggestRelevant(fresh);
     const patternNow = new Date(now);
     const patterns = converged
       ? []
@@ -654,6 +667,72 @@ export class Harness {
   }
 
   /**
+   * Repair hollow muscle memory. Workflows promoted before activity-backfill
+   * existed — or whose goal converged with nothing recorded under an older build
+   * — have zero steps even though the work is sitting in the activity log. This
+   * re-runs the CURRENT capture (recorded trace if any, else activity-backfill)
+   * over every converged goal whose workflow is empty (or was never created) and
+   * populates its steps WITHOUT touching the convergence count — it's a repair,
+   * not a new convergence. Records always win over inference, so a goal with a
+   * real recorded trace is left untouched. `dryRun` reports what WOULD change.
+   */
+  repairWorkflows(opts: { dryRun?: boolean } = {}): Array<{
+    slug: string;
+    before: number;
+    inferred: number;
+    status: "populated" | "would-populate" | "no-activity" | "skipped";
+  }> {
+    const report: Array<{ slug: string; before: number; inferred: number; status: "populated" | "would-populate" | "no-activity" | "skipped" }> = [];
+    for (const goal of this.store.listGoals()) {
+      if (goal.status !== "converged") continue;
+      const existing = this.store.getWorkflow(goal.slug);
+      const before = existing?.steps.length ?? 0;
+      if (before > 0) {
+        report.push({ slug: goal.slug, before, inferred: before, status: "skipped" });
+        continue;
+      }
+      const recorded = this.store.listRecords(goal.id).filter((r) => r.result !== "failure");
+      const inferred: WorkflowStep[] =
+        recorded.length > 0
+          ? recorded.map((r) => ({
+              summary: r.summary,
+              ...(r.tool ? { tool: r.tool } : {}),
+              ...(r.detail ? { detail: r.detail } : {}),
+              result: r.result,
+              ...(r.source ? { source: r.source } : {}),
+            }))
+          : this.backfillStepsFromActivity(goal);
+      if (inferred.length === 0) {
+        report.push({ slug: goal.slug, before, inferred: 0, status: "no-activity" });
+        continue;
+      }
+      if (opts.dryRun) {
+        report.push({ slug: goal.slug, before, inferred: inferred.length, status: "would-populate" });
+        continue;
+      }
+      const now = new Date().toISOString();
+      if (existing) {
+        existing.steps = inferred;
+        existing.updatedAt = now;
+        this.store.saveWorkflow(existing);
+      } else {
+        this.store.saveWorkflow({
+          id: newId("wf"),
+          slug: goal.slug,
+          objective: goal.objective,
+          steps: inferred,
+          criteria: goal.criteria.map((c) => c.description),
+          stats: { convergences: 1, totalActions: inferred.length },
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+      report.push({ slug: goal.slug, before, inferred: inferred.length, status: "populated" });
+    }
+    return report;
+  }
+
+  /**
    * Record, at a fresh convergence, how the workflows that were RELEVANT to this
    * goal actually fared: each topically-eligible neighbour gets `suggested`++ ,
    * and `helped`++ when this goal's learned trace overlapped its steps (the
@@ -745,37 +824,86 @@ export class Harness {
   private async rerankSuggestions(
     goal: Goal,
     suggestions: WorkflowSuggestion[],
+    opts: { broad?: boolean } = {},
   ): Promise<WorkflowSuggestion[]> {
+    // In `broad` (semantic-recall) mode the input is a wide, NOT-lexically-floored
+    // pool, so any model failure must fall back to EMPTY (the caller then uses the
+    // deterministic lexical result) — never dump the whole unfiltered pool. In the
+    // ordinary re-rank mode, a failure leaves the lexical order untouched.
+    const fallback = opts.broad ? [] : suggestions;
     // On by default when a lite model is configured (a relevance decision is a model
     // call, per the no-heuristics principle); set KEYOKU_SLM_SUGGEST=0 to force the
-    // deterministic jaccard order. Nothing to disambiguate (<2) ⇒ skip.
+    // deterministic path. Nothing to disambiguate (<2) ⇒ skip.
     if (!this.slm || suggestions.length < 2 || process.env.KEYOKU_SLM_SUGGEST === "0") {
-      return suggestions;
+      return fallback;
     }
     // Cache by goal + the exact candidate set, so assessing often costs at most one
     // model call per distinct set. A changed candidate set is a new key ⇒ re-ranked.
-    const cacheKey = `${goal.slug}::${suggestions.map((s) => s.slug).sort().join(",")}`;
+    const cacheKey = `${opts.broad ? "broad:" : ""}${goal.slug}::${suggestions.map((s) => s.slug).sort().join(",")}`;
     const cached = this.rerankCache.get(cacheKey);
     if (cached) return this.applyOrder(suggestions, cached);
     try {
       const list = suggestions
         .map((s, i) => `${i + 1}. [${s.slug}] ${s.objective}`)
         .join("\n");
-      const prompt = `A coding agent is working toward this goal:\n"${goal.objective}"\n\nCandidate learned workflows from past goals:\n${list}\n\nReturn ONLY the ones genuinely relevant to achieving this goal, most relevant first. Reply with JSON only: {"relevant": [<1-based candidate numbers>]}. Omit irrelevant candidates; return an empty array if none apply.`;
+      const prompt = `A coding agent is working toward this goal:\n"${goal.objective}"\n\nCandidate learned workflows from past goals:\n${list}\n\nReturn ONLY the ones genuinely relevant to achieving this goal, most relevant first. Match on MEANING, not shared words — a workflow can be relevant even if it's worded very differently. Reply with JSON only: {"relevant": [<1-based candidate numbers>]}. Omit irrelevant candidates; return an empty array if none apply.`;
       const raw = await this.slm.complete(prompt, { json: true, maxTokens: 200 });
       const parsed = JSON.parse(raw) as { relevant?: unknown };
-      if (!Array.isArray(parsed.relevant)) return suggestions;
+      if (!Array.isArray(parsed.relevant)) return fallback;
       const picked = parsed.relevant
         .map((n) => (typeof n === "number" ? suggestions[n - 1] : undefined))
         .filter((s): s is WorkflowSuggestion => Boolean(s));
       // A model that returned malformed/empty selection shouldn't blank out real
-      // recall — fall back to the deterministic order in that case.
-      if (picked.length === 0) return suggestions;
+      // recall — fall back (lexical order, or empty in broad mode) in that case.
+      if (picked.length === 0) return fallback;
       this.rerankCache.set(cacheKey, picked.map((s) => s.slug));
       return picked;
     } catch {
-      return suggestions;
+      return fallback;
     }
+  }
+
+  /** Wide candidate pool for semantic recall: every workflow-with-steps (except
+   *  this goal's own), ranked by overlap coefficient and capped — NO hard lexical
+   *  floor, because the model, not a token threshold, decides relevance. */
+  private candidatePool(goal: Goal, limit: number): WorkflowSuggestion[] {
+    const goalTokens = tokens(`${goal.objective} ${goal.slug}`);
+    return this.store
+      .listWorkflows()
+      .filter((w) => w.slug !== goal.slug && w.steps.length > 0)
+      .map((w) => ({
+        ov: overlap(goalTokens, tokens(`${w.objective} ${w.slug}`)),
+        s: {
+          slug: w.slug,
+          objective: w.objective,
+          similarity: jaccard(goalTokens, tokens(`${w.objective} ${w.slug}`)),
+          convergences: w.stats.convergences,
+          steps: w.steps,
+          ...(w.pitfalls && w.pitfalls.length > 0 ? { pitfalls: w.pitfalls } : {}),
+        } as WorkflowSuggestion,
+      }))
+      .sort((a, b) => b.ov - a.ov || b.s.similarity - a.s.similarity)
+      .slice(0, limit)
+      .map((x) => x.s);
+  }
+
+  /**
+   * Surface relevant learned workflows for a goal. Two layers:
+   *  - DETERMINISTIC (always, offline): lexical jaccard recall, precision-ranked.
+   *  - SEMANTIC (when a lite model is configured and not disabled): the model
+   *    filters a WIDE overlap-ranked pool by meaning — this is what lets reuse
+   *    fire on verbose, differently-worded objectives that lexical overlap (max
+   *    ~0.08 jaccard on real goals) can never match. Any model failure falls back
+   *    to the lexical result, so the offline path is never worse than before.
+   */
+  async suggestRelevant(goal: Goal): Promise<WorkflowSuggestion[]> {
+    const lexical = this.suggestWorkflows(goal);
+    if (!this.slm || process.env.KEYOKU_SLM_SUGGEST === "0") return lexical;
+    const pool = this.candidatePool(goal, RECALL_POOL_LIMIT);
+    if (pool.length < 2) return lexical;
+    const picked = await this.rerankSuggestions(goal, pool, { broad: true });
+    if (picked.length === 0) return lexical; // no semantic signal ⇒ deterministic result
+    return picked.slice(0, WORKFLOW_SUGGESTION_LIMIT);
   }
 
   /** Reorder/filter the current suggestions to a cached slug ranking (a stale slug

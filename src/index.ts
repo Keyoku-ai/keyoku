@@ -1068,6 +1068,33 @@ Quick start:
 State lives in $KEYOKU_HOME (default ~/.keyoku).`);
 }
 
+/** Repair hollow muscle memory: populate converged goals' empty workflows from
+ *  their recorded trace or the activity log (work that was logged but, under an
+ *  older build, never lifted into steps). `--dry-run` shows what would change. */
+async function backfillCmd(rest: string[]): Promise<void> {
+  const dryRun = rest.includes("--dry-run") || rest.includes("-n");
+  const harness = buildHarness();
+  const report = harness.repairWorkflows({ dryRun });
+  const changed = report.filter((r) => r.status === "populated" || r.status === "would-populate");
+  const none = report.filter((r) => r.status === "no-activity");
+  const skipped = report.filter((r) => r.status === "skipped");
+  console.log(`keyoku backfill${dryRun ? " (dry run)" : ""} — ${report.length} converged goal(s) examined\n`);
+  for (const r of report) {
+    const mark =
+      r.status === "populated" ? "✓ populated     " :
+      r.status === "would-populate" ? "→ would populate" :
+      r.status === "no-activity" ? "· no activity   " :
+      "  has steps      ";
+    const delta = r.inferred > r.before ? ` (${r.before} → ${r.inferred} steps)` : "";
+    console.log(`  ${mark} ${r.slug}${delta}`);
+  }
+  console.log(
+    `\n${dryRun ? "Would populate" : "Populated"} ${changed.length} hollow workflow(s); ` +
+    `${skipped.length} already had steps; ${none.length} had no recoverable activity.`,
+  );
+  if (dryRun && changed.length > 0) console.log("\nRun `keyoku backfill` (no flag) to apply.");
+}
+
 async function main(): Promise<void> {
   const [cmd, ...rest] = process.argv.slice(2);
   switch (cmd ?? "serve") {
@@ -1099,6 +1126,9 @@ async function main(): Promise<void> {
       return resume();
     case "doctor":
       return doctor();
+    case "backfill":
+    case "repair":
+      return backfillCmd(rest);
     case "init":
       return init(rest);
     case "approvals":

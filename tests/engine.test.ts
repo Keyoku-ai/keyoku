@@ -631,6 +631,51 @@ describe("workflow suggestions", () => {
   });
 });
 
+describe("semantic recall (model surfaces what lexical overlap can't)", () => {
+  const mk = async (slug: string, objective: string, step: string) => {
+    harness.createGoal({
+      objective,
+      slug,
+      criteria: [
+        { description: "ok", probe: { kind: "command", run: "echo ready", parse: "text" }, assert: { op: "contains", value: "ready" } },
+      ],
+    });
+    harness.recordAction(slug, { summary: step });
+    await harness.assess(slug);
+  };
+
+  it("fires for a semantically-related goal whose wording barely overlaps", async () => {
+    await mk("k8s-ingress-tls", "provision kubernetes ingress with cert-manager TLS", "kubectl apply ingress");
+    await mk("db-backup-rotate", "rotate the database backup snapshots nightly", "run pg_dump cron");
+
+    // Worded so differently that jaccard is below the floor for BOTH workflows.
+    const goal = harness.createGoal({
+      objective: "expose the service securely over HTTPS for the cluster",
+      slug: "https-expose",
+      criteria: [
+        { description: "n/a", probe: { kind: "command", run: "echo no", parse: "text" }, assert: { op: "eq", value: "yes" } },
+      ],
+    });
+
+    // Deterministic path: lexical overlap filters everything out.
+    expect(harness.suggestWorkflows(goal)).toHaveLength(0);
+    expect(await harness.suggestRelevant(goal)).toHaveLength(0);
+
+    // With a lite model, semantic recall surfaces a workflow despite ~zero token overlap.
+    const fakeSlm: SlmProvider = {
+      name: "fake",
+      model: "fake",
+      async complete() {
+        return JSON.stringify({ relevant: [1] });
+      },
+    };
+    const slmH = new Harness(harness.store, new ConnectorManager(harness.store), fakeSlm);
+    const picked = await slmH.suggestRelevant(goal);
+    expect(picked).toHaveLength(1);
+    expect(["k8s-ingress-tls", "db-backup-rotate"]).toContain(picked[0].slug);
+  });
+});
+
 describe("self-pruning (precision-ranked suggestions)", () => {
   // Converge a goal that records `steps`. The echo probe passes immediately, so
   // a single assess promotes the recorded trace and runs outcome scoring.
@@ -787,5 +832,52 @@ describe("live capture (goal_focus + auto-record)", () => {
     const goal = harness.createGoal(echoGoal("inactive"));
     harness.updateGoal(goal.slug, { status: "abandoned" });
     expect(() => harness.setFocus(goal.slug)).toThrow(/active/);
+  });
+});
+
+describe("repairWorkflows (backfill repair of hollow muscle memory)", () => {
+  let seq2 = 0;
+  const ev2 = (over: Partial<ActivityEvent>): ActivityEvent => ({
+    id: `re${seq2++}`,
+    type: "tool_use",
+    summary: "x",
+    at: new Date().toISOString(),
+    ...over,
+  });
+
+  it("repopulates a hollow workflow from activity, without bumping convergences", async () => {
+    // Work happens (and is logged to activity) BEFORE the goal is declared — the
+    // build-then-verify shape that left real workflows hollow under old builds.
+    harness.store.appendActivity(ev2({ type: "shell", tool: "Bash", summary: "Bash: npm ci", detail: "npm ci", cwd: dir, sessionId: "S1" }));
+    harness.store.appendActivity(ev2({ type: "shell", tool: "Bash", summary: "Bash: npm run build", detail: "npm run build", cwd: dir, sessionId: "S1" }));
+
+    const state = join(dir, "ok.txt");
+    writeFileSync(state, "ready");
+    const goal = harness.createGoal(fileGoal(state));
+    await harness.assess(goal.slug); // converges
+    // Simulate the LEGACY state: converged under an old build → hollow workflow.
+    const w = harness.store.getWorkflow(goal.slug)!;
+    w.steps = [];
+    harness.store.saveWorkflow(w);
+    const convBefore = harness.store.getWorkflow(goal.slug)!.stats.convergences;
+    expect(harness.store.getWorkflow(goal.slug)!.steps).toHaveLength(0);
+
+    const report = harness.repairWorkflows();
+    expect(report.find((r) => r.slug === goal.slug)?.status).toBe("populated");
+    const after = harness.store.getWorkflow(goal.slug)!;
+    expect(after.steps.length).toBeGreaterThan(0);
+    expect(after.stats.convergences).toBe(convBefore); // a repair, not a new convergence
+  });
+
+  it("dry-run does not write, and a workflow that already has steps is skipped", async () => {
+    harness.store.appendActivity(ev2({ type: "shell", tool: "Bash", summary: "Bash: make", detail: "make", cwd: dir, sessionId: "S2" }));
+    const state = join(dir, "ok2.txt");
+    writeFileSync(state, "ready");
+    const goal = harness.createGoal({ ...fileGoal(state), slug: "dry-goal" });
+    await harness.assess(goal.slug);
+    expect(harness.store.getWorkflow("dry-goal")!.steps.length).toBeGreaterThan(0);
+
+    const report = harness.repairWorkflows({ dryRun: true });
+    expect(report.find((r) => r.slug === "dry-goal")?.status).toBe("skipped");
   });
 });
