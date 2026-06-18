@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 2.7.1 — 2026-06-18
+
+- **Honest version reporting.** `VERSION` (used by `keyoku version` and the MCP
+  `serverInfo`) is now single-sourced from `package.json` instead of a hardcoded
+  `"0.1.0"` that had drifted from the release. Falls back gracefully if unreadable.
+
 ## 2.7.0 — 2026-06-18
 
 - **Replayable muscle memory — learned steps carry the command** (capture lane).

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
@@ -35,7 +37,15 @@ import {
   type WorkflowTemplate,
 } from "./types.js";
 
-export const VERSION = "0.1.0";
+// Single-sourced from package.json (ships next to dist/ in the npm tarball), so the
+// reported version never drifts from the release. Falls back if unreadable.
+export const VERSION: string = (() => {
+  try {
+    return JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+})();
 
 type ToolResult = {
   content: { type: "text"; text: string }[];
