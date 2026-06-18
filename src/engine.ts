@@ -6,6 +6,7 @@ import { relevantPatterns } from "./learn.js";
 import { observationFromReport, recordObservation } from "./observe.js";
 import { runProbe } from "./probes.js";
 import { effectiveStability } from "./types.js";
+import type { SlmProvider } from "./slm.js";
 import { newId, slugify, type Store } from "./store.js";
 import type {
   ActionRecord,
@@ -103,6 +104,10 @@ export class Harness {
   constructor(
     readonly store: Store,
     readonly connectors: ConnectorManager,
+    // Optional lite model. When present AND opted in (KEYOKU_SLM_SUGGEST=1), it
+    // re-ranks workflow suggestions by genuine relevance — a model decision, not
+    // a token-overlap heuristic. Absent / off ⇒ deterministic jaccard order.
+    readonly slm: SlmProvider | null = null,
   ) {}
 
   // ----- goal lifecycle -----
@@ -280,7 +285,9 @@ export class Harness {
     fresh.updatedAt = now;
     this.store.saveGoal(fresh);
 
-    const suggestions = converged ? [] : this.suggestWorkflows(fresh);
+    const suggestions = converged
+      ? []
+      : await this.rerankSuggestions(fresh, this.suggestWorkflows(fresh));
     const patternNow = new Date(now);
     const patterns = converged
       ? []
@@ -508,5 +515,40 @@ export class Harness {
       .filter((s) => s.similarity >= WORKFLOW_SUGGESTION_MIN_SIMILARITY)
       .sort((a, b) => b.similarity - a.similarity)
       .slice(0, WORKFLOW_SUGGESTION_LIMIT);
+  }
+
+  /**
+   * Re-rank/filter jaccard candidates by genuine relevance using the lite model
+   * (the "no heuristics — a cheap model decides" path). Jaccard is fast recall but
+   * misses paraphrase and over-matches shared filler words; the model judges what
+   * actually applies to THIS goal. Strictly additive and fail-safe: returns the
+   * jaccard order unchanged when there's no SLM, it's not opted in
+   * (KEYOKU_SLM_SUGGEST=1), there's nothing to disambiguate (<2), or anything goes
+   * wrong — so the deterministic offline path is always intact.
+   */
+  private async rerankSuggestions(
+    goal: Goal,
+    suggestions: WorkflowSuggestion[],
+  ): Promise<WorkflowSuggestion[]> {
+    if (!this.slm || suggestions.length < 2 || process.env.KEYOKU_SLM_SUGGEST !== "1") {
+      return suggestions;
+    }
+    try {
+      const list = suggestions
+        .map((s, i) => `${i + 1}. [${s.slug}] ${s.objective}`)
+        .join("\n");
+      const prompt = `A coding agent is working toward this goal:\n"${goal.objective}"\n\nCandidate learned workflows from past goals:\n${list}\n\nReturn ONLY the ones genuinely relevant to achieving this goal, most relevant first. Reply with JSON only: {"relevant": [<1-based candidate numbers>]}. Omit irrelevant candidates; return an empty array if none apply.`;
+      const raw = await this.slm.complete(prompt, { json: true, maxTokens: 200 });
+      const parsed = JSON.parse(raw) as { relevant?: unknown };
+      if (!Array.isArray(parsed.relevant)) return suggestions;
+      const picked = parsed.relevant
+        .map((n) => (typeof n === "number" ? suggestions[n - 1] : undefined))
+        .filter((s): s is WorkflowSuggestion => Boolean(s));
+      // A model that returned malformed/empty selection shouldn't blank out real
+      // recall — fall back to the deterministic order in that case.
+      return picked.length > 0 ? picked : suggestions;
+    } catch {
+      return suggestions;
+    }
   }
 }

@@ -16,7 +16,9 @@ const log = (...args: unknown[]) => console.error(...args);
 
 function buildHarness(): Harness {
   const store = new Store();
-  return new Harness(store, new ConnectorManager(store));
+  // Pass the lite model (if configured) so workflow-suggestion re-ranking can use it
+  // when opted in (KEYOKU_SLM_SUGGEST=1). Cheap to construct; no network until used.
+  return new Harness(store, new ConnectorManager(store), resolveSlmFromEnv());
 }
 
 async function serve(): Promise<void> {

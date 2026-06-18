@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 2.3.0 — 2026-06-18
+
+- **Lite-model relevance re-ranking for workflow suggestions** (no-heuristics path). Jaccard
+  stays as fast, deterministic recall; when a lite model is configured **and** you opt in with
+  `KEYOKU_SLM_SUGGEST=1`, the model judges which candidate workflows are genuinely relevant to
+  the goal (paraphrase-aware, no token-overlap false matches) and re-ranks/filters them. Strictly
+  additive and fail-safe: no model, not opted in, fewer than 2 candidates, or any error → the
+  deterministic jaccard order is returned unchanged, so the offline path is always intact. The
+  convergence core remains 100% deterministic. (`Harness` gains an optional `slm`; wired from
+  `resolveSlmFromEnv()`; covered by an injected-fake-SLM test.)
+
 ## 2.2.0 — 2026-06-18
 
 - **Muscle memory fills itself — activity-backfilled workflows.** Builds on 2.1.0:

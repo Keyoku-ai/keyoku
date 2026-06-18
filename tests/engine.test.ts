@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ConnectorManager } from "../src/connectors.js";
 import { Harness, type CreateGoalInput } from "../src/engine.js";
 import { Store } from "../src/store.js";
+import type { SlmProvider } from "../src/slm.js";
 import type { ActivityEvent } from "../src/types.js";
 
 let dir: string;
@@ -341,6 +342,62 @@ describe("the convergence loop", () => {
     );
     const report = await harness.assess(g2.slug);
     expect(report.guidance).toContain("avoid (failed before): Tried bumping the timeout");
+  });
+
+  it("SLM re-rank: a lite model filters suggestions when opted in; deterministic jaccard otherwise", async () => {
+    const conv = [
+      {
+        description: "echo",
+        probe: { kind: "command" as const, run: "echo ok", parse: "text" as const },
+        assert: { op: "eq" as const, value: "ok" },
+      },
+    ];
+    const seed = async (slug: string, objective: string) => {
+      harness.createGoal({ objective, slug, criteria: conv });
+      harness.recordAction(slug, { summary: `did ${slug}`, tool: "Bash" });
+      await harness.assess(slug);
+    };
+    await seed("deploy-staging", "deploy the staging service to kubernetes");
+    await seed("deploy-api-staging", "deploy the staging api to kubernetes");
+
+    // a query that stays unmet so suggestions surface
+    harness.createGoal({
+      objective: "deploy the production service to kubernetes",
+      slug: "deploy-prod",
+      criteria: [
+        {
+          description: "nope",
+          probe: { kind: "command", run: "echo nope", parse: "text" },
+          assert: { op: "eq", value: "ok" },
+        },
+      ],
+    });
+
+    // baseline: no SLM → deterministic jaccard returns both candidates
+    const baseline = await harness.assess("deploy-prod");
+    expect(baseline.suggestedWorkflows.length).toBeGreaterThanOrEqual(2);
+    const candidate2 = baseline.suggestedWorkflows[1].slug;
+
+    // a lite model that selects ONLY candidate #2, opted in → filtered to just that one
+    const fakeSlm: SlmProvider = {
+      name: "fake",
+      model: "fake",
+      async complete() {
+        return JSON.stringify({ relevant: [2] });
+      },
+    };
+    const slmHarness = new Harness(harness.store, new ConnectorManager(harness.store), fakeSlm);
+    process.env.KEYOKU_SLM_SUGGEST = "1";
+    try {
+      const ranked = await slmHarness.assess("deploy-prod");
+      expect(ranked.suggestedWorkflows.map((s) => s.slug)).toEqual([candidate2]);
+    } finally {
+      delete process.env.KEYOKU_SLM_SUGGEST;
+    }
+
+    // opted out → SLM ignored, deterministic order preserved
+    const off = await slmHarness.assess("deploy-prod");
+    expect(off.suggestedWorkflows.length).toBeGreaterThanOrEqual(2);
   });
 
   it("abandoned goals refuse assess and record until resumed", async () => {
