@@ -292,6 +292,8 @@ describe("the convergence loop", () => {
     expect(wf).toBeTruthy();
     expect(wf?.steps.map((s) => s.summary)).toEqual(["Edit: src/server.ts", "Bash: npm run build"]);
     expect(wf?.steps.every((s) => s.source === "activity")).toBe(true);
+    // The actual command is carried so the learned step is replayable, not just described.
+    expect(wf?.steps.find((s) => s.tool === "Bash")?.detail).toBe("npm run build");
   });
 
   it("backfill looks back before goal creation and scopes to the dominant session", async () => {
@@ -686,6 +688,33 @@ describe("live capture (goal_focus + auto-record)", () => {
     expect(wf?.steps.map((s) => s.summary)).toEqual(["Bash: build"]);
     expect(wf?.steps.every((s) => s.source === "activity")).toBe(true);
     expect(harness.getFocus()).toBeNull(); // cleared on convergence
+  });
+
+  it("learned steps carry the command (detail) so the workflow is replayable", async () => {
+    const goal = harness.createGoal(echoGoal("replayable"));
+    harness.setFocus(goal.slug, { cwd: "/p" });
+    autoRecordToFocusGoal(
+      harness.store,
+      ev({ type: "shell", tool: "Bash", summary: "Bash: deploy", detail: "./deploy.sh --prod", cwd: "/p" }),
+    );
+    const conv = await harness.assess(goal.slug);
+    expect(conv.converged).toBe(true);
+    const wf = harness.store.getWorkflow(goal.slug);
+    expect(wf?.steps[0].summary).toBe("Bash: deploy");
+    expect(wf?.steps[0].detail).toBe("./deploy.sh --prod"); // the actual command, replayable
+  });
+
+  it("pins the session on first action so a concurrent same-project session can't contaminate", () => {
+    const goal = harness.createGoal(echoGoal("pinning"));
+    harness.setFocus(goal.slug, { cwd: "/p" }); // cwd-only focus, session unknown
+    // s1 does the first matching action → recorded AND focus pins to s1
+    autoRecordToFocusGoal(harness.store, ev({ type: "file_change", tool: "Edit", summary: "Edit: s1.ts", cwd: "/p", sessionId: "s1" }));
+    expect(harness.getFocus()?.sessionId).toBe("s1");
+    // s2, same project, different session → rejected now that focus is pinned
+    autoRecordToFocusGoal(harness.store, ev({ type: "file_change", tool: "Edit", summary: "Edit: s2.ts", cwd: "/p", sessionId: "s2" }));
+    // s1 again → still captured
+    autoRecordToFocusGoal(harness.store, ev({ type: "shell", tool: "Bash", summary: "Bash: t", detail: "make", cwd: "/p", sessionId: "s1" }));
+    expect(harness.store.listRecords(goal.id).map((r) => r.summary)).toEqual(["Edit: s1.ts", "Bash: t"]);
   });
 
   it("refuses to focus a non-active goal", () => {

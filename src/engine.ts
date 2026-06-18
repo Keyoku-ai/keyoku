@@ -478,6 +478,7 @@ export class Harness {
       .map((r) => ({
         summary: r.summary,
         ...(r.tool ? { tool: r.tool } : {}),
+        ...(r.detail ? { detail: r.detail } : {}),
         result: r.result,
         ...(r.source ? { source: r.source } : {}),
       }));
@@ -618,6 +619,7 @@ export class Harness {
       steps.push({
         summary,
         ...(e.tool ? { tool: e.tool } : {}),
+        ...(e.detail ? { detail: e.detail.slice(0, 500) } : {}),
         result: "success" as const,
         source: "activity" as const,
       });
@@ -722,15 +724,19 @@ export function autoRecordToFocusGoal(store: Store, event: ActivityEvent): void 
     const tool = event.tool ?? "";
     if (tool.startsWith("mcp__keyoku__") || tool.startsWith("keyoku")) return;
     if (!isActionEvent(event)) return;
-    // Attribution: prefer an exact session match; else require the event's cwd
-    // to sit in the focus cwd-subtree. An unscoped focus (no cwd/session)
-    // accepts everything — best-effort.
-    const sessionMatch = focus.sessionId !== undefined && event.sessionId === focus.sessionId;
+    // Attribution gate. Session is authoritative when known on both sides: if
+    // the focus is pinned to a session and this event came from a different one,
+    // it's another session's work — reject it even if the cwd matches. Otherwise
+    // fall back to cwd-subtree; a fully unscoped focus accepts everything.
+    const focusSession = focus.sessionId;
+    const evSession = event.sessionId;
+    if (focusSession !== undefined && evSession !== undefined && focusSession !== evSession) return;
+    const sessionMatch = focusSession !== undefined && evSession === focusSession;
     const a = event.cwd;
     const b = focus.cwd;
     const cwdMatch =
       b !== undefined && a !== undefined && (a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`));
-    const unscoped = focus.sessionId === undefined && focus.cwd === undefined;
+    const unscoped = focusSession === undefined && focus.cwd === undefined;
     if (!sessionMatch && !cwdMatch && !unscoped) return;
     const goal = store.getGoal(focus.goalId);
     if (!goal || goal.status !== "active") return; // never live-record to a non-active goal
@@ -740,6 +746,12 @@ export function autoRecordToFocusGoal(store: Store, event: ActivityEvent): void 
     const recs = store.listRecords(goal.id);
     const last = recs[recs.length - 1];
     if (last && last.summary === summary && last.tool === event.tool) return;
+    // Pin the session on the first matching action: once a session has done real
+    // work toward this focused goal, later events must match it — so a second
+    // session in the same project can't start writing into this goal's trace.
+    if (focusSession === undefined && evSession !== undefined) {
+      store.setFocus({ ...focus, sessionId: evSession });
+    }
     store.appendRecord({
       id: newId("act"),
       goalId: goal.id,

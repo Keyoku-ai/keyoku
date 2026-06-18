@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **Replayable muscle memory — learned steps carry the command** (capture lane).
+  `WorkflowStep` gained `detail`, and both the backfill and the recorded/live
+  paths now carry the action's actual command into the learned step instead of
+  dropping it. A learned workflow used to read "Bash: npm run build" (a
+  description); it now also carries `"npm run build"` (the thing to run), so the
+  step is **replayable**, and the command flows into the structured
+  `suggestedWorkflows` an agent receives.
+- **Focus session-pinning — concurrency hardening** (capture lane). Live capture
+  (`goal_focus`) now treats the session as authoritative once known: the first
+  matching action **pins** the focus to that session, and later events from a
+  different session are rejected even if they share the project dir. This stops a
+  second session working in the same project on one shared `~/.keyoku` from
+  bleeding its actions into another goal's trace.
+  Regression tests in `tests/engine.test.ts`.
+
 ## 2.6.0 — 2026-06-18
 
 - **Live muscle memory — `goal_focus` + auto-record** (capture lane). Until now a

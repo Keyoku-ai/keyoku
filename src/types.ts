@@ -259,6 +259,9 @@ export interface FocusState {
 export interface WorkflowStep {
   summary: string;
   tool?: string;
+  /** The actual command / args that ran (truncated), so a learned workflow is
+   *  replayable, not just a description. Carried from the action's detail. */
+  detail?: string;
   result: ActionResult;
   /** Provenance: "recorded" = an explicit goal_record corrective action;
    *  "activity" = inferred from the activity log because the goal converged
