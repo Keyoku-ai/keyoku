@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ConnectorManager } from "../src/connectors.js";
 import { Harness, type CreateGoalInput } from "../src/engine.js";
 import { Store } from "../src/store.js";
+import type { ActivityEvent } from "../src/types.js";
 
 let dir: string;
 let harness: Harness;
@@ -253,6 +254,43 @@ describe("the convergence loop", () => {
     const workflows = harness.store.listWorkflows();
     expect(workflows).toHaveLength(1);
     expect(workflows[0].steps.map((s) => s.summary)).toEqual(["Did the real work"]);
+  });
+
+  it("build-then-verify with activity: an empty trace backfills steps from the activity log", async () => {
+    const goal = harness.createGoal({
+      objective: "activity backfill works",
+      criteria: [
+        {
+          description: "echo ok",
+          probe: { kind: "command", run: "echo ok", parse: "text" },
+          assert: { op: "eq", value: "ok" },
+        },
+      ],
+    });
+    let seq = 0;
+    const ev = (over: Partial<ActivityEvent>): ActivityEvent => ({
+      id: `e${seq++}`,
+      type: "tool_use",
+      summary: "x",
+      at: new Date().toISOString(),
+      ...over,
+    });
+    // Real work — must be captured, in order:
+    harness.store.appendActivity(ev({ type: "file_change", tool: "Edit", summary: "Edit: src/server.ts" }));
+    harness.store.appendActivity(ev({ type: "shell", tool: "Bash", summary: "Bash: npm run build", detail: "npm run build" }));
+    // Noise — must be excluded:
+    harness.store.appendActivity(ev({ tool: "Read", summary: "Read: src/server.ts" })); // inspection
+    harness.store.appendActivity(ev({ type: "shell", tool: "Bash", summary: "Bash: ls -la", detail: "ls -la" })); // inspection cmd
+    harness.store.appendActivity(ev({ tool: "mcp__keyoku__goal_assess", summary: "assessed" })); // harness bookkeeping
+    // Out of the goal's lifetime — must be excluded by the time window:
+    harness.store.appendActivity(ev({ type: "file_change", tool: "Edit", summary: "Edit: old.ts", at: "2000-01-01T00:00:00.000Z" }));
+
+    const conv = await harness.assess(goal.slug);
+    expect(conv.converged).toBe(true);
+    const wf = harness.store.getWorkflow(goal.slug);
+    expect(wf).toBeTruthy();
+    expect(wf?.steps.map((s) => s.summary)).toEqual(["Edit: src/server.ts", "Bash: npm run build"]);
+    expect(wf?.steps.every((s) => s.source === "activity")).toBe(true);
   });
 
   it("muscle memory is REUSED — a similar goal gets the converged workflow suggested", async () => {

@@ -1,3 +1,4 @@
+import { isActionEvent } from "./activity.js";
 import { evaluateAssertion } from "./assert.js";
 import type { ConnectorManager } from "./connectors.js";
 import { buildGuidance } from "./guidance.js";
@@ -16,6 +17,7 @@ import type {
   CriterionInput,
   Goal,
   WorkflowArtifact,
+  WorkflowStep,
   WorkflowSuggestion,
 } from "./types.js";
 
@@ -39,6 +41,28 @@ function jaccard(a: Set<string>, b: Set<string>): number {
   for (const t of a) if (b.has(t)) intersection++;
   return intersection / (a.size + b.size - intersection);
 }
+
+// Workflow-suggestion tuning. Surfacing a learned workflow on a new goal is a
+// recall decision, not a correctness one — so the relevance bar is a knob, not
+// a magic number baked into the loop. Lower it to cast a wider net, raise it to
+// suppress weak matches. The convergence core stays purely deterministic.
+function envFloat(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+function envInt(name: string, fallback: number): number {
+  const n = envFloat(name, fallback);
+  return Number.isInteger(n) && n > 0 ? n : fallback;
+}
+const WORKFLOW_SUGGESTION_MIN_SIMILARITY = envFloat("KEYOKU_WF_MIN_SIMILARITY", 0.2);
+const WORKFLOW_SUGGESTION_LIMIT = envInt("KEYOKU_WF_SUGGEST_LIMIT", 2);
+
+// Activity-backfill cap: when a goal converges with nothing recorded, at most
+// this many inferred steps are lifted from the activity log so the workflow
+// isn't a hollow shell. A bound, not a retention contract.
+const MAX_BACKFILL_STEPS = 30;
 
 const MAX_ACTUAL_CHARS = 2_000;
 
@@ -378,11 +402,18 @@ export class Harness {
     const failures = trace.filter((r) => r.result === "failure").map((r) => r.summary);
 
     const existing = this.store.getWorkflow(goal.slug);
-    // Promote only when there is something to learn — steps, pitfalls, or an
-    // existing workflow to preserve. A truly empty convergence (nothing recorded)
-    // learns nothing and must not become a hollow artifact; a retroactive
-    // goal_record then promotes it.
-    if (steps.length === 0 && failures.length === 0 && !existing) return null;
+    // Build-then-verify: the goal converged but the agent recorded nothing
+    // through goal_record. The real work still happened — it's sitting in the
+    // activity log — so infer the steps from there rather than learn a hollow
+    // workflow. Inferred steps are labeled source:"activity" to stay honest
+    // about provenance, and an explicit goal_record always wins over inference.
+    const effectiveSteps: WorkflowStep[] =
+      steps.length > 0 ? steps : this.backfillStepsFromActivity(goal);
+    // Promote only when there is something to learn — steps (recorded OR
+    // inferred), pitfalls, or an existing workflow to preserve. A convergence
+    // with no records AND no relevant activity learns nothing and must not
+    // become a hollow artifact; a retroactive goal_record then promotes it.
+    if (effectiveSteps.length === 0 && failures.length === 0 && !existing) return null;
     // Deduped, newest-last, capped — pitfalls accumulate across re-convergences.
     const pitfalls = [...new Set([...(existing?.pitfalls ?? []), ...failures])].slice(-20);
     const now = new Date().toISOString();
@@ -392,7 +423,7 @@ export class Harness {
           objective: goal.objective,
           // Keep the richer trace: a re-convergence with no new actions
           // (steady-state check) shouldn't erase the learned steps.
-          steps: steps.length > 0 ? steps : existing.steps,
+          steps: effectiveSteps.length > 0 ? effectiveSteps : existing.steps,
           criteria: goal.criteria.map((c) => c.description),
           ...(pitfalls.length > 0 ? { pitfalls } : {}),
           stats: {
@@ -407,7 +438,7 @@ export class Harness {
           id: newId("wf"),
           slug: goal.slug,
           objective: goal.objective,
-          steps,
+          steps: effectiveSteps,
           criteria: goal.criteria.map((c) => c.description),
           ...(pitfalls.length > 0 ? { pitfalls } : {}),
           stats: { convergences: 1, totalActions: trace.length },
@@ -416,6 +447,49 @@ export class Harness {
         };
     this.store.saveWorkflow(workflow);
     return workflow;
+  }
+
+  /**
+   * Infer workflow steps for a goal that converged with nothing recorded
+   * (build-then-verify). Scope = action events — mutating Bash / Edit / Write /
+   * connector calls, never inspection or the harness's own bookkeeping —
+   * observed since the goal was created. Deterministic and synchronous: it lifts
+   * what actually happened from the activity log, it does not decide anything.
+   * The log interleaves concurrent sessions, so this is a best-effort draft
+   * (labeled source:"activity"), not a verified trace; the SLM-backed
+   * workflow_suggest / harness_learn passes can refine it. The point is to stop
+   * the product's headline feature — muscle memory — from silently producing
+   * empty workflows just because the agent didn't call goal_record mid-run.
+   */
+  private backfillStepsFromActivity(goal: Goal): WorkflowStep[] {
+    const since = Date.parse(goal.createdAt);
+    if (Number.isNaN(since)) return [];
+    const events = this.store.listActivity().filter((e) => {
+      const t = Date.parse(e.at);
+      if (Number.isNaN(t) || t < since) return false;
+      const tool = e.tool ?? "";
+      // The harness's own MCP calls (goal_*, workflow_*, …) are bookkeeping, not
+      // the work being learned.
+      if (tool.startsWith("mcp__keyoku__") || tool.startsWith("keyoku")) return false;
+      return isActionEvent(e);
+    });
+    // Collapse consecutive identical actions (a formatter rewriting one file ten
+    // times is one step, not ten), then cap to the most recent steps.
+    const steps: WorkflowStep[] = [];
+    let lastKey = "";
+    for (const e of events) {
+      const summary = e.summary.slice(0, 200);
+      const key = `${e.tool ?? e.type}:${summary}`;
+      if (key === lastKey) continue;
+      lastKey = key;
+      steps.push({
+        summary,
+        ...(e.tool ? { tool: e.tool } : {}),
+        result: "success" as const,
+        source: "activity" as const,
+      });
+    }
+    return steps.slice(-MAX_BACKFILL_STEPS);
   }
 
   suggestWorkflows(goal: Goal): WorkflowSuggestion[] {
@@ -431,8 +505,8 @@ export class Harness {
         steps: w.steps,
         ...(w.pitfalls && w.pitfalls.length > 0 ? { pitfalls: w.pitfalls } : {}),
       }))
-      .filter((s) => s.similarity >= 0.2)
+      .filter((s) => s.similarity >= WORKFLOW_SUGGESTION_MIN_SIMILARITY)
       .sort((a, b) => b.similarity - a.similarity)
-      .slice(0, 2);
+      .slice(0, WORKFLOW_SUGGESTION_LIMIT);
   }
 }

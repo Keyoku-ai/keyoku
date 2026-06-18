@@ -239,6 +239,11 @@ export interface WorkflowStep {
   summary: string;
   tool?: string;
   result: ActionResult;
+  /** Provenance: "recorded" = an explicit goal_record corrective action;
+   *  "activity" = inferred from the activity log because the goal converged
+   *  build-then-verify with nothing recorded. Absent means recorded
+   *  (back-compat with workflows persisted before this field existed). */
+  source?: "recorded" | "activity";
 }
 
 export interface WorkflowArtifact {

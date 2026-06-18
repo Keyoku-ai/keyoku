@@ -149,6 +149,8 @@ The division of labor: **heuristics** generate candidates for free, the **small 
 | `KEYOKU_SLM_PROVIDER` | auto | `gemini`, `anthropic`, `openai-compat`, or `none` |
 | `KEYOKU_SLM_BASE_URL` / `KEYOKU_SLM_MODEL` | — | Any OpenAI-compatible endpoint (Ollama, LM Studio, LiteLLM, Groq, …) |
 | `KEYOKU_ENGINE_URL` | — | Connect a running [keyoku-engine](https://github.com/Keyoku-ai/keyoku-engine): knowledge mirrors into it and queries upgrade to semantic search |
+| `KEYOKU_WF_MIN_SIMILARITY` | `0.2` | Jaccard floor for suggesting a learned workflow on a new goal |
+| `KEYOKU_WF_SUGGEST_LIMIT` | `2` | Max learned workflows surfaced per assessment |
 | `KEYOKU_DEBUG` | — | Full error stacks |
 
 ## Security

@@ -200,7 +200,7 @@ const INSPECTION_RE =
   /^(ls|cat|grep|rg|find|head|tail|pwd|which|wc|tree|echo|man|type|stat|du|df|env|printenv|git (status|diff|log|show|branch|blame|remote)|npm (ls|view|outdated|info)|docker (ps|images)|kubectl (get|describe))\b/;
 
 /** Does this event change anything, or is it just looking around? */
-function isActionEvent(ev: ActivityEvent): boolean {
+export function isActionEvent(ev: ActivityEvent): boolean {
   if (ev.type === "file_change") return true;
   if (ev.tool === "connector_call") return true;
   if (ev.tool === "Bash" || ev.type === "shell" || ev.type === "git") {

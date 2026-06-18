@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+## 2.2.0 — 2026-06-18
+
+- **Muscle memory fills itself — activity-backfilled workflows.** Builds on 2.1.0:
+  a goal that converges build-then-verify with **nothing recorded** no longer learns
+  nothing. When the action trace is empty, the engine now infers the workflow steps
+  from the **activity log** within the goal's lifetime (`createdAt → now`), keeping
+  only real *action* events — mutating Bash / Edit / Write / connector calls, never
+  inspection (`ls`, `cat`, Reads…) or the harness's own `mcp__keyoku__*` bookkeeping
+  — collapsed and capped. Inferred steps are labeled `source: "activity"` so the
+  trace stays honest about provenance; an explicit `goal_record` always wins over
+  inference. This closes the real-world gap the audit found: every one of a heavy
+  user's converged goals had `steps: 0` because `goal_record` wasn't called mid-run.
+  Fully back-compat (no activity ⇒ no workflow, exactly as before). Deterministic and
+  synchronous — the convergence core is untouched; the SLM-backed `workflow_suggest`
+  / `harness_learn` passes can still refine the draft. (engine; regression test in
+  `tests/engine.test.ts`.)
+- **Configurable workflow-suggestion relevance.** The Jaccard similarity floor and
+  result count for surfacing a learned workflow on a new goal are now knobs, not
+  magic numbers: `KEYOKU_WF_MIN_SIMILARITY` (default `0.2`) and
+  `KEYOKU_WF_SUGGEST_LIMIT` (default `2`). Recall is a tunable decision; the
+  pass/fail convergence check remains purely deterministic.
+- **Docs**: `docs/REPO-MAP.md` names the one canonical, published package and what
+  every neighbouring repo is; `docs/PUBLISHING.md` documents the one-time Trusted
+  Publishing toggle the release workflow expects.
+
 ## 2.1.0 — 2026-06-18
 
 - **Muscle memory for build-then-verify runs** (closes a gap vs. the "converged
