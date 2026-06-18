@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 2.4.0 — 2026-06-18
+
+- **Lite-model re-rank is now ON by default (cached).** Supersedes 2.3.0's opt-in: when a
+  lite model is configured, suggestion re-ranking runs automatically (a relevance decision is
+  a model call, per the no-heuristics principle) — set `KEYOKU_SLM_SUGGEST=0` to force the
+  deterministic jaccard order. To keep `assess` cheap (the protocol says assess often), results
+  are **cached per goal + candidate-set**, so the model is called at most once per distinct set
+  (a changed candidate set re-ranks). No model / `=0` / `<2` candidates / any error ⇒ jaccard
+  order unchanged. Convergence core stays 100% deterministic.
+
 ## 2.3.0 — 2026-06-18
 
 - **Lite-model relevance re-ranking for workflow suggestions** (no-heuristics path). Jaccard

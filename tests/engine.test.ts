@@ -381,7 +381,7 @@ describe("the convergence loop", () => {
     expect(report.guidance).toContain("avoid (failed before): Tried bumping the timeout");
   });
 
-  it("SLM re-rank: a lite model filters suggestions when opted in; deterministic jaccard otherwise", async () => {
+  it("SLM re-rank: default-on when a model is present, cached across assesses; KEYOKU_SLM_SUGGEST=0 disables", async () => {
     const conv = [
       {
         description: "echo",
@@ -415,26 +415,37 @@ describe("the convergence loop", () => {
     expect(baseline.suggestedWorkflows.length).toBeGreaterThanOrEqual(2);
     const candidate2 = baseline.suggestedWorkflows[1].slug;
 
-    // a lite model that selects ONLY candidate #2, opted in → filtered to just that one
+    // A lite model that selects ONLY candidate #2. Re-rank is ON BY DEFAULT when a
+    // model is present (no flag needed). `calls` proves the result is cached.
+    delete process.env.KEYOKU_SLM_SUGGEST;
+    let calls = 0;
     const fakeSlm: SlmProvider = {
       name: "fake",
       model: "fake",
       async complete() {
+        calls++;
         return JSON.stringify({ relevant: [2] });
       },
     };
     const slmHarness = new Harness(harness.store, new ConnectorManager(harness.store), fakeSlm);
-    process.env.KEYOKU_SLM_SUGGEST = "1";
+
+    const first = await slmHarness.assess("deploy-prod");
+    expect(first.suggestedWorkflows.map((s) => s.slug)).toEqual([candidate2]);
+    expect(calls).toBe(1);
+
+    // cached: a second assess of the same goal + candidate set does NOT re-call the model
+    const second = await slmHarness.assess("deploy-prod");
+    expect(second.suggestedWorkflows.map((s) => s.slug)).toEqual([candidate2]);
+    expect(calls).toBe(1);
+
+    // explicit opt-out → deterministic jaccard order
+    process.env.KEYOKU_SLM_SUGGEST = "0";
     try {
-      const ranked = await slmHarness.assess("deploy-prod");
-      expect(ranked.suggestedWorkflows.map((s) => s.slug)).toEqual([candidate2]);
+      const off = await slmHarness.assess("deploy-prod");
+      expect(off.suggestedWorkflows.length).toBeGreaterThanOrEqual(2);
     } finally {
       delete process.env.KEYOKU_SLM_SUGGEST;
     }
-
-    // opted out → SLM ignored, deterministic order preserved
-    const off = await slmHarness.assess("deploy-prod");
-    expect(off.suggestedWorkflows.length).toBeGreaterThanOrEqual(2);
   });
 
   it("abandoned goals refuse assess and record until resumed", async () => {

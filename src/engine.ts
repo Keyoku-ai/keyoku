@@ -115,6 +115,11 @@ export class Harness {
     readonly slm: SlmProvider | null = null,
   ) {}
 
+  /** In-memory cache of SLM re-ranks, keyed by goal + candidate-set, so repeated
+   *  assesses of the same goal (the protocol encourages assessing often) re-call the
+   *  model at most once per distinct candidate set. Lives for the process lifetime. */
+  private readonly rerankCache = new Map<string, string[]>();
+
   // ----- goal lifecycle -----
 
   createGoal(input: CreateGoalInput): Goal {
@@ -563,9 +568,17 @@ export class Harness {
     goal: Goal,
     suggestions: WorkflowSuggestion[],
   ): Promise<WorkflowSuggestion[]> {
-    if (!this.slm || suggestions.length < 2 || process.env.KEYOKU_SLM_SUGGEST !== "1") {
+    // On by default when a lite model is configured (a relevance decision is a model
+    // call, per the no-heuristics principle); set KEYOKU_SLM_SUGGEST=0 to force the
+    // deterministic jaccard order. Nothing to disambiguate (<2) ⇒ skip.
+    if (!this.slm || suggestions.length < 2 || process.env.KEYOKU_SLM_SUGGEST === "0") {
       return suggestions;
     }
+    // Cache by goal + the exact candidate set, so assessing often costs at most one
+    // model call per distinct set. A changed candidate set is a new key ⇒ re-ranked.
+    const cacheKey = `${goal.slug}::${suggestions.map((s) => s.slug).sort().join(",")}`;
+    const cached = this.rerankCache.get(cacheKey);
+    if (cached) return this.applyOrder(suggestions, cached);
     try {
       const list = suggestions
         .map((s, i) => `${i + 1}. [${s.slug}] ${s.objective}`)
@@ -579,9 +592,24 @@ export class Harness {
         .filter((s): s is WorkflowSuggestion => Boolean(s));
       // A model that returned malformed/empty selection shouldn't blank out real
       // recall — fall back to the deterministic order in that case.
-      return picked.length > 0 ? picked : suggestions;
+      if (picked.length === 0) return suggestions;
+      this.rerankCache.set(cacheKey, picked.map((s) => s.slug));
+      return picked;
     } catch {
       return suggestions;
     }
+  }
+
+  /** Reorder/filter the current suggestions to a cached slug ranking (a stale slug
+   *  simply drops out; an empty result falls back to the given order). */
+  private applyOrder(
+    suggestions: WorkflowSuggestion[],
+    slugs: string[],
+  ): WorkflowSuggestion[] {
+    const bySlug = new Map(suggestions.map((s) => [s.slug, s]));
+    const ordered = slugs
+      .map((sl) => bySlug.get(sl))
+      .filter((s): s is WorkflowSuggestion => Boolean(s));
+    return ordered.length > 0 ? ordered : suggestions;
   }
 }
