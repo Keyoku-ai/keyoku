@@ -7,16 +7,21 @@
 - **Muscle memory fills itself — activity-backfilled workflows.** Builds on 2.1.0:
   a goal that converges build-then-verify with **nothing recorded** no longer learns
   nothing. When the action trace is empty, the engine now infers the workflow steps
-  from the **activity log** within the goal's lifetime (`createdAt → now`), keeping
-  only real *action* events — mutating Bash / Edit / Write / connector calls, never
-  inspection (`ls`, `cat`, Reads…) or the harness's own `mcp__keyoku__*` bookkeeping
-  — collapsed and capped. Inferred steps are labeled `source: "activity"` so the
+  from the **activity log** over the window `[createdAt − lookback, convergedAt]`,
+  keeping only real *action* events — mutating Bash / Edit / Write / connector calls,
+  never inspection (`ls`, `cat`, Reads…) or the harness's own `mcp__keyoku__*`
+  bookkeeping — collapsed and capped. Two refinements proven against real data:
+  a **lookback** (default 45 min, `KEYOKU_BACKFILL_LOOKBACK_MIN`) catches work done
+  *just before* the goal was declared (build-then-verify goals can have 2–4 s
+  lifetimes — all the work precedes `goal_create`); and **dominant-session scoping**
+  keeps a goal from inheriting a concurrent project's edits (the global log
+  interleaves sessions). Inferred steps are labeled `source: "activity"` so the
   trace stays honest about provenance; an explicit `goal_record` always wins over
   inference. This closes the real-world gap the audit found: every one of a heavy
   user's converged goals had `steps: 0` because `goal_record` wasn't called mid-run.
   Fully back-compat (no activity ⇒ no workflow, exactly as before). Deterministic and
   synchronous — the convergence core is untouched; the SLM-backed `workflow_suggest`
-  / `harness_learn` passes can still refine the draft. (engine; regression test in
+  / `harness_learn` passes can still refine the draft. (engine; regression tests in
   `tests/engine.test.ts`.)
 - **Configurable workflow-suggestion relevance.** The Jaccard similarity floor and
   result count for surfacing a learned workflow on a new goal are now knobs, not

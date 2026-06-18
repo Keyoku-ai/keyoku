@@ -63,6 +63,11 @@ const WORKFLOW_SUGGESTION_LIMIT = envInt("KEYOKU_WF_SUGGEST_LIMIT", 2);
 // this many inferred steps are lifted from the activity log so the workflow
 // isn't a hollow shell. A bound, not a retention contract.
 const MAX_BACKFILL_STEPS = 30;
+// How far BEFORE a goal was created to look for its work. Build-then-verify
+// often means: do the work, THEN declare the goal and assess once — so the real
+// actions sit just before createdAt. (Real-data check: two converged goals had
+// 2–4s lifetimes because all work preceded goal_create.) A lookback knob.
+const BACKFILL_LOOKBACK_MS = envInt("KEYOKU_BACKFILL_LOOKBACK_MIN", 45) * 60_000;
 
 const MAX_ACTUAL_CHARS = 2_000;
 
@@ -453,7 +458,8 @@ export class Harness {
    * Infer workflow steps for a goal that converged with nothing recorded
    * (build-then-verify). Scope = action events — mutating Bash / Edit / Write /
    * connector calls, never inspection or the harness's own bookkeeping —
-   * observed since the goal was created. Deterministic and synchronous: it lifts
+   * within [createdAt − lookback, convergedAt], narrowed to the dominant session
+   * so concurrent projects don't bleed in. Deterministic and synchronous: it lifts
    * what actually happened from the activity log, it does not decide anything.
    * The log interleaves concurrent sessions, so this is a best-effort draft
    * (labeled source:"activity"), not a verified trace; the SLM-backed
@@ -462,22 +468,49 @@ export class Harness {
    * empty workflows just because the agent didn't call goal_record mid-run.
    */
   private backfillStepsFromActivity(goal: Goal): WorkflowStep[] {
-    const since = Date.parse(goal.createdAt);
-    if (Number.isNaN(since)) return [];
-    const events = this.store.listActivity().filter((e) => {
+    const created = Date.parse(goal.createdAt);
+    if (Number.isNaN(created)) return [];
+    // Window = [createdAt − lookback, convergedAt | now]. The lookback catches
+    // work done just before the goal was declared (build-then-verify); the
+    // upper bound keeps a goal converged in the past from sweeping in later,
+    // unrelated activity.
+    const since = created - BACKFILL_LOOKBACK_MS;
+    const until = goal.convergedAt ? Date.parse(goal.convergedAt) : Date.now();
+    const candidates = this.store.listActivity().filter((e) => {
       const t = Date.parse(e.at);
-      if (Number.isNaN(t) || t < since) return false;
+      if (Number.isNaN(t) || t < since || t > until) return false;
       const tool = e.tool ?? "";
       // The harness's own MCP calls (goal_*, workflow_*, …) are bookkeeping, not
       // the work being learned.
       if (tool.startsWith("mcp__keyoku__") || tool.startsWith("keyoku")) return false;
       return isActionEvent(e);
     });
+    if (candidates.length === 0) return [];
+    // The global log interleaves concurrent sessions — project A's edits sit
+    // next to project B's. Scope to the single session that did the most work in
+    // this window (the build-then-verify stream) so a goal doesn't inherit
+    // another project's actions. Same within-session principle the pattern miner
+    // uses; an SLM pass can refine further. (Real-data check: this is what
+    // stopped a headroom goal from absorbing job-search edits.)
+    const perSession = new Map<string, number>();
+    for (const e of candidates) {
+      const s = e.sessionId ?? "_";
+      perSession.set(s, (perSession.get(s) ?? 0) + 1);
+    }
+    let dominant = "_";
+    let best = -1;
+    for (const [s, n] of perSession) {
+      if (n > best) {
+        best = n;
+        dominant = s;
+      }
+    }
+    const scoped = candidates.filter((e) => (e.sessionId ?? "_") === dominant);
     // Collapse consecutive identical actions (a formatter rewriting one file ten
     // times is one step, not ten), then cap to the most recent steps.
     const steps: WorkflowStep[] = [];
     let lastKey = "";
-    for (const e of events) {
+    for (const e of scoped) {
       const summary = e.summary.slice(0, 200);
       const key = `${e.tool ?? e.type}:${summary}`;
       if (key === lastKey) continue;
