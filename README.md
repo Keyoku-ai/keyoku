@@ -151,6 +151,7 @@ The division of labor: **heuristics** generate candidates for free, the **small 
 | `KEYOKU_ENGINE_URL` | — | Connect a running [keyoku-engine](https://github.com/Keyoku-ai/keyoku-engine): knowledge mirrors into it and queries upgrade to semantic search |
 | `KEYOKU_WF_MIN_SIMILARITY` | `0.2` | Jaccard floor for suggesting a learned workflow on a new goal |
 | `KEYOKU_WF_SUGGEST_LIMIT` | `2` | Max learned workflows surfaced per assessment |
+| `KEYOKU_BACKFILL_LOOKBACK_MIN` | `45` | Minutes before a goal's creation to scan for build-then-verify work |
 | `KEYOKU_DEBUG` | — | Full error stacks |
 
 ## Security

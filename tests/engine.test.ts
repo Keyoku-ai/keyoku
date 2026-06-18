@@ -294,6 +294,43 @@ describe("the convergence loop", () => {
     expect(wf?.steps.every((s) => s.source === "activity")).toBe(true);
   });
 
+  it("backfill looks back before goal creation and scopes to the dominant session", async () => {
+    // The agent did the work, THEN declared + converged the goal (tiny lifetime).
+    const goal = harness.createGoal({
+      objective: "lookback and session scoping",
+      criteria: [
+        {
+          description: "echo ok",
+          probe: { kind: "command", run: "echo ok", parse: "text" },
+          assert: { op: "eq", value: "ok" },
+        },
+      ],
+    });
+    const created = Date.parse(harness.getGoal(goal.slug).createdAt);
+    const at = (deltaMs: number): string => new Date(created + deltaMs).toISOString();
+    let seq = 0;
+    const ev = (over: Partial<ActivityEvent>): ActivityEvent => ({
+      id: `e${seq++}`,
+      type: "tool_use",
+      summary: "x",
+      at: at(0),
+      ...over,
+    });
+    // Pre-goal work in the focus session s1, inside the lookback — MUST be captured:
+    harness.store.appendActivity(ev({ type: "file_change", tool: "Edit", summary: "Edit: src/early.ts", sessionId: "s1", at: at(-5 * 60_000) }));
+    // In-window work, same session — MUST be captured:
+    harness.store.appendActivity(ev({ type: "shell", tool: "Bash", summary: "Bash: npm run build", detail: "npm run build", sessionId: "s1", at: at(-1_000) }));
+    // Concurrent OTHER session — MUST be excluded by session scoping:
+    harness.store.appendActivity(ev({ type: "file_change", tool: "Edit", summary: "Edit: other/project.ts", sessionId: "s2", at: at(-2_000) }));
+    // Before the lookback window — MUST be excluded by time:
+    harness.store.appendActivity(ev({ type: "file_change", tool: "Edit", summary: "Edit: ancient.ts", sessionId: "s1", at: at(-120 * 60_000) }));
+
+    const conv = await harness.assess(goal.slug);
+    expect(conv.converged).toBe(true);
+    const wf = harness.store.getWorkflow(goal.slug);
+    expect(wf?.steps.map((s) => s.summary)).toEqual(["Edit: src/early.ts", "Bash: npm run build"]);
+  });
+
   it("muscle memory is REUSED — a similar goal gets the converged workflow suggested", async () => {
     const stateA = join(dir, "a.txt");
     writeFileSync(stateA, "ready");
