@@ -631,6 +631,72 @@ describe("workflow suggestions", () => {
   });
 });
 
+describe("self-pruning (precision-ranked suggestions)", () => {
+  // Converge a goal that records `steps`. The echo probe passes immediately, so
+  // a single assess promotes the recorded trace and runs outcome scoring.
+  const convergeWith = async (objective: string, steps: string[]): Promise<string> => {
+    const g = harness.createGoal({
+      objective,
+      criteria: [
+        {
+          description: "ok",
+          probe: { kind: "command", run: "echo ready", parse: "text" },
+          assert: { op: "contains", value: "ready" },
+        },
+      ],
+    });
+    for (const s of steps) harness.recordAction(g.slug, { summary: s });
+    await harness.assess(g.slug);
+    return g.slug;
+  };
+
+  it("downranks a relevant workflow whose steps never actually recur", async () => {
+    const RECUR = "restart the shared service daemon";
+    // Two workflows topically relevant to the same family of goals; only
+    // `useful`'s step is the one that keeps recurring in later work.
+    const useful = await convergeWith("configure widget useful alpha beta gamma", [RECUR]);
+    const noisy = await convergeWith("configure widget noisy alpha beta gamma", ["edit the alpha config file"]);
+
+    // Later goals — topically near both, but token-disjoint from the final probe
+    // — each re-run the recurring step, imprinting precision: useful helps, noisy
+    // never does.
+    for (const n of ["one", "two", "three"]) {
+      await convergeWith(`alpha beta gamma tuning ${n}`, [RECUR]);
+    }
+
+    const u = harness.store.getWorkflow(useful)!;
+    const x = harness.store.getWorkflow(noisy)!;
+    expect(u.stats.helped ?? 0).toBeGreaterThanOrEqual(3);
+    expect(u.stats.suggested ?? 0).toBeGreaterThanOrEqual(3);
+    expect(x.stats.suggested ?? 0).toBeGreaterThanOrEqual(3);
+    expect(x.stats.helped ?? 0).toBe(0);
+
+    // A fresh goal relevant to BOTH (the "tuning" workflows are token-disjoint
+    // from it, so only useful/noisy are eligible). Precision ranks the workflow
+    // that actually recurred ahead of the one that only ever word-matched.
+    const probe = harness.createGoal({
+      objective: "configure widget delta",
+      criteria: [
+        { description: "n/a", probe: { kind: "command", run: "echo no", parse: "text" }, assert: { op: "eq", value: "yes" } },
+      ],
+    });
+    const ranked = harness.suggestWorkflows(probe).map((s) => s.slug);
+    expect(ranked[0]).toBe(useful);
+    expect(ranked.indexOf(useful)).toBeLessThan(ranked.indexOf(noisy));
+
+    // Opting out (KEYOKU_WF_SELF_PRUNE=0) restores pure jaccard: equal similarity,
+    // so the precision-based reordering no longer applies.
+    process.env.KEYOKU_WF_SELF_PRUNE = "0";
+    try {
+      const u2 = harness.suggestWorkflows(probe).find((s) => s.slug === useful);
+      const x2 = harness.suggestWorkflows(probe).find((s) => s.slug === noisy);
+      expect(u2?.similarity).toBeCloseTo(x2?.similarity ?? -1, 5);
+    } finally {
+      delete process.env.KEYOKU_WF_SELF_PRUNE;
+    }
+  });
+});
+
 describe("live capture (goal_focus + auto-record)", () => {
   const echoGoal = (objective: string): CreateGoalInput => ({
     objective,

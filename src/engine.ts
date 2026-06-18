@@ -62,6 +62,27 @@ function envInt(name: string, fallback: number): number {
 const WORKFLOW_SUGGESTION_MIN_SIMILARITY = envFloat("KEYOKU_WF_MIN_SIMILARITY", 0.2);
 const WORKFLOW_SUGGESTION_LIMIT = envInt("KEYOKU_WF_SUGGEST_LIMIT", 2);
 
+// Self-pruning. A workflow that keeps matching new goals on shared words but
+// whose steps never actually recur in those goals is a noisy match — it should
+// sink, not keep crowding out genuinely reusable workflows. We learn this from
+// outcomes: at each convergence we score the neighbours that were relevant
+// (`suggested`) against whether this goal's trace overlapped their steps
+// (`helped`), and rank later suggestions by similarity × precision. It's a
+// DOWNRANK, never a hard hide (a floor keeps a low-precision workflow available
+// when nothing better exists), it only kicks in once a workflow has enough
+// signal, and `KEYOKU_WF_SELF_PRUNE=0` disables it entirely → pure jaccard.
+// Recall (which workflows are eligible) stays the deterministic jaccard gate.
+const WORKFLOW_PRECISION_MIN_SIGNAL = envInt("KEYOKU_WF_PRECISION_MIN_SIGNAL", 3);
+const WORKFLOW_PRECISION_FLOOR = envFloat("KEYOKU_WF_PRECISION_FLOOR", 0.25);
+const WORKFLOW_HELP_OVERLAP_MIN = envFloat("KEYOKU_WF_HELP_OVERLAP", 0.3);
+
+/** Normalize a step summary for cross-goal overlap matching: drop a leading
+ *  tool prefix ("Bash: …"), lowercase, trim, and cap so trivial variation
+ *  (a path tail, a flag) doesn't defeat the comparison. */
+function normStep(summary: string): string {
+  return summary.toLowerCase().replace(/^[a-z_][\w-]*:\s*/, "").trim().slice(0, 50);
+}
+
 // Activity-backfill cap: when a goal converges with nothing recorded, at most
 // this many inferred steps are lifted from the activity log so the workflow
 // isn't a hollow shell. A bound, not a retention contract.
@@ -348,6 +369,11 @@ export class Harness {
       fresh.status = "converged";
       fresh.convergedAt = now;
       this.promoteWorkflow(fresh);
+      // Self-pruning: now that this goal has converged with a known trace, score
+      // the neighbouring workflows that were relevant to it — did their steps
+      // actually recur here? Only at a FRESH convergence (not on every retroactive
+      // record / re-assert) so the signal isn't inflated.
+      this.recordSuggestionOutcomes(fresh);
       // Focus is per-goal intent; once converged, stop live-capturing to it.
       const focus = this.store.getFocus();
       if (focus && focus.goalId === fresh.id) this.store.setFocus(null);
@@ -627,22 +653,84 @@ export class Harness {
     return capHeadTail(steps, MAX_BACKFILL_STEPS, BACKFILL_HEAD_STEPS);
   }
 
+  /**
+   * Record, at a fresh convergence, how the workflows that were RELEVANT to this
+   * goal actually fared: each topically-eligible neighbour gets `suggested`++ ,
+   * and `helped`++ when this goal's learned trace overlapped its steps (the
+   * pattern genuinely recurred). suggestWorkflows() then ranks by precision, so a
+   * workflow that keeps word-matching but never recurs sinks. Deterministic,
+   * best-effort (never breaks a convergence), and a no-op when the converged goal
+   * has no learnable steps (we can't judge "help" from nothing, so we don't
+   * penalise neighbours for it) or when KEYOKU_WF_SELF_PRUNE=0.
+   */
+  private recordSuggestionOutcomes(goal: Goal): void {
+    try {
+      if (process.env.KEYOKU_WF_SELF_PRUNE === "0") return;
+      const own = this.store.getWorkflow(goal.slug);
+      const goalKeys = new Set((own?.steps ?? []).map((s) => normStep(s.summary)).filter((k) => k.length >= 3));
+      if (goalKeys.size === 0) return; // nothing to judge overlap against
+      const goalTokens = tokens(`${goal.objective} ${goal.slug}`);
+      const now = new Date().toISOString();
+      for (const w of this.store.listWorkflows()) {
+        if (w.slug === goal.slug || w.steps.length === 0) continue;
+        const sim = jaccard(goalTokens, tokens(`${w.objective} ${w.slug}`));
+        if (sim < WORKFLOW_SUGGESTION_MIN_SIMILARITY) continue; // wouldn't have surfaced
+        const matched = w.steps.filter((s) => {
+          const k = normStep(s.summary);
+          if (k.length < 3) return false;
+          for (const gk of goalKeys) if (gk === k || gk.includes(k) || k.includes(gk)) return true;
+          return false;
+        }).length;
+        const helped = matched / w.steps.length >= WORKFLOW_HELP_OVERLAP_MIN;
+        w.stats.suggested = (w.stats.suggested ?? 0) + 1;
+        if (helped) w.stats.helped = (w.stats.helped ?? 0) + 1;
+        w.updatedAt = now;
+        this.store.saveWorkflow(w);
+      }
+    } catch {
+      // Outcome tracking is best-effort — it must never break a convergence.
+    }
+  }
+
   suggestWorkflows(goal: Goal): WorkflowSuggestion[] {
     const goalTokens = tokens(`${goal.objective} ${goal.slug}`);
+    const selfPrune = process.env.KEYOKU_WF_SELF_PRUNE !== "0";
+    // Precision multiplier: 1.0 until a workflow has enough outcome signal, then
+    // helped/suggested, floored so a low-precision workflow is pushed down but
+    // never fully erased (it can still surface when nothing better matches).
+    const precision = (w: WorkflowArtifact): number => {
+      const suggested = w.stats.suggested ?? 0;
+      if (!selfPrune || suggested < WORKFLOW_PRECISION_MIN_SIGNAL) return 1;
+      return Math.max(WORKFLOW_PRECISION_FLOOR, (w.stats.helped ?? 0) / suggested);
+    };
     return this.store
       .listWorkflows()
       .filter((w) => w.slug !== goal.slug && w.steps.length > 0)
-      .map((w) => ({
-        slug: w.slug,
-        objective: w.objective,
-        similarity: jaccard(goalTokens, tokens(`${w.objective} ${w.slug}`)),
-        convergences: w.stats.convergences,
-        steps: w.steps,
-        ...(w.pitfalls && w.pitfalls.length > 0 ? { pitfalls: w.pitfalls } : {}),
-      }))
-      .filter((s) => s.similarity >= WORKFLOW_SUGGESTION_MIN_SIMILARITY)
-      .sort((a, b) => b.similarity - a.similarity)
-      .slice(0, WORKFLOW_SUGGESTION_LIMIT);
+      .map((w) => {
+        const similarity = jaccard(goalTokens, tokens(`${w.objective} ${w.slug}`));
+        return {
+          // recall gate stays pure jaccard; precision only reorders.
+          eligible: similarity >= WORKFLOW_SUGGESTION_MIN_SIMILARITY,
+          score: similarity * precision(w),
+          suggestion: {
+            slug: w.slug,
+            objective: w.objective,
+            similarity,
+            convergences: w.stats.convergences,
+            steps: w.steps,
+            ...(w.pitfalls && w.pitfalls.length > 0 ? { pitfalls: w.pitfalls } : {}),
+          } as WorkflowSuggestion,
+        };
+      })
+      .filter((x) => x.eligible)
+      .sort(
+        (a, b) =>
+          b.score - a.score ||
+          b.suggestion.similarity - a.suggestion.similarity ||
+          b.suggestion.convergences - a.suggestion.convergences,
+      )
+      .slice(0, WORKFLOW_SUGGESTION_LIMIT)
+      .map((x) => x.suggestion);
   }
 
   /**

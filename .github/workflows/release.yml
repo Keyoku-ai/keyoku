@@ -24,6 +24,7 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run eval # quality gate: muscle-memory retrieval, not just correctness
+      - run: node scripts/preflight.mjs # release integrity: version single-sourced, changelog present, built artifact matches package.json (npm test already built dist/)
       # Publish path, in order of preference:
       #   1. npm Trusted Publishing (OIDC, tokenless, provenance) — configure once at
       #      npmjs.com → package 'keyoku' → Settings → Trusted Publishing → add this repo

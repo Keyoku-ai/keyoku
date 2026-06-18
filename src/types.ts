@@ -285,6 +285,14 @@ export interface WorkflowArtifact {
     /** Times a goal with this slug converged. Acts as the stability score. */
     convergences: number;
     totalActions: number;
+    /** Self-pruning signal. `suggested` = times this workflow was topically
+     *  relevant to a LATER converged goal (i.e. it would have been surfaced);
+     *  `helped` = how often that goal's actual trace overlapped these steps (the
+     *  pattern genuinely recurred). precision = helped/suggested downranks a
+     *  workflow that keeps matching on words but never actually recurs. Optional
+     *  for back-compat with workflows persisted before these fields existed. */
+    suggested?: number;
+    helped?: number;
   };
   createdAt: string;
   updatedAt: string;

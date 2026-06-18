@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+## 2.8.0 — 2026-06-18
+
+- **Self-pruning muscle memory — workflows that never recur sink** (retrieval
+  lane). Until now a learned workflow ranked purely on token overlap (jaccard),
+  so one that happened to share words with many goals kept getting surfaced even
+  if its steps never actually applied. The engine now learns from **outcomes**:
+  at each fresh convergence it scores the workflows that were *relevant* to the
+  goal (`stats.suggested`) against whether the goal's actual trace *overlapped*
+  their steps (`stats.helped`), and `suggestWorkflows` ranks by
+  `similarity × precision` (`helped/suggested`). A chronically word-matching but
+  never-recurring workflow is **downranked, not hidden** — a floor keeps it
+  available when nothing better matches — and the effect only kicks in once a
+  workflow has enough signal (`KEYOKU_WF_PRECISION_MIN_SIGNAL`, default 3). The
+  **recall gate stays pure deterministic jaccard**; precision only reorders.
+  Knobs: `KEYOKU_WF_PRECISION_FLOOR` (0.25), `KEYOKU_WF_HELP_OVERLAP` (0.3),
+  `KEYOKU_WF_SELF_PRUNE=0` to disable. The convergence core is untouched.
+  Regression test in `tests/engine.test.ts`.
+- **Release preflight — version drift can't ship again.** `npm run preflight`
+  (and a CI step in `release.yml`) builds, then verifies: package.json is valid
+  semver, the CHANGELOG documents it, `VERSION` is **single-sourced** from
+  package.json (not a hardcoded literal — the exact 2.7.1 regression), the
+  **built artifact actually reports that version**, and `dist` ships in the
+  tarball. Fails the release loudly before a bad tag goes out.
+- **Production-readiness assessment** captured in `docs/PRODUCTION-READINESS.md`
+  (what's done, what's user-only, what's next), so the path to "product-grade"
+  is auditable rather than tribal knowledge.
+
 ## 2.7.1 — 2026-06-18
 
 - **Honest version reporting.** `VERSION` (used by `keyoku version` and the MCP
