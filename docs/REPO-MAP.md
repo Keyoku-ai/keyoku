@@ -41,6 +41,20 @@ gives you.
   `keyoku-demo/`** — experiments, SDKs, deploy infra, and demos in the broader
   Keyoku family. None of them is the published `keyoku` CLI.
 
+## Local working trees — the canonical clone
+
+Two local clones of **this same repo** exist on the maintainer's machine. Editing
+the wrong one ships nothing. The canonical one is:
+
+> **`~/Development/Keyoku/keyoku-harness`** — this is what the **live Claude Code
+> MCP server runs** (`~/.claude.json` points at its `dist/index.js`). Edit here,
+> `npm run build`, and the next session picks it up.
+
+The other clone — `~/Development/Keyoku Harness/keyoku-harness` — is a second
+checkout used historically for `keyoku-site` deploys. To remove the foot-gun,
+archive or delete it and keep a single working copy. (Both push to the same
+GitHub remote, so no history is lost.)
+
 ## Rule of thumb
 
 > When someone says "Keyoku," they mean **this package** (`keyoku-harness` →
