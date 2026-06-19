@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -157,6 +157,18 @@ describe("Store", () => {
     expect(reloaded.getWorkflow("deploy")?.stats.convergences).toBe(1);
     expect(reloaded.deleteConnector("gh")).toBe(true);
     expect(reloaded.deleteConnector("gh")).toBe(false);
+  });
+
+  it("bounds the audit log once it crosses the size cap", () => {
+    const auditPath = join(dir, "audit.jsonl");
+    const line = JSON.stringify({ id: "old", at: "2026-01-01T00:00:00Z", actor: "cli", op: "x", summary: "y".repeat(160), ok: true });
+    writeFileSync(auditPath, (line + "\n").repeat(7000)); // > 1 MB
+    expect(statSync(auditPath).size).toBeGreaterThan(1_000_000);
+
+    store.appendAudit({ id: "fresh", at: "2026-06-18T00:00:00Z", actor: "agent", op: "release", summary: "stable", ok: true });
+
+    expect(statSync(auditPath).size).toBeLessThan(1_000_000); // trimmed
+    expect(store.listAudit(10).some((e) => e.id === "fresh")).toBe(true); // newest kept
   });
 });
 

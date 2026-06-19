@@ -301,7 +301,18 @@ export class Store {
   }
 
   appendAudit(entry: AuditEntry): void {
-    appendFileSync(this.auditFile(), `${JSON.stringify(entry)}\n`, { mode: FILE_MODE });
+    const path = this.auditFile();
+    appendFileSync(path, `${JSON.stringify(entry)}\n`, { mode: FILE_MODE });
+    // The audit trail is a log, not data — bound it so it can't grow without
+    // limit. O(1) stat check; only read+trim once it crosses ~1 MB.
+    let size = 0;
+    try { size = statSync(path).size; } catch { return; }
+    if (size > 1_000_000) {
+      const kept = readFileSync(path, "utf8").split("\n").filter((l) => l.trim() !== "").slice(-2000);
+      const tmp = `${path}.${process.pid}.tmp`;
+      writeFileSync(tmp, kept.join("\n") + "\n", { mode: FILE_MODE });
+      renameSync(tmp, path);
+    }
   }
 
   listAudit(limit = 100): AuditEntry[] {

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 2.12.1 — 2026-06-18
+
+- **Bounded the audit log.** `audit.jsonl` now self-caps at ~1 MB (keeps the most
+  recent ~2000 entries) — the last unbounded log. Every persistent log is now
+  bounded (activity → ~8k events, observations → 400/goal, audit → ~2000);
+  `knowledge.jsonl` is intentionally kept (it's data, not a log). Regression test
+  in `tests/store.test.ts`. Final storage-stability hardening before stable.
+
 ## 2.12.0 — 2026-06-18
 
 - **`keyoku inspect` — data-trust visibility (#53).** Shows exactly what keyoku
