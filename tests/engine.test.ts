@@ -690,6 +690,39 @@ describe("semantic recall (model surfaces what lexical overlap can't)", () => {
     expect(report.candidateWorkflows.map((c) => c.slug)).toContain("k8s-ingress-tls"); // but the agent gets it
     expect(report.guidance).toContain("YOU judge relevance");
   });
+
+  it("agentJudges (MCP path): the agent is the final judge — the lite model is NOT consulted", async () => {
+    await mk("k8s-ingress-tls", "provision kubernetes ingress with cert-manager TLS", "kubectl apply ingress");
+    await mk("db-backup-rotate", "rotate the database backup snapshots nightly", "run pg_dump cron");
+    const goal = harness.createGoal({
+      objective: "deploy the billing pipeline to staging",
+      slug: "billing-deploy",
+      criteria: [
+        { description: "n/a", probe: { kind: "command", run: "echo no", parse: "text" }, assert: { op: "eq", value: "yes" } },
+      ],
+    });
+    let calls = 0;
+    const fakeSlm: SlmProvider = {
+      name: "fake",
+      model: "fake",
+      async complete() {
+        calls++;
+        return JSON.stringify({ relevant: [1] });
+      },
+    };
+    const slmH = new Harness(harness.store, new ConnectorManager(harness.store), fakeSlm);
+
+    // Interactive: model NOT consulted; suggestions are the deterministic list (no model false-positives).
+    const interactive = await slmH.assess(goal.slug, { agentJudges: true });
+    expect(calls).toBe(0);
+    expect(interactive.suggestedWorkflows.map((s) => s.slug)).toEqual(
+      slmH.suggestWorkflows(slmH.getGoal(goal.slug)).map((s) => s.slug),
+    );
+
+    // Headless (default): the lite model DOES judge, since no agent is present.
+    await slmH.assess(goal.slug);
+    expect(calls).toBeGreaterThan(0);
+  });
 });
 
 describe("self-pruning (precision-ranked suggestions)", () => {

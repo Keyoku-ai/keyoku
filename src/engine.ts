@@ -315,7 +315,17 @@ export class Harness {
 
   // ----- the assess step -----
 
-  async assess(ref: string): Promise<ConvergenceReport> {
+  /**
+   * @param opts.agentJudges When true (the interactive MCP path), a frontier
+   *   coding agent is reading this report, so it — not an internal lite model —
+   *   is the final judge of relevance. `suggestedWorkflows` stays the
+   *   conservative, high-precision DETERMINISTIC list (no false positives), and
+   *   the agent judges the wider `candidateWorkflows`. Measured on real goals,
+   *   the agent out-judges flash-lite on BOTH precision and recall, and needs no
+   *   key. When false (headless: `keyoku assess`/`watch`/cron, where no agent is
+   *   present), the lite model — if configured — does the judging instead.
+   */
+  async assess(ref: string, opts: { agentJudges?: boolean } = {}): Promise<ConvergenceReport> {
     const goal = this.getGoal(ref);
     if (goal.status === "abandoned") {
       throw new Error(
@@ -406,7 +416,15 @@ export class Harness {
     fresh.updatedAt = now;
     this.store.saveGoal(fresh);
 
-    const suggestions = converged ? [] : await this.suggestRelevant(fresh);
+    // Interactive (agentJudges): the agent is the judge → suggestedWorkflows is
+    // the conservative deterministic list (high precision, no model false
+    // positives); the agent judges candidateWorkflows for recall. Headless: the
+    // lite model (if any) judges, since no agent is present.
+    const suggestions = converged
+      ? []
+      : opts.agentJudges
+        ? this.suggestWorkflows(fresh)
+        : await this.suggestRelevant(fresh);
     const patternNow = new Date(now);
     const patterns = converged
       ? []

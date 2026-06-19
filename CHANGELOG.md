@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## 2.11.0 — 2026-06-18
+
+- **The agent is the final judge in the MCP path; the lite model is demoted to
+  headless-only.** A head-to-head on real goals showed `gemini-3.1-flash-lite`
+  *over-matching* — it flagged two `lar-*` workflows as relevant to an unrelated
+  generative-art goal (`wonder-drop`), i.e. false positives, while a frontier
+  agent judging the same candidate pool correctly rejected them AND recalled more
+  true matches elsewhere (3/3 vs the model's 2/3). So `goal_assess` (the
+  interactive MCP path) now keeps `suggestedWorkflows` as the **conservative
+  deterministic** list (high precision, zero model false-positives) and lets the
+  **agent** judge `candidateWorkflows` — better precision *and* recall, zero
+  dependency. The lite model still judges in **headless** contexts (`keyoku
+  assess`/`watch`/cron, where no agent is present) via the new
+  `assess(ref, { agentJudges })` flag (default false = headless behavior, so the
+  CLI and existing callers are unchanged). The MCP server passes
+  `agentJudges: true`. Regression test asserts the model is **not consulted** in
+  the agent path (`calls === 0`) and is in the headless path.
+
 ## 2.10.0 — 2026-06-18
 
 - **Agent-as-judge recall — reuse works with NO internal model (zero

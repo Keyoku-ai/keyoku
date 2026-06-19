@@ -279,7 +279,9 @@ export function buildServer(harness: Harness): McpServer {
     },
     async ({ goal: ref }) => {
       try {
-        return json(await harness.assess(ref));
+        // A frontier coding agent is reading this — it is the final judge of
+        // workflow relevance (better than a lite model, and zero-dependency).
+        return json(await harness.assess(ref, { agentJudges: true }));
       } catch (err) {
         return fail(err);
       }
