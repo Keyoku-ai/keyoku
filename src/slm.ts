@@ -23,7 +23,12 @@ export interface SlmConfig {
   baseUrl?: string;
 }
 
-const GEMINI_DEFAULT_MODEL = "gemini-3.5-flash";
+// A *lite* model by default, on purpose: keyoku's calls (re-rank, refine) ask for
+// small JSON with a tight maxTokens. A "thinking" model (e.g. gemini-3.5-flash)
+// spends that whole budget on internal reasoning and returns HTTP 200 with EMPTY
+// text (finishReason: MAX_TOKENS) — silently breaking every SLM feature. Lite
+// models answer within the budget. Override with KEYOKU_SLM_MODEL.
+const GEMINI_DEFAULT_MODEL = "gemini-2.5-flash-lite";
 const ANTHROPIC_DEFAULT_MODEL = "claude-haiku-4-5-20251001";
 const DEFAULT_MAX_TOKENS = 2048;
 const GEMINI_TIMEOUT_MS = 60_000;

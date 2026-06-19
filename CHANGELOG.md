@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 2.9.1 — 2026-06-18
+
+- **Fix: default Gemini model silently broke every SLM feature.** The default was
+  `gemini-3.5-flash`, a *thinking* model — keyoku's calls request small JSON with
+  a tight `maxTokens`, which the model spends entirely on internal reasoning,
+  returning HTTP 200 with **empty text** (`finishReason: MAX_TOKENS`). So
+  semantic recall, re-rank, and refine all silently no-op'd (fell back to
+  lexical) even with a valid key. Default is now `gemini-2.5-flash-lite`, which
+  answers within the budget. Verified end-to-end: a live call now surfaces the
+  right workflows where lexical returns nothing. Override via `KEYOKU_SLM_MODEL`.
+
 ## 2.9.0 — 2026-06-18
 
 - **`keyoku backfill` — repair hollow muscle memory.** A real-data audit found
