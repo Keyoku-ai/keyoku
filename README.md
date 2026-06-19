@@ -70,6 +70,16 @@ Every tool call your agent makes is recorded as a lightweight `ActivityEvent` �
 
 `workflow_suggest` mines recurring sequences from your recent activity (non-overlapping counting, noise suppression, longest-chain collapsing — no model required). If an SLM key is configured (`GEMINI_API_KEY` or `ANTHROPIC_API_KEY`), the model then refines the drafts: filters coincidences, names workflows properly, and parameterizes run-specific values with `{{placeholders}}`.
 
+### 2b. Muscle memory — converged goals become reusable workflows
+
+A goal that converges (`goal_assess` reports all criteria met) promotes its action trace into a learned workflow. Next time you start a *similar* goal, keyoku surfaces what worked before — so the agent never rediscovers it.
+
+- **Capture happens three ways:** explicit `goal_record`, live `goal_focus` (real actions stream into the goal's trace as you work), or **activity backfill** (if you just did the work without recording, keyoku lifts the steps from the activity log). Already have hollow workflows from older runs? `keyoku backfill` repopulates them.
+- **Reuse needs no API key.** keyoku is driven by a frontier coding agent, so *the agent is the judge of relevance.* `goal_assess` returns `candidateWorkflows` and the agent picks the ones that genuinely apply — which matches verbose, differently-worded goals that token-overlap never could. A lite model is an optional accelerator for headless runs (`keyoku watch`/cron), not a requirement.
+- **It self-prunes.** Suggestions rank by `similarity × precision`, where precision is learned from whether a workflow's steps actually recur — so word-matching-but-never-useful workflows sink.
+- **Negative memory too.** Approaches that *failed* on the way to convergence are captured as pitfalls and surfaced as "avoid (failed before): …" on similar goals.
+- **Refine raw into clean.** `keyoku refine <slug>` turns noisy captured steps into a tight, `{{parameterized}}` template ready to run.
+
 ### 3. Approval — you are the trust boundary
 
 ```
@@ -115,8 +125,11 @@ keyoku import           Backfill activity from Claude Code + Codex transcripts (
 keyoku export <slug>    Bake a workflow into ./.claude/skills — or AGENTS.md with --agents-md
 keyoku pause | resume   Privacy switch: stop/start all recording and injection
 keyoku doctor           Verify hooks, MCP registrations, engine, and activity health
+keyoku inspect          Show exactly what's stored in ~/.keyoku (--secrets scans for leaks)
 keyoku status           Show goals, templates, connectors
 keyoku learn            Mine patterns from the activity log
+keyoku backfill         Repopulate hollow learned workflows from the activity log (--dry-run)
+keyoku refine <slug>    Turn a workflow's raw steps into a clean, parameterized template (--apply)
 keyoku focus <goal>     Live-capture actions into a goal's trace (--clear to stop; no arg to show)
 keyoku assess <goal>    One-shot convergence check
 keyoku watch <goal>     Re-assess on an interval
