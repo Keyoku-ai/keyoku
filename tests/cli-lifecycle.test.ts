@@ -82,3 +82,50 @@ describe("export --agents-md", () => {
     expect(existsSync(join(home, ".claude"))).toBe(false); // agents-md mode skips skills dir
   });
 });
+
+describe("inspect", () => {
+  it("summarizes the store and scans for secrets", () => {
+    const { out } = cli(["inspect"]);
+    expect(out).toContain("keyoku inspect");
+    expect(out).toContain("Activity:");
+    expect(out).toContain("Privacy:");
+    expect(out).toContain("mode 600"); // credential-grade perms reported
+    expect(cli(["inspect", "--secrets"]).out).toContain("secrets scan");
+  });
+});
+
+describe("refine", () => {
+  it("collapses a raw workflow into a clean template; --apply saves it", () => {
+    const store = new Store(home);
+    store.saveWorkflow({
+      id: "wf_demo",
+      slug: "demo-refine",
+      objective: "demo objective",
+      steps: [
+        { summary: "Bash: npm run build", tool: "Bash", detail: "npm run build", result: "success", source: "activity" },
+        { summary: "Bash: npm run build", tool: "Bash", detail: "npm run build", result: "success", source: "activity" }, // consecutive dup → collapsed
+        { summary: "… 3 intermediate steps omitted …", result: "success", source: "activity" }, // marker → dropped
+        { summary: "Edit: src/x.ts", tool: "Edit", result: "success", source: "activity" },
+      ],
+      criteria: [],
+      stats: { convergences: 1, totalActions: 4 },
+      createdAt: "2026-06-18T00:00:00Z",
+      updatedAt: "2026-06-18T00:00:00Z",
+    });
+
+    const dry = cli(["refine", "demo-refine"]); // no model in test env → deterministic
+    expect(dry.out).toContain("raw steps →");
+    expect(dry.out).toContain("npm run build");
+    expect(dry.out).not.toContain("intermediate step"); // omission marker dropped
+    expect(store.getTemplate("demo-refine")).toBeUndefined(); // dry-run does not save
+
+    const applied = cli(["refine", "demo-refine", "--apply"]);
+    expect(applied.out).toContain("Saved template 'demo-refine'");
+    const tmpl = store.getTemplate("demo-refine");
+    expect(tmpl).toBeTruthy();
+    expect(tmpl!.steps.length).toBeGreaterThan(0);
+    expect(tmpl!.steps.some((s) => s.command === "npm run build")).toBe(true);
+
+    expect(cli(["refine", "nope"]).code).toBe(1); // unknown slug fails cleanly
+  });
+});

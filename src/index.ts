@@ -8,7 +8,7 @@ import { buildServer, VERSION } from "./server.js";
 import { resolveSlmFromEnv } from "./slm.js";
 import { redactSecrets } from "./activity.js";
 import { newId, Store } from "./store.js";
-import type { ActivityEvent } from "./types.js";
+import type { ActivityEvent, WorkflowStep, WorkflowStepTemplate, WorkflowTemplate } from "./types.js";
 
 // stdout is the MCP protocol channel in serve mode — all human output in that
 // mode MUST go to stderr.
@@ -1095,6 +1095,166 @@ async function backfillCmd(rest: string[]): Promise<void> {
   if (dryRun && changed.length > 0) console.log("\nRun `keyoku backfill` (no flag) to apply.");
 }
 
+/** Data-trust inspector: show exactly what keyoku has stored about you in
+ *  KEYOKU_HOME, file sizes + permissions, redaction posture, and how to scope or
+ *  wipe it. `--secrets` scans the activity log for known secret patterns (a
+ *  tripwire confirming write-time redaction held). Read-only. */
+async function inspect(rest: string[]): Promise<void> {
+  const { statSync, existsSync, readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const store = new Store();
+  const fmt = (n: number) =>
+    n < 1024 ? `${n} B` : n < 1_048_576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1_048_576).toFixed(1)} MB`;
+  console.log(`keyoku inspect — ${store.dir}\n`);
+
+  const goals = store.listGoals();
+  const byStatus = goals.reduce((a, g) => { a[g.status] = (a[g.status] ?? 0) + 1; return a; }, {} as Record<string, number>);
+  console.log(`Goals:      ${goals.length} (${Object.entries(byStatus).map(([k, v]) => `${v} ${k}`).join(", ") || "none"})`);
+  const wf = store.listWorkflows();
+  const hollow = wf.filter((w) => w.steps.length === 0).length;
+  const rawWf = wf.filter((w) => w.steps.some((s) => s.source === "activity")).length;
+  console.log(`Workflows:  ${wf.length} (${hollow} hollow, ${rawWf} with raw activity steps — refine via 'keyoku refine <slug>')`);
+  console.log(`Patterns: ${store.listPatterns().length}  Templates: ${store.listTemplates().length}  Executions: ${store.listExecutions().length}  Knowledge: ${store.listKnowledge().length}`);
+  const conns = store.listConnectors();
+  console.log(`Connectors: ${conns.length}${conns.length ? ` (${conns.map((c) => `${c.name}:${c.autonomy}`).join(", ")})` : ""}`);
+
+  const act = store.listActivity();
+  console.log(`\nActivity:   ${act.length} events`);
+  if (act.length > 0) {
+    console.log(`  span:      ${(act[0].at ?? "?").slice(0, 10)} → ${(act[act.length - 1].at ?? "?").slice(0, 10)}`);
+    console.log(`  recording: ${existsSync(join(store.dir, "paused")) ? "PAUSED ('keyoku resume' to re-enable)" : "active ('keyoku pause' to stop)"}`);
+  }
+
+  console.log(`\nStored files (perms should be 600/700 — credential-grade):`);
+  for (const f of ["goals.json", "workflows.json", "activity.jsonl", "knowledge.jsonl", "connectors.json", "focus.json", "audit.jsonl", "patterns.json"]) {
+    const p = join(store.dir, f);
+    if (!existsSync(p)) continue;
+    const s = statSync(p);
+    const mode = (s.mode & 0o777).toString(8);
+    const warn = mode !== "600" ? "  ⚠️ expected 600" : "";
+    console.log(`  ${f.padEnd(18)} ${fmt(s.size).padStart(9)}  mode ${mode}${warn}`);
+  }
+
+  console.log(`\nPrivacy:`);
+  console.log(`  Secrets are redacted at write time (bearer tokens + key=value credentials → «redacted»).`);
+  if (rest.includes("--secrets")) {
+    let hits = 0;
+    try {
+      const text = readFileSync(join(store.dir, "activity.jsonl"), "utf8");
+      hits = (text.match(/AIza[\w-]{30,}|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[\w-]{10,}/g) ?? []).length;
+    } catch { /* no log */ }
+    console.log(`  --secrets scan: ${hits === 0 ? "no known secret patterns in the activity log ✓" : `⚠️ ${hits} secret-like string(s) found — review/redact`}`);
+  } else {
+    console.log(`  Scan with 'keyoku inspect --secrets' (tripwire for write-time redaction).`);
+  }
+  console.log(`  Scope/stop: 'keyoku pause'.  Wipe everything: delete ${store.dir}.`);
+}
+
+/** Deterministic floor for refine: map a learned workflow's steps to runnable
+ *  template steps, dropping omission markers and collapsing consecutive dups. */
+function collapseStepsForTemplate(steps: WorkflowStep[]): WorkflowStepTemplate[] {
+  const out: WorkflowStepTemplate[] = [];
+  let lastKey = "";
+  for (const s of steps) {
+    if (/intermediate step(s)? omitted/.test(s.summary)) continue;
+    const key = `${s.tool ?? ""}:${s.summary}`;
+    if (key === lastKey) continue;
+    lastKey = key;
+    if ((s.tool === "Bash" || /^Bash:/.test(s.summary)) && s.detail) {
+      out.push({ type: "bash", summary: s.summary.slice(0, 100), command: s.detail.slice(0, 500) });
+    } else {
+      out.push({ type: "agent_prompt", summary: s.summary.slice(0, 100), prompt: `Perform: ${s.summary}` });
+    }
+  }
+  return out;
+}
+
+/** SLM polish: name, de-noise, merge dups, and {{parameterize}} run-specific
+ *  values. Returns null on any failure so the deterministic floor stands. */
+async function slmRefine(
+  slm: NonNullable<ReturnType<typeof resolveSlmFromEnv>>,
+  objective: string,
+  draft: WorkflowStepTemplate[],
+): Promise<{ name: string; description: string; steps: WorkflowStepTemplate[] } | null> {
+  const list = draft.map((s, i) => `${i + 1}. [${s.type}] ${s.summary}${s.command ? ` :: ${s.command}` : ""}`).join("\n");
+  const prompt = `Refine this learned workflow into a clean, reusable template.\nObjective: ${objective}\nRaw steps:\n${list}\n\nDrop inspection/noise, merge duplicates, keep the essential ordered actions, and replace run-specific values (paths, names, messages) with {{placeholders}}. Keep bash commands runnable. Return ONLY JSON: {"name": string, "description": string, "steps": [{"type":"bash"|"agent_prompt","summary":string,"command"?:string,"prompt"?:string}]}.`;
+  const raw = await slm.complete(prompt, { json: true, maxTokens: 1200 });
+  const parsed = JSON.parse(raw.replace(/```[a-zA-Z]*/g, "").trim()) as {
+    name?: unknown; description?: unknown; steps?: unknown;
+  };
+  if (!Array.isArray(parsed.steps)) return null;
+  const steps = parsed.steps
+    .filter((s): s is Record<string, unknown> => typeof s === "object" && s !== null)
+    .filter((s) => (s.type === "bash" || s.type === "agent_prompt") && typeof s.summary === "string")
+    .map((s) => ({
+      type: s.type as "bash" | "agent_prompt",
+      summary: String(s.summary).slice(0, 100),
+      ...(typeof s.command === "string" ? { command: s.command.slice(0, 500) } : {}),
+      ...(typeof s.prompt === "string" ? { prompt: s.prompt } : {}),
+    }));
+  if (steps.length === 0) return null;
+  return {
+    name: (typeof parsed.name === "string" && parsed.name.trim()) || "refined workflow",
+    description: (typeof parsed.description === "string" && parsed.description.trim()) || objective,
+    steps,
+  };
+}
+
+/** Turn a raw/backfilled workflow into a clean, parameterized template. Prints a
+ *  reviewable draft; `--apply` saves it as a runnable template (workflow_execute). */
+async function refineCmd(rest: string[]): Promise<void> {
+  const slug = rest.find((a) => !a.startsWith("-"));
+  if (!slug) {
+    console.error("Usage: keyoku refine <workflow-slug> [--apply]   (list slugs with: keyoku inspect)");
+    process.exitCode = 1;
+    return;
+  }
+  const apply = rest.includes("--apply");
+  const harness = buildHarness();
+  const wf = harness.store.getWorkflow(slug);
+  if (!wf) {
+    console.error(`No workflow '${slug}'.`);
+    process.exitCode = 1;
+    return;
+  }
+  const draft = collapseStepsForTemplate(wf.steps);
+  let name = wf.slug;
+  let description = wf.objective;
+  let refined = draft;
+  const slm = resolveSlmFromEnv();
+  if (slm) {
+    try {
+      const polished = await slmRefine(slm, wf.objective, draft);
+      if (polished) ({ name, description, steps: refined } = polished);
+    } catch { /* keep the deterministic draft */ }
+  }
+  console.log(`keyoku refine ${slug} — ${wf.steps.length} raw steps → ${refined.length} refined${slm ? " (SLM-polished)" : " (deterministic)"}\n`);
+  console.log(`name: ${name}\ndesc: ${description}\nsteps:`);
+  refined.forEach((s, i) => console.log(`  ${i + 1}. [${s.type}] ${s.summary}${s.command ? ` :: ${s.command}` : ""}`));
+  if (!apply) {
+    console.log(`\nReview, then save with: keyoku refine ${slug} --apply  (or workflow_approve via MCP).`);
+    return;
+  }
+  const now = new Date().toISOString();
+  const existing = harness.store.getTemplate(slug);
+  const template: WorkflowTemplate = existing
+    ? { ...existing, name, description, steps: refined, updatedAt: now }
+    : {
+        id: newId("tmpl"),
+        slug,
+        name,
+        description,
+        steps: refined,
+        trigger: { type: "on_demand" },
+        approvedAt: now,
+        createdAt: now,
+        updatedAt: now,
+        timesRun: 0,
+      };
+  harness.store.saveTemplate(template);
+  console.log(`\nSaved template '${slug}'. Run it with: workflow_execute { slug: "${slug}" }`);
+}
+
 async function main(): Promise<void> {
   const [cmd, ...rest] = process.argv.slice(2);
   switch (cmd ?? "serve") {
@@ -1126,6 +1286,10 @@ async function main(): Promise<void> {
       return resume();
     case "doctor":
       return doctor();
+    case "inspect":
+      return inspect(rest);
+    case "refine":
+      return refineCmd(rest);
     case "backfill":
     case "repair":
       return backfillCmd(rest);

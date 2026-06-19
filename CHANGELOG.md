@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+## 2.12.0 — 2026-06-18
+
+- **`keyoku inspect` — data-trust visibility (#53).** Shows exactly what keyoku
+  has stored in `KEYOKU_HOME`: goals/workflows/patterns/templates/executions/
+  knowledge counts, connectors + autonomy, activity span + recording state, every
+  stored file's size and **permission mode** (flags anything not `600`), and the
+  privacy posture. `keyoku inspect --secrets` scans the activity log for known
+  secret patterns (AIza…/sk-…/ghp_…/xox…) as a tripwire confirming write-time
+  redaction held. Read-only; documents how to scope (`keyoku pause`) and wipe.
+- **`keyoku refine <slug>` — raw learned steps → clean, runnable template (#48).**
+  Backfilled workflows carry noisy raw activity steps; `refine` collapses dups,
+  drops omission markers, and (when a lite model is configured) names them,
+  de-noises, and replaces run-specific values with `{{placeholders}}` — then
+  prints a reviewable draft. `--apply` saves it as a template runnable via
+  `workflow_execute`. Verified on a real workflow: 31 raw steps → 7 clean,
+  parameterized steps. Deterministic floor when no model; fail-safe.
+- **Pattern mining clarified (#49).** Diagnosed the "0 patterns" report: the
+  heuristic floor only mines sequences shared across ≥2 converged goals (correct
+  to yield 0 for distinct one-off goals); the **SLM miner** generalizes and, with
+  a key configured, `keyoku learn` now mines real patterns. Not a detection bug.
+
 ## 2.11.0 — 2026-06-18
 
 - **The agent is the final judge in the MCP path; the lite model is demoted to
