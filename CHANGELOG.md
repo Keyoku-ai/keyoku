@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+## 2.10.0 — 2026-06-18
+
+- **Agent-as-judge recall — reuse works with NO internal model (zero
+  dependency).** keyoku is driven by a frontier coding agent, which is a far
+  stronger reasoner than any lite model — so instead of *requiring* an internal
+  model to decide which learned workflows are relevant, `goal_assess` now also
+  returns `candidateWorkflows`: a small, overlap-ranked pool (sharing ≥1 token,
+  capped by `KEYOKU_WF_CANDIDATES`, default 5) for the **agent** to judge. The
+  guidance frames it explicitly: *"YOU judge relevance — apply the steps of any
+  that genuinely fit, ignore the rest."* This lets reuse fire on verbose,
+  differently-worded goals that lexical overlap (max ~0.08 jaccard on real goals)
+  can never match — **with no API key and no internal model**. The deterministic
+  `suggestedWorkflows` (jaccard floor) is unchanged, so the offline path and the
+  CI eval are untouched; an optional lite model still pre-filters when configured
+  (best of all three: deterministic floor + agent judgment + optional model).
+- **Refine keyoku's own memory.** When a candidate is relevant but its learned
+  steps are noisy/raw (e.g. backfilled activity), the assess guidance now nudges
+  the agent to clean it up via the existing `workflow_update` tool — so the agent
+  sharpens keyoku's brain as a side effect of using it. New
+  `Harness.candidateWorkflows()`; `ConvergenceReport.candidateWorkflows`;
+  regression test (candidates surface with no model). The convergence core stays
+  deterministic.
+
 ## 2.9.1 — 2026-06-18
 
 - **Fix: default Gemini model silently broke every SLM feature.** The default was

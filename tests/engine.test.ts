@@ -674,6 +674,22 @@ describe("semantic recall (model surfaces what lexical overlap can't)", () => {
     expect(picked).toHaveLength(1);
     expect(["k8s-ingress-tls", "db-backup-rotate"]).toContain(picked[0].slug);
   });
+
+  it("surfaces candidates for the AGENT to judge with NO model (zero-dependency recall)", async () => {
+    await mk("k8s-ingress-tls", "provision kubernetes ingress with cert-manager TLS", "kubectl apply ingress");
+    // Worded so jaccard stays below the floor (shares only 'kubernetes').
+    const goal = harness.createGoal({
+      objective: "secure the kubernetes service endpoints",
+      slug: "secure-cluster",
+      criteria: [
+        { description: "n/a", probe: { kind: "command", run: "echo no", parse: "text" }, assert: { op: "eq", value: "yes" } },
+      ],
+    });
+    const report = await harness.assess(goal.slug); // harness has NO model
+    expect(report.suggestedWorkflows).toHaveLength(0); // deterministic floor filters it out
+    expect(report.candidateWorkflows.map((c) => c.slug)).toContain("k8s-ingress-tls"); // but the agent gets it
+    expect(report.guidance).toContain("YOU judge relevance");
+  });
 });
 
 describe("self-pruning (precision-ranked suggestions)", () => {

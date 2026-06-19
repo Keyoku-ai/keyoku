@@ -40,7 +40,7 @@ describe("resolveSlmFromEnv", () => {
     const slm = resolveSlmFromEnv({ KEYOKU_SLM_PROVIDER: "gemini", GEMINI_API_KEY: "g" });
     expect(slm).not.toBeNull();
     expect(slm?.name).toBe("gemini");
-    expect(slm?.model).toBe("gemini-3.5-flash");
+    expect(slm?.model).toBe("gemini-2.5-flash-lite");
   });
 
   it("returns null for an explicit gemini request without GEMINI_API_KEY", () => {

@@ -201,6 +201,10 @@ export interface ConvergenceReport {
   unmetCount: number;
   /** Learned workflows whose objectives resemble this goal's. */
   suggestedWorkflows: WorkflowSuggestion[];
+  /** Wider, overlap-ranked pool for the AGENT to judge relevance on — the
+   *  zero-dependency recall path (no internal model needed). Excludes anything
+   *  already in suggestedWorkflows. */
+  candidateWorkflows: WorkflowSuggestion[];
   /** Mined patterns (M2 learning loop) relevant to this goal. */
   relevantPatterns: {
     name: string;

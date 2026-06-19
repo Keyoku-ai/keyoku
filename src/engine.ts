@@ -76,6 +76,10 @@ const WORKFLOW_SUGGESTION_LIMIT = envInt("KEYOKU_WF_SUGGEST_LIMIT", 2);
 // candidates (ranked by overlap coefficient, NO hard lexical floor — the model
 // decides relevance, per the no-heuristics principle). Bounds tokens/latency.
 const RECALL_POOL_LIMIT = envInt("KEYOKU_WF_RECALL_POOL", 12);
+// How many candidate workflows to surface for the AGENT to judge (the
+// zero-dependency recall path — see candidateWorkflows). Kept small so it costs
+// only a glance of the agent's context.
+const AGENT_CANDIDATE_LIMIT = envInt("KEYOKU_WF_CANDIDATES", 5);
 
 // Self-pruning. A workflow that keeps matching new goals on shared words but
 // whose steps never actually recur in those goals is a noisy match — it should
@@ -434,15 +438,29 @@ export class Harness {
       criteria: evaluations,
       unmetCount: evaluations.filter((e) => !e.pass).length,
       suggestedWorkflows: suggestions,
+      // Zero-dependency recall: a wider, overlap-ranked pool for the AGENT to
+      // judge (no internal model needed — the agent IS the model). Excludes what's
+      // already in suggestedWorkflows so the lists don't repeat.
+      candidateWorkflows: converged
+        ? []
+        : this.candidateWorkflows(fresh, suggestions.map((s) => s.slug)),
       relevantPatterns: patterns,
-      guidance: buildGuidance(fresh, evaluations, suggestions, {
+      guidance: "",
+    };
+    const candidateGuidance =
+      report.candidateWorkflows.length > 0
+        ? `\n\nCandidate workflows from related goals — YOU judge relevance (apply the steps of any that genuinely fit this goal, ignore the rest): ${report.candidateWorkflows
+            .map((c) => `'${c.slug}'`)
+            .join(", ")}. If one is relevant but its learned steps are noisy/raw, clean it up with workflow_update so it's sharper next time — that refines keyoku's memory.`
+        : "";
+    report.guidance =
+      buildGuidance(fresh, evaluations, suggestions, {
         driftDetected,
         patterns,
         // Honest convergence message: only claim a workflow was learned if one
         // actually exists (a zero-action convergence has none — nudge to record).
         workflowPromoted: converged ? this.store.getWorkflow(fresh.slug) != null : undefined,
-      }),
-    };
+      }) + candidateGuidance;
 
     // Perception (M2): every assessment becomes episodic memory the learning
     // loop mines. A failure here must never break the assessment itself.
@@ -866,7 +884,7 @@ export class Harness {
   /** Wide candidate pool for semantic recall: every workflow-with-steps (except
    *  this goal's own), ranked by overlap coefficient and capped — NO hard lexical
    *  floor, because the model, not a token threshold, decides relevance. */
-  private candidatePool(goal: Goal, limit: number): WorkflowSuggestion[] {
+  private candidatePool(goal: Goal, limit: number, requireOverlap = false): WorkflowSuggestion[] {
     const goalTokens = tokens(`${goal.objective} ${goal.slug}`);
     return this.store
       .listWorkflows()
@@ -882,9 +900,27 @@ export class Harness {
           ...(w.pitfalls && w.pitfalls.length > 0 ? { pitfalls: w.pitfalls } : {}),
         } as WorkflowSuggestion,
       }))
+      // requireOverlap (the agent-judge candidate field) keeps only workflows that
+      // share at least one token — enough signal to be worth the agent's glance,
+      // without the noise of zero-overlap workflows. The model-recall path passes
+      // false (a semantic match can share zero tokens — that's the model's job).
+      .filter((x) => !requireOverlap || x.ov > 0)
       .sort((a, b) => b.ov - a.ov || b.s.similarity - a.s.similarity)
       .slice(0, limit)
       .map((x) => x.s);
+  }
+
+  /**
+   * Candidate workflows for the AGENT to judge — the zero-dependency recall path.
+   * keyoku is driven by a frontier coding agent; rather than require an internal
+   * lite model to decide relevance, `goal_assess` can surface a small, overlap-
+   * ranked pool and let the agent (a far stronger model, already in the loop) pick
+   * what actually applies. Excludes anything already in the deterministic
+   * `suggestedWorkflows` so the two lists don't repeat.
+   */
+  candidateWorkflows(goal: Goal, exclude: Iterable<string> = []): WorkflowSuggestion[] {
+    const taken = new Set(exclude);
+    return this.candidatePool(goal, AGENT_CANDIDATE_LIMIT, true).filter((c) => !taken.has(c.slug));
   }
 
   /**

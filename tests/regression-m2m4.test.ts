@@ -45,9 +45,9 @@ describe("store: listObservations limit=0 means none, not all", () => {
 describe("slm: empty KEYOKU_SLM_MODEL falls back to the provider default", () => {
   it("does not produce an empty model id", () => {
     const slm = resolveSlmFromEnv({ GEMINI_API_KEY: "k", KEYOKU_SLM_MODEL: "" });
-    expect(slm?.model).toBe("gemini-3.5-flash");
+    expect(slm?.model).toBe("gemini-2.5-flash-lite");
     const ws = resolveSlmFromEnv({ GEMINI_API_KEY: "k", KEYOKU_SLM_MODEL: "   " });
-    expect(ws?.model).toBe("gemini-3.5-flash");
+    expect(ws?.model).toBe("gemini-2.5-flash-lite");
     const explicit = resolveSlmFromEnv({ GEMINI_API_KEY: "k", KEYOKU_SLM_MODEL: "gemini-3.1-flash-lite" });
     expect(explicit?.model).toBe("gemini-3.1-flash-lite");
   });
@@ -147,6 +147,7 @@ describe("engine + observe: re-asserting a converged goal is not a new convergen
       ],
       unmetCount: 0,
       suggestedWorkflows: [],
+      candidateWorkflows: [],
       relevantPatterns: [],
       guidance: "",
     };

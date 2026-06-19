@@ -50,6 +50,7 @@ const report = (
   criteria: [evaluation("c1", true), evaluation("c2", false), evaluation("c3", false)],
   unmetCount: 2,
   suggestedWorkflows: [],
+  candidateWorkflows: [],
   relevantPatterns: [],
   guidance: "keep going",
   ...overrides,
