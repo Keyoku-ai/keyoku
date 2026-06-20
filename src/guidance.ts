@@ -12,6 +12,14 @@ import type {
 export const PROTOCOL = `Keyoku is a convergence harness: it turns goals with machine-checkable
 success criteria into a loop you (the agent) drive until the goal is reached.
 
+REACH FOR KEYOKU whenever a task is a multi-step goal with a verifiable end
+state — a migration, "make X production-ready", "get CI green", a deploy, a
+refactor with a clear done-condition — especially work that spans many actions
+or survives context resets, or that you want to become a reusable, learned
+workflow. Not for one-shot edits or pure Q&A. The signal: you could write a
+command/HTTP/probe that checks "is it done yet?". Before starting one, query
+existing knowledge + goals + workflows so you reuse what was already learned.
+
 The protocol:
 1. goal_create — declare a goal. Success criteria are probes (shell command,
    HTTP request, or MCP connector tool call) plus assertions over their
@@ -45,7 +53,15 @@ harness_learn mines traces + observations into reusable patterns (SLM-powered
 when GEMINI_API_KEY / ANTHROPIC_API_KEY is configured, heuristic otherwise).
 Relevant patterns and previously learned workflows appear in goal_assess
 guidance — prefer them; they encode how this user does things. Everything
-consequential lands in the audit trail (audit_list).`;
+consequential lands in the audit trail (audit_list).
+
+Discipline that makes the loop work: make criteria BEHAVIORAL ("does the thing
+actually work?") not mere file-presence; criteria are IMMUTABLE after
+goal_create — get them right, and make a NEW goal to change them; call
+goal_record for EVERY action honestly, including failures (failures teach the
+harness what to avoid and become pitfalls in future suggestions); never fudge a
+criterion that's blocked by the environment — report it honestly and leave the
+goal unconverged; and always honor the goal's autonomy level.`;
 
 function describeExpected(evaluation: CriterionEvaluation): string {
   const { op, value, path } = evaluation.expected;
