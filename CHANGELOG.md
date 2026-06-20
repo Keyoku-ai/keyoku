@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 2.12.2 — 2026-06-20
+
+- **Agent-awareness in the served MCP instructions.** The `PROTOCOL` string the
+  MCP server hands every connected agent now states *when to reach for Keyoku*
+  (multi-step goals with a verifiable end state — migrations, "make X
+  production-ready", get-CI-green, deploys, refactors with a clear
+  done-condition; not one-shot edits or pure Q&A) and the **discipline** that
+  makes the loop work: behavioral (not file-presence) criteria, criteria
+  immutable after `goal_create`, `goal_record` every action honestly *including
+  failures* (they become pitfalls in future suggestions), never fudge an
+  env-blocked criterion, always honor the autonomy level. Also nudges agents to
+  query existing knowledge/goals/workflows first so learned work gets reused.
+
 ## 2.12.1 — 2026-06-18
 
 - **Bounded the audit log.** `audit.jsonl` now self-caps at ~1 MB (keeps the most
