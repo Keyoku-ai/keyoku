@@ -411,7 +411,10 @@ export function buildServer(harness: Harness): McpServer {
           ...(target.agentName ? { agentName: target.agentName } : {}),
           ...(maxRounds !== undefined ? { maxRounds } : {}),
         });
-        logAudit("goal_run", ref, `${result.sessionId} → ${result.converged ? "converged" : "not converged"} in ${result.rounds} rounds`, result.converged);
+        const dispatch = result.dispatch
+          ? `; dispatch ${result.dispatch.agent}: ${result.dispatch.rationale.slice(0, 100)}`
+          : "";
+        logAudit("goal_run", ref, `${result.sessionId} → ${result.converged ? "converged" : "not converged"} in ${result.rounds} rounds${dispatch}`, result.converged);
         return json(result);
       } catch (err) {
         logAudit("goal_run", ref, err instanceof Error ? err.message.slice(0, 120) : String(err), false);

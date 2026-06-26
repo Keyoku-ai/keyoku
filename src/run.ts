@@ -7,6 +7,12 @@ import {
 } from "./omnigent-guardrails.js";
 import { compileConstraintsToPolicies } from "./policy-compiler.js";
 import { CONNECTOR_PRESETS } from "./presets.js";
+import {
+  chooseAgentForGoal,
+  listOmnigentAgents,
+  LIST_AGENTS_TOOL,
+  type AgentChoice,
+} from "./dispatch.js";
 import type { ConvergenceReport, Connector, Goal } from "./types.js";
 
 type Connectors = Pick<ConnectorManager, "add" | "callTool" | "get">;
@@ -15,9 +21,7 @@ type Engine = Pick<Harness, "assess" | "getGoal"> & {
   slm?: Harness["slm"];
 };
 
-const DEFAULT_OMNIGENT_AGENT = "codex-native-ui";
 const CREATE_SESSION_TOOL = "create_session_v1_sessions_post";
-const LIST_AGENTS_TOOL = "list_builtin_agents_v1_agents_get";
 const POST_EVENT_TOOL = "post_event_v1_sessions__session_id__events_post";
 
 function parseJson(text: string): unknown {
@@ -164,16 +168,30 @@ export async function runGoalOnOmnigent(opts: {
   goalSlug: string;
   agentName?: string;
   maxRounds?: number;
-}): Promise<{ converged: boolean; rounds: number; sessionId: string }> {
+  log?: (message: string) => void;
+}): Promise<{ converged: boolean; rounds: number; sessionId: string; dispatch?: AgentChoice }> {
   await ensureOmnigentConnector(opts.connectors);
+
+  const goal = opts.engine.getGoal(opts.goalSlug);
+  let dispatch: AgentChoice | undefined;
+  let agentName = opts.agentName;
+  if (!agentName) {
+    const agents = await listOmnigentAgents(opts.connectors);
+    dispatch = await chooseAgentForGoal({
+      goal,
+      agents,
+      slm: opts.engine.slm,
+      ...(opts.log ? { log: opts.log } : {}),
+    });
+    agentName = dispatch.agent;
+  }
 
   const sessionId = await createSession(
     opts.connectors,
     opts.goalSlug,
-    opts.agentName ?? DEFAULT_OMNIGENT_AGENT,
+    agentName,
   );
 
-  const goal = opts.engine.getGoal(opts.goalSlug);
   const specs = await compileConstraintsToPolicies(goal.constraints ?? [], {
     slm: opts.engine.slm,
     log: () => {},
@@ -195,5 +213,5 @@ export async function runGoalOnOmnigent(opts: {
     postMessage: (text) => postUserMessage(opts.connectors, sessionId, text),
   });
 
-  return { ...result, sessionId };
+  return { ...result, sessionId, ...(dispatch ? { dispatch } : {}) };
 }

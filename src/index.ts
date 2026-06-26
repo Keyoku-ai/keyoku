@@ -37,6 +37,12 @@ export {
 } from "./policy-compiler.js";
 export { CONNECTOR_PRESETS } from "./presets.js";
 export { ensureOmnigentConnector, runGoalOnOmnigent } from "./run.js";
+export {
+  chooseAgentForGoal,
+  listOmnigentAgents,
+  type AgentChoice,
+  type OmnigentAgentCandidate,
+} from "./dispatch.js";
 export { buildServer, VERSION } from "./server.js";
 export { Store } from "./store.js";
 
@@ -311,15 +317,26 @@ async function runCmd(rest: string[]): Promise<void> {
     console.log(
       `Running goal '${goal.slug}' on Omnigent${target.agentName ? ` agent '${target.agentName}'` : ""}...`,
     );
-    console.log("Ensuring Omnigent connector and creating a session...");
+    console.log(
+      target.agentName
+        ? "Ensuring Omnigent connector and creating a session..."
+        : "Ensuring Omnigent connector, choosing an agent, and creating a session...",
+    );
     const result = await runGoalOnOmnigent({
       engine: harness,
       connectors: harness.connectors,
       goalSlug: goal.slug,
       ...(target.agentName ? { agentName: target.agentName } : {}),
       ...(maxRounds !== undefined ? { maxRounds } : {}),
+      log: () => {},
     });
     console.log(`Omnigent session: ${result.sessionId}`);
+    if (result.dispatch) {
+      console.log(
+        `Chosen Omnigent agent: ${result.dispatch.agent}${result.dispatch.degraded ? " (degraded)" : ""}`,
+      );
+      console.log(`Dispatch rationale: ${result.dispatch.rationale}`);
+    }
     console.log(
       result.converged
         ? `Goal '${goal.slug}' converged after ${result.rounds} round(s).`

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 2.16.0 — 2026-06-26
+
+- **Model-driven Omnigent dispatch.** `keyoku run <goalSlug> --on omnigent`
+  and MCP `goal_run` now list available Omnigent agents and ask the configured
+  SLM to choose the best-fit agent with a rationale when no explicit agent is
+  provided. Explicit `omnigent:<agentName>` runs still bypass dispatch. The
+  result includes `dispatch`, CLI output prints the chosen agent and rationale,
+  and no regex/keyword heuristic is used. When no model is configured, dispatch
+  falls back deterministically to `codex-native-ui` and marks the choice
+  degraded.
+
 ## 2.15.0 — 2026-06-26
 
 - **One-command Omnigent convergence runs.** Added `keyoku run <goalSlug> --on

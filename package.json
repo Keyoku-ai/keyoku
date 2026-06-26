@@ -1,6 +1,6 @@
 {
   "name": "keyoku",
-  "version": "2.15.0",
+  "version": "2.16.0",
   "description": "The harness with muscle memory — watches what you do in Claude Code, Cursor, or Codex, learns your patterns, and turns them into reusable MCP-native workflows.",
   "type": "module",
   "bin": {

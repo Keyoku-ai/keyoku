@@ -30,7 +30,19 @@ async function main() {
 
   const store = new Store(home);
   const connectors = new ConnectorManager(store);
-  const engine = new Harness(store, connectors, null);
+  let dispatchPrompt = "";
+  const dispatchSlm = {
+    name: "e2e-dispatch",
+    model: "fixed-json",
+    async complete(prompt) {
+      dispatchPrompt = prompt;
+      return JSON.stringify({
+        agent: "codex-native-ui",
+        rationale: "codex-native-ui fits this narrow already-converged verification run because it is optimized for implementation and test feedback loops.",
+      });
+    },
+  };
+  const engine = new Harness(store, connectors, dispatchSlm);
   let sessionId = "";
 
   try {
@@ -62,8 +74,12 @@ async function main() {
     assert(result.converged === true, "expected converged=true");
     assert(result.rounds === 1, `expected 1 round, got ${result.rounds}`);
     assert(typeof result.sessionId === "string" && result.sessionId.length > 0, "missing session id");
+    assert(dispatchPrompt.includes("Candidate agents:"), "dispatch model was not called");
+    assert(result.dispatch?.agent === "codex-native-ui", `unexpected dispatch agent: ${JSON.stringify(result.dispatch)}`);
+    assert(typeof result.dispatch?.rationale === "string" && result.dispatch.rationale.length > 0, "missing dispatch rationale");
+    assert(result.dispatch.degraded !== true, "dispatch unexpectedly degraded");
 
-    console.log(`PASS omnigent run e2e session=${result.sessionId}`);
+    console.log(`PASS omnigent run e2e session=${result.sessionId} agent=${result.dispatch.agent} rationale="${result.dispatch.rationale}"`);
   } finally {
     await connectors.closeAll().catch(() => {});
     await cleanupSession(sessionId);
