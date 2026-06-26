@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { ConnectorManager } from "../src/connectors.js";
 import {
   buildRequest,
   describeTool,
@@ -14,6 +15,7 @@ import {
   parseSpec,
   type SynthTool,
 } from "../src/openapi.js";
+import { Store } from "../src/store.js";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -166,15 +168,15 @@ describe("parseSpec (OpenAPI 3.x JSON)", () => {
     expect(noServers.warnings.some((w) => w.includes("no servers"))).toBe(true);
   });
 
-  it("caps long operationIds at 64 chars", () => {
-    const longId = "a".repeat(100);
+  it("caps long operationIds at 128 chars", () => {
+    const longId = "a".repeat(200);
     const doc = {
       openapi: "3.0.0",
       info: { title: "T" },
       servers: [{ url: "https://x" }],
       paths: { "/a": { get: { operationId: longId } } },
     };
-    expect(parseSpec(JSON.stringify(doc)).tools[0].name).toBe("a".repeat(64));
+    expect(parseSpec(JSON.stringify(doc)).tools[0].name).toBe("a".repeat(128));
   });
 
   it("throws helpfully on empty, unparseable, and unrecognized specs", () => {
@@ -297,6 +299,16 @@ describe("buildRequest", () => {
     expect(strReq.headers["content-type"]).toBeUndefined();
     const noBody = buildRequest(createPet, {}, "https://x");
     expect(noBody.body).toBeUndefined();
+  });
+
+  it("honors explicit bodies on mutating operations even when a sloppy spec omits requestBody", () => {
+    const sloppyPost: SynthTool = { ...createPet, hasBody: false };
+    const req = buildRequest(sloppyPost, { body: { title: "keyoku" } }, "https://x");
+    expect(req.body).toBe('{"title":"keyoku"}');
+    expect(req.headers["content-type"]).toBe("application/json");
+
+    const readOnly = buildRequest(getPet, { petId: "9", body: { ignored: true } }, "https://x");
+    expect(readOnly.body).toBeUndefined();
   });
 
   it("applies all four auth kinds", () => {
@@ -485,6 +497,89 @@ describe("executeSynthTool", () => {
 });
 
 // ---------------------------------------------------------------------------
+// ConnectorManager + OpenAPI synth
+// ---------------------------------------------------------------------------
+
+describe("ConnectorManager OpenAPI synth", () => {
+  it("forwards JSON body args for mutating operations even when the spec omits requestBody", async () => {
+    let server: Server | undefined;
+    let baseUrl = "";
+    server = createServer((req, res) => {
+      const url = new URL(req.url ?? "/", "http://localhost");
+      if (url.pathname === "/openapi.json") {
+        res.setHeader("content-type", "application/json");
+        res.end(
+          JSON.stringify({
+            openapi: "3.0.3",
+            info: { title: "Sloppy Sessions", version: "1.0.0" },
+            servers: [{ url: baseUrl }],
+            paths: {
+              "/v1/sessions": {
+                post: { operationId: "create_session_v1_sessions_post" },
+              },
+            },
+          }),
+        );
+        return;
+      }
+
+      if (url.pathname === "/v1/sessions" && req.method === "POST") {
+        let body = "";
+        req.on("data", (chunk) => (body += chunk));
+        req.on("end", () => {
+          res.setHeader("content-type", "application/json");
+          res.end(
+            JSON.stringify({
+              contentType: req.headers["content-type"] ?? null,
+              body,
+              conversation_id: "session_1",
+            }),
+          );
+        });
+        return;
+      }
+
+      res.statusCode = 404;
+      res.end("not found");
+    });
+    await new Promise<void>((resolve) => server?.listen(0, "127.0.0.1", resolve));
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+    const dir = mkdtempSync(join(tmpdir(), "keyoku-openapi-connector-"));
+    const store = new Store(dir);
+    const connectors = new ConnectorManager(store);
+    try {
+      await connectors.add({
+        name: "sloppy",
+        transport: {
+          type: "openapi",
+          specUrl: `${baseUrl}/openapi.json`,
+          baseUrl,
+          allowMutating: true,
+          auth: { kind: "none" },
+        },
+        autonomy: "autonomous",
+        addedAt: "2026-06-26T00:00:00.000Z",
+      });
+
+      const result = await connectors.callTool("sloppy", "create_session_v1_sessions_post", {
+        body: { agent_name: "codex-test", title: "keyoku:ship-it" },
+      });
+
+      expect(result.isError).toBe(false);
+      const echoed = JSON.parse(result.text);
+      expect(echoed.contentType).toBe("application/json");
+      expect(echoed.body).toBe('{"agent_name":"codex-test","title":"keyoku:ship-it"}');
+      expect(echoed.conversation_id).toBe("session_1");
+    } finally {
+      await connectors.closeAll().catch(() => {});
+      rmSync(dir, { recursive: true, force: true });
+      await new Promise<void>((resolve) => server?.close(() => resolve()));
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // describeTool
 // ---------------------------------------------------------------------------
 
@@ -507,6 +602,19 @@ describe("describeTool", () => {
     expect(described.description).toContain("X-Tenant");
     expect(described.description).toContain("dryRun?");
     expect(described.description).toContain("(mutating)");
+    expect(described.description).toContain("body");
+  });
+
+  it("advertises explicit body args for mutating operations whose spec omits requestBody", () => {
+    const described = describeTool({
+      name: "createSession",
+      description: "Create session",
+      method: "post",
+      pathTemplate: "/v1/sessions",
+      params: [],
+      hasBody: false,
+      mutating: true,
+    });
     expect(described.description).toContain("body");
   });
 

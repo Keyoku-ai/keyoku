@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+## 2.15.0 — 2026-06-26
+
+- **One-command Omnigent convergence runs.** Added `keyoku run <goalSlug> --on
+  omnigent[:agentName]` and MCP `goal_run` to auto-connect the Omnigent preset,
+  create a session, install compiled constraint policies, post the goal objective
+  with current unmet criteria, and reuse the existing convergence driver until
+  the goal passes. Added mocked orchestration tests and a live Omnigent run e2e
+  proof script.
+
+## 2.14.0 — 2026-06-26
+
+- **Convergence Guardrails for Omnigent.** Added a Keyoku convergence-gate
+  policy that denies Omnigent `response` events until the goal's success
+  criteria actually pass, plus `driveToConvergence()` to keep a dispatched
+  session alive with continuation messages until `goal_assess` converges. Added
+  model-driven constraint-to-policy compilation for Omnigent built-in policies
+  with a clearly logged degraded offline fallback, `keyoku converge`,
+  `keyoku guardrails`, MCP `goal_converge` / `goal_guardrails`, unit coverage,
+  and a real Omnigent guardrail e2e proof script.
+
+## 2.13.0 — 2026-06-26
+
+- **Built-in Omnigent connector preset.** Added `keyoku connect omnigent` to
+  discover the local Omnigent server, register its OpenAPI connector
+  idempotently, and persist it with approval-gated autonomy. `keyoku connect
+  --list` shows available presets.
+
 ## 2.12.2 — 2026-06-20
 
 - **Agent-awareness in the served MCP instructions.** The `PROTOCOL` string the

@@ -37,7 +37,7 @@ export interface SynthSpec {
 }
 
 const FETCH_TIMEOUT_MS = 30_000;
-const NAME_CAP = 64;
+const NAME_CAP = 128;
 const BODY_CAP = 2_000;
 const METHODS = ["get", "put", "post", "delete", "patch", "head"] as const;
 
@@ -314,10 +314,12 @@ export function buildRequest(
     }
   }
 
-  // Only consume args.body as the request body when the operation declares one
-  // — otherwise a param literally named "body" would be sent twice.
+  // Prefer the spec's requestBody declaration, but tolerate sloppy specs for
+  // mutating endpoints that omit it even though the server requires JSON.
+  // Read-only operations still ignore undeclared args.body so a query/header
+  // parameter literally named "body" is not sent twice.
   let body: string | undefined;
-  if (tool.hasBody && args.body !== undefined && args.body !== null) {
+  if ((tool.hasBody || tool.mutating) && args.body !== undefined && args.body !== null) {
     if (typeof args.body === "string") {
       body = args.body;
     } else {
@@ -410,7 +412,7 @@ export function describeTool(tool: SynthTool): { name: string; description: stri
   if (tool.params.length > 0) {
     parts.push(`params: ${tool.params.map((p) => (p.required ? p.name : `${p.name}?`)).join(", ")}`);
   }
-  if (tool.hasBody) parts.push("accepts a request body via 'body'");
+  if (tool.hasBody || tool.mutating) parts.push("accepts a request body via 'body'");
   if (tool.mutating) parts.push("(mutating)");
   return { name: tool.name, description: parts.join(" | ") };
 }

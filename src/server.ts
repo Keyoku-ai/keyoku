@@ -19,8 +19,15 @@ import type { Harness } from "./engine.js";
 import { executeBashStep, executeMcpStep } from "./executor.js";
 import { buildCreateGuidance, buildRecordGuidance, PROTOCOL } from "./guidance.js";
 import { relevantPatterns, runLearning } from "./learn.js";
+import {
+  driveToConvergence,
+  installPolicies,
+  omnigentUserMessageEvent,
+} from "./omnigent-guardrails.js";
+import { compileConstraintsToPolicies } from "./policy-compiler.js";
 import { refineSuggestions } from "./refine.js";
 import { observationDigest, stateTransitions } from "./observe.js";
+import { runGoalOnOmnigent } from "./run.js";
 import { resolveSlmFromEnv } from "./slm.js";
 import { newId, slugify } from "./store.js";
 import {
@@ -81,6 +88,22 @@ function goalSummary(goal: Goal) {
 const GOAL_REF = z
   .string()
   .describe("Goal slug or id (slugs are listed by goal_list).");
+
+function unmetCriteria(report: Awaited<ReturnType<Harness["assess"]>>): string[] {
+  return report.criteria
+    .filter((criterion) => !criterion.pass)
+    .map((criterion) => {
+      const detail = criterion.error ? ` — ${criterion.error}` : "";
+      return `[${criterion.id}] ${criterion.description}${detail}`;
+    });
+}
+
+function parseOmnigentTarget(value: string | undefined): { agentName?: string } | undefined {
+  const match = /^omnigent(?::(.+))?$/.exec(value ?? "");
+  if (!match) return undefined;
+  const agentName = match[1]?.trim();
+  return agentName ? { agentName } : {};
+}
 
 /**
  * Criteria can carry secrets (http probe auth headers). The store keeps the
@@ -283,6 +306,115 @@ export function buildServer(harness: Harness): McpServer {
         // workflow relevance (better than a lite model, and zero-dependency).
         return json(await harness.assess(ref, { agentJudges: true }));
       } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "goal_converge",
+    {
+      title: "Drive an Omnigent session until a goal converges",
+      description:
+        "Install a Keyoku convergence-gate policy on a dispatched Omnigent session, then keep posting continuation messages while goal_assess reports unmet criteria. The gate is removed only after the goal's criteria pass.",
+      inputSchema: {
+        goal: GOAL_REF,
+        session: z.string().min(1).describe("Omnigent session id."),
+        maxRounds: z.number().int().positive().max(1000).optional().describe("Default: 20."),
+      },
+    },
+    async ({ goal: ref, session, maxRounds }) => {
+      try {
+        const result = await driveToConvergence({
+          connectors: harness.connectors,
+          sessionId: session,
+          goalSlug: ref,
+          maxRounds,
+          assess: async () => {
+            const report = await harness.assess(ref, { agentJudges: true });
+            return { converged: report.converged, unmet: unmetCriteria(report) };
+          },
+          postMessage: async (text) => {
+            const posted = await harness.connectors.callTool("omnigent", "post_event_v1_sessions__session_id__events_post", {
+              session_id: session,
+              body: omnigentUserMessageEvent(text),
+            });
+            if (posted.isError) throw new Error(`posting Omnigent continuation failed: ${posted.text}`);
+          },
+        });
+        logAudit("goal_converge", ref, `${session} → ${result.converged ? "converged" : "not converged"} in ${result.rounds} rounds`, result.converged);
+        return json(result);
+      } catch (err) {
+        logAudit("goal_converge", ref, err instanceof Error ? err.message.slice(0, 120) : String(err), false);
+        return fail(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "goal_guardrails",
+    {
+      title: "Install Omnigent policies for a goal's constraints",
+      description:
+        "Compile the goal's natural-language constraints into Omnigent runtime policies using the harness model, then install them on the given Omnigent session.",
+      inputSchema: {
+        goal: GOAL_REF,
+        session: z.string().min(1).describe("Omnigent session id."),
+      },
+    },
+    async ({ goal: ref, session }) => {
+      try {
+        const goal = harness.getGoal(ref);
+        const warnings: string[] = [];
+        const specs = await compileConstraintsToPolicies(goal.constraints, {
+          slm: harness.slm,
+          log: (message) => warnings.push(message),
+        });
+        const policyIds = await installPolicies(harness.connectors, session, specs);
+        logAudit("goal_guardrails", goal.slug, `${policyIds.length} polic${policyIds.length === 1 ? "y" : "ies"} installed on ${session}`, true);
+        return json({
+          goal: goal.slug,
+          session,
+          policies: policyIds,
+          specs,
+          ...(warnings.length > 0 ? { warnings } : {}),
+        });
+      } catch (err) {
+        logAudit("goal_guardrails", ref, err instanceof Error ? err.message.slice(0, 120) : String(err), false);
+        return fail(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "goal_run",
+    {
+      title: "Run a goal on an Omnigent fleet",
+      description:
+        "Create an Omnigent session, install the goal's compiled constraint policies, post the goal objective and current unmet criteria, then drive the session until goal_assess converges.",
+      inputSchema: {
+        goal: GOAL_REF,
+        on: z.string().optional().describe("Target runner, currently omnigent[:agentName]. Default: omnigent."),
+        maxRounds: z.number().int().positive().max(1000).optional().describe("Default: 20."),
+      },
+    },
+    async ({ goal: ref, on, maxRounds }) => {
+      const target = parseOmnigentTarget(on ?? "omnigent");
+      if (!target) {
+        return fail(new Error("Unsupported runner. Use on: 'omnigent' or 'omnigent:<agentName>'."));
+      }
+      try {
+        const result = await runGoalOnOmnigent({
+          engine: harness,
+          connectors: harness.connectors,
+          goalSlug: ref,
+          ...(target.agentName ? { agentName: target.agentName } : {}),
+          ...(maxRounds !== undefined ? { maxRounds } : {}),
+        });
+        logAudit("goal_run", ref, `${result.sessionId} → ${result.converged ? "converged" : "not converged"} in ${result.rounds} rounds`, result.converged);
+        return json(result);
+      } catch (err) {
+        logAudit("goal_run", ref, err instanceof Error ? err.message.slice(0, 120) : String(err), false);
         return fail(err);
       }
     },

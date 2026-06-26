@@ -1,14 +1,44 @@
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 import { audit, decideApproval } from "./approvals.js";
 import { ConnectorManager } from "./connectors.js";
 import { Harness } from "./engine.js";
 import { runLearning } from "./learn.js";
+import {
+  driveToConvergence,
+  installPolicies,
+  omnigentUserMessageEvent,
+} from "./omnigent-guardrails.js";
+import { compileConstraintsToPolicies } from "./policy-compiler.js";
+import { CONNECTOR_PRESETS } from "./presets.js";
+import { runGoalOnOmnigent } from "./run.js";
 import { buildServer, VERSION } from "./server.js";
 import { resolveSlmFromEnv } from "./slm.js";
 import { redactSecrets } from "./activity.js";
 import { newId, Store } from "./store.js";
-import type { ActivityEvent, WorkflowStep, WorkflowStepTemplate, WorkflowTemplate } from "./types.js";
+import type { ActivityEvent, ConvergenceReport, WorkflowStep, WorkflowStepTemplate, WorkflowTemplate } from "./types.js";
+
+export { ConnectorManager } from "./connectors.js";
+export { Harness } from "./engine.js";
+export {
+  continuationMessage,
+  driveToConvergence,
+  installPolicies,
+  omnigentUserMessageEvent,
+  removePolicy,
+} from "./omnigent-guardrails.js";
+export {
+  buildConvergenceGate,
+  compileConstraintsToPolicies,
+  type OmnigentPolicySpec,
+} from "./policy-compiler.js";
+export { CONNECTOR_PRESETS } from "./presets.js";
+export { ensureOmnigentConnector, runGoalOnOmnigent } from "./run.js";
+export { buildServer, VERSION } from "./server.js";
+export { Store } from "./store.js";
 
 // stdout is the MCP protocol channel in serve mode — all human output in that
 // mode MUST go to stderr.
@@ -19,6 +49,29 @@ function buildHarness(): Harness {
   // Pass the lite model (if configured) so workflow-suggestion re-ranking can use it
   // when opted in (KEYOKU_SLM_SUGGEST=1). Cheap to construct; no network until used.
   return new Harness(store, new ConnectorManager(store), resolveSlmFromEnv());
+}
+
+function flagValue(argv: string[], flag: string): string | undefined {
+  const index = argv.indexOf(flag);
+  if (index < 0) return undefined;
+  const value = argv[index + 1];
+  return value && !value.startsWith("--") ? value : undefined;
+}
+
+function parseOmnigentTarget(value: string | undefined): { agentName?: string } | undefined {
+  const match = /^omnigent(?::(.+))?$/.exec(value ?? "");
+  if (!match) return undefined;
+  const agentName = match[1]?.trim();
+  return agentName ? { agentName } : {};
+}
+
+function unmetCriteria(report: ConvergenceReport): string[] {
+  return report.criteria
+    .filter((criterion) => !criterion.pass)
+    .map((criterion) => {
+      const detail = criterion.error ? ` — ${criterion.error}` : "";
+      return `[${criterion.id}] ${criterion.description}${detail}`;
+    });
 }
 
 async function serve(): Promise<void> {
@@ -86,6 +139,64 @@ async function status(): Promise<void> {
   );
 }
 
+async function connectCmd(rest: string[]): Promise<void> {
+  if (rest.includes("--list") || rest.includes("-l")) {
+    console.log("Available connector presets:");
+    for (const [name, preset] of Object.entries(CONNECTOR_PRESETS).sort(([a], [b]) => a.localeCompare(b))) {
+      console.log(`  ${name} (${preset.autonomy}) — ${preset.description}`);
+    }
+    return;
+  }
+
+  const name = rest.find((arg) => !arg.startsWith("-"));
+  if (!name) {
+    console.error("Usage: keyoku connect <preset>\n       keyoku connect --list");
+    process.exitCode = 2;
+    return;
+  }
+
+  const preset = CONNECTOR_PRESETS[name];
+  if (!preset) {
+    console.error(`Unknown connector preset '${name}'.\n\nRun: keyoku connect --list`);
+    process.exitCode = 2;
+    return;
+  }
+
+  const harness = buildHarness();
+  const transport = preset.buildTransport();
+  const existing = harness.connectors.get(name);
+  try {
+    const { tools } = await harness.connectors.add({
+      name,
+      description: preset.description,
+      transport,
+      autonomy: preset.autonomy,
+      addedAt: existing?.addedAt ?? new Date().toISOString(),
+    });
+    audit(harness.store, {
+      actor: "cli",
+      op: "connect",
+      target: name,
+      summary: `registered preset ${name} (${tools.length} tools)`,
+      ok: true,
+    });
+    const url = transport.type === "openapi" ? transport.baseUrl ?? transport.specUrl : name;
+    console.log(`Connected ${name} at ${url} (${tools.length} tools, autonomy ${preset.autonomy}).`);
+  } catch (err) {
+    audit(harness.store, {
+      actor: "cli",
+      op: "connect",
+      target: name,
+      summary: `failed: ${err instanceof Error ? err.message.slice(0, 120) : String(err)}`,
+      ok: false,
+    });
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exitCode = 2;
+  } finally {
+    await harness.connectors.closeAll();
+  }
+}
+
 // Exit codes: 0 = converged, 1 = not converged, 2 = error (unknown goal etc.)
 async function assess(ref: string | undefined): Promise<void> {
   if (!ref) {
@@ -102,6 +213,119 @@ async function assess(ref: string | undefined): Promise<void> {
     }
     console.log(`\n${report.guidance}`);
     process.exitCode = report.converged ? 0 : 1;
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exitCode = 2;
+  } finally {
+    await harness.connectors.closeAll();
+  }
+}
+
+async function convergeCmd(rest: string[]): Promise<void> {
+  const goalRef = flagValue(rest, "--goal");
+  const session = flagValue(rest, "--session");
+  const roundsRaw = flagValue(rest, "--max-rounds");
+  const maxRounds = roundsRaw === undefined ? undefined : Number(roundsRaw);
+  if (!goalRef || !session || (roundsRaw !== undefined && (!Number.isInteger(maxRounds) || maxRounds <= 0))) {
+    console.error("Usage: keyoku converge --goal <slug> --session <omnigent-session-id> [--max-rounds N]");
+    process.exitCode = 2;
+    return;
+  }
+
+  const harness = buildHarness();
+  try {
+    const goal = harness.getGoal(goalRef);
+    const result = await driveToConvergence({
+      connectors: harness.connectors,
+      sessionId: session,
+      goalSlug: goal.slug,
+      maxRounds,
+      assess: async () => {
+        const report = await harness.assess(goal.slug);
+        return { converged: report.converged, unmet: unmetCriteria(report) };
+      },
+      postMessage: async (text) => {
+        const posted = await harness.connectors.callTool("omnigent", "post_event_v1_sessions__session_id__events_post", {
+          session_id: session,
+          body: omnigentUserMessageEvent(text),
+        });
+        if (posted.isError) throw new Error(`posting Omnigent continuation failed: ${posted.text}`);
+      },
+    });
+    console.log(
+      result.converged
+        ? `Goal '${goal.slug}' converged after ${result.rounds} round(s); convergence gate removed.`
+        : `Goal '${goal.slug}' did not converge after ${result.rounds} round(s); convergence gate left installed.`,
+    );
+    process.exitCode = result.converged ? 0 : 1;
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exitCode = 2;
+  } finally {
+    await harness.connectors.closeAll();
+  }
+}
+
+async function guardrailsCmd(rest: string[]): Promise<void> {
+  const goalRef = flagValue(rest, "--goal");
+  const session = flagValue(rest, "--session");
+  if (!goalRef || !session) {
+    console.error("Usage: keyoku guardrails --goal <slug> --session <omnigent-session-id>");
+    process.exitCode = 2;
+    return;
+  }
+
+  const harness = buildHarness();
+  try {
+    const goal = harness.getGoal(goalRef);
+    const specs = await compileConstraintsToPolicies(goal.constraints, { slm: harness.slm });
+    const policyIds = await installPolicies(harness.connectors, session, specs);
+    if (policyIds.length === 0) {
+      console.log(`Goal '${goal.slug}' has no constraints; no Omnigent policies installed.`);
+      return;
+    }
+    console.log(`Installed ${policyIds.length} Omnigent guardrail polic${policyIds.length === 1 ? "y" : "ies"} for '${goal.slug}':`);
+    for (const id of policyIds) console.log(`  ${id}`);
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exitCode = 2;
+  } finally {
+    await harness.connectors.closeAll();
+  }
+}
+
+async function runCmd(rest: string[]): Promise<void> {
+  const goalRef = rest.find((arg) => !arg.startsWith("-"));
+  const target = parseOmnigentTarget(flagValue(rest, "--on"));
+  const roundsRaw = flagValue(rest, "--max-rounds");
+  const maxRounds = roundsRaw === undefined ? undefined : Number(roundsRaw);
+  if (!goalRef || !target || (roundsRaw !== undefined && (!Number.isInteger(maxRounds) || maxRounds <= 0))) {
+    console.error("Usage: keyoku run <goalSlug> --on omnigent[:agentName] [--max-rounds N]");
+    process.exitCode = 2;
+    return;
+  }
+
+  const harness = buildHarness();
+  try {
+    const goal = harness.getGoal(goalRef);
+    console.log(
+      `Running goal '${goal.slug}' on Omnigent${target.agentName ? ` agent '${target.agentName}'` : ""}...`,
+    );
+    console.log("Ensuring Omnigent connector and creating a session...");
+    const result = await runGoalOnOmnigent({
+      engine: harness,
+      connectors: harness.connectors,
+      goalSlug: goal.slug,
+      ...(target.agentName ? { agentName: target.agentName } : {}),
+      ...(maxRounds !== undefined ? { maxRounds } : {}),
+    });
+    console.log(`Omnigent session: ${result.sessionId}`);
+    console.log(
+      result.converged
+        ? `Goal '${goal.slug}' converged after ${result.rounds} round(s).`
+        : `Goal '${goal.slug}' did not converge after ${result.rounds} round(s).`,
+    );
+    process.exitCode = result.converged ? 0 : 1;
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     process.exitCode = 2;
@@ -1046,7 +1270,15 @@ Usage:
   keyoku [serve]                    Run as an MCP server on stdio (default)
   keyoku init                       Wire up Claude Code hook + MCP config
   keyoku status                     Show goals, connectors, learned workflows
+  keyoku connect <preset>           Add/update a built-in connector preset
+  keyoku connect --list             List available connector presets
   keyoku assess <goal>              One-shot convergence check (exit 0 = converged)
+  keyoku run <goal> --on omnigent[:agentName]
+                                     Create an Omnigent session and drive <goal> to convergence
+  keyoku converge --goal G --session S
+                                     Keep an Omnigent session working until G converges
+  keyoku guardrails --goal G --session S
+                                     Install Omnigent policies compiled from G's constraints
   keyoku watch <goal>|--all         Re-assess on an interval [--interval <seconds>]
   keyoku learn                      Mine patterns from activity (SLM or heuristic)
   keyoku record                     Record a PostToolUse hook event (reads stdin JSON)
@@ -1262,8 +1494,16 @@ async function main(): Promise<void> {
       return serve();
     case "status":
       return status();
+    case "connect":
+      return connectCmd(rest);
     case "assess":
       return assess(rest[0]);
+    case "run":
+      return runCmd(rest);
+    case "converge":
+      return convergeCmd(rest);
+    case "guardrails":
+      return guardrailsCmd(rest);
     case "watch":
       return watch(rest[0], rest);
     case "learn":
@@ -1316,15 +1556,31 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  // Expected errors (bad refs, corrupt store) read as messages, not crashes;
-  // KEYOKU_DEBUG=1 restores stacks for the unexpected kind.
-  const detail =
-    process.env.KEYOKU_DEBUG && err instanceof Error
-      ? err.stack ?? err.message
-      : err instanceof Error
-        ? err.message
-        : String(err);
-  console.error(detail);
-  process.exit(2);
-});
+function isCliEntrypoint(): boolean {
+  const argvEntry = process.argv[1];
+  if (!argvEntry) return false;
+  const here = fileURLToPath(import.meta.url);
+  const real = (path: string): string => {
+    try {
+      return realpathSync(path);
+    } catch {
+      return resolve(path);
+    }
+  };
+  return real(argvEntry) === real(here);
+}
+
+if (isCliEntrypoint()) {
+  main().catch((err) => {
+    // Expected errors (bad refs, corrupt store) read as messages, not crashes;
+    // KEYOKU_DEBUG=1 restores stacks for the unexpected kind.
+    const detail =
+      process.env.KEYOKU_DEBUG && err instanceof Error
+        ? err.stack ?? err.message
+        : err instanceof Error
+          ? err.message
+          : String(err);
+    console.error(detail);
+    process.exit(2);
+  });
+}

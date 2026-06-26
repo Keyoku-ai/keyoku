@@ -5,5 +5,8 @@ export default defineConfig({
     include: ["tests/**/*.test.ts"],
     testTimeout: 30_000,
     hookTimeout: 30_000,
+    // Test files spin up MCP stdio servers and share ~/.keyoku state; run them
+    // serially so the suite is a deterministic convergence probe (no parallel races).
+    fileParallelism: false,
   },
 });
