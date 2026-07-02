@@ -236,12 +236,15 @@ describe("the convergence loop", () => {
         },
       ],
     });
-    // Converges on the first assess with nothing recorded: no hollow workflow,
-    // and the guidance nudges the agent to record what it did.
+    // Converges on the first assess with nothing recorded (the audit repro:
+    // iterationsUsed 0): no hollow workflow, and the guidance nudges the agent
+    // to record what it did instead of claiming a workflow was learned.
     const conv = await harness.assess(goal.slug);
     expect(conv.converged).toBe(true);
+    expect(conv.goal.iterationsUsed).toBe(0);
     expect(harness.store.listWorkflows()).toHaveLength(0);
     expect(conv.guidance).toMatch(/goal_record/);
+    expect(conv.guidance).not.toMatch(/has been promoted/);
 
     // Retroactive record is ACCEPTED (not thrown), does not spend the budget,
     // keeps the goal converged, and promotes the workflow with the captured step.

@@ -124,13 +124,18 @@ describe("MCP protocol e2e — muscle memory", () => {
   });
 
   it("build-then-verify: zero-action convergence promotes no hollow workflow, then a retroactive record does", async () => {
-    await client.tool("goal_create", {
+    const created = await client.tool("goal_create", {
       objective: "ensure the changelog is dated",
       slug: "e2e-bv",
       criteria: crit("ready", "ready"),
     });
+    // Audit fix 3: the learning contract is surfaced at create time — record
+    // before the final assess, retroactive records accepted after convergence.
+    expect(created.guidance).toMatch(/BEFORE the final assess/);
+    expect(created.guidance).toMatch(/accepted after convergence/);
     const conv = await client.tool("goal_assess", { goal: "e2e-bv" });
     expect(conv.converged).toBe(true);
+    expect(conv.goal.iterationsUsed).toBe(0); // the audit repro shape
     expect(conv.guidance).toMatch(/goal_record/); // honest nudge, not a false "promoted" claim
 
     const before = await client.tool("workflow_list", {});
