@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 2.17.0 — 2026-07-02
+
+- **Record-before-assess learning contract surfaced.** `goal_create` now states
+  that the recorded trace is what becomes the promoted workflow, and that
+  retroactive `goal_record` is accepted after convergence (spending no
+  iteration budget); the served protocol no longer implies act/record must
+  precede convergence. Closes fix 3 of the convergence-loop audit
+  (`AUDIT-convergence-loop-2026-06-17.md`), with regression locks: first-assess
+  convergence with `iterationsUsed 0` promotes no hollow workflow and guides
+  honestly.
+- **Clean typecheck.** Cleared the 12 outstanding `tsc --noEmit` errors (typed
+  test mocks, `ReadonlySet` handler set, `--max-rounds` guard uses the parsed
+  value). Behavior-neutral.
+
 ## 2.16.0 — 2026-06-26
 
 - **Model-driven Omnigent dispatch.** `keyoku run <goalSlug> --on omnigent`
