@@ -56,7 +56,7 @@ function report(pass: boolean): ConvergenceReport {
 
 describe("ensureOmnigentConnector", () => {
   it("adds the omnigent preset when missing", async () => {
-    const add = vi.fn(async () => ({ tools: [] }));
+    const add = vi.fn(async (_config: unknown) => ({ tools: [] }));
     const connectors = {
       get: vi.fn(() => undefined),
       add,
@@ -94,7 +94,7 @@ describe("ensureOmnigentConnector", () => {
 describe("runGoalOnOmnigent", () => {
   it("creates a session, installs policies, drives to convergence, and returns the session id", async () => {
     let policyCount = 0;
-    const callTool = vi.fn(async (_name: string, tool: string) => {
+    const callTool = vi.fn(async (_name: string, tool: string, _args?: unknown) => {
       if (tool === "create_session_v1_sessions_post") {
         return { text: JSON.stringify({ conversation_id: "session_1" }), isError: false };
       }

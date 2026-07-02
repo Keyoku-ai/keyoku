@@ -232,7 +232,7 @@ async function convergeCmd(rest: string[]): Promise<void> {
   const session = flagValue(rest, "--session");
   const roundsRaw = flagValue(rest, "--max-rounds");
   const maxRounds = roundsRaw === undefined ? undefined : Number(roundsRaw);
-  if (!goalRef || !session || (roundsRaw !== undefined && (!Number.isInteger(maxRounds) || maxRounds <= 0))) {
+  if (!goalRef || !session || (maxRounds !== undefined && (!Number.isInteger(maxRounds) || maxRounds <= 0))) {
     console.error("Usage: keyoku converge --goal <slug> --session <omnigent-session-id> [--max-rounds N]");
     process.exitCode = 2;
     return;
@@ -305,7 +305,7 @@ async function runCmd(rest: string[]): Promise<void> {
   const target = parseOmnigentTarget(flagValue(rest, "--on"));
   const roundsRaw = flagValue(rest, "--max-rounds");
   const maxRounds = roundsRaw === undefined ? undefined : Number(roundsRaw);
-  if (!goalRef || !target || (roundsRaw !== undefined && (!Number.isInteger(maxRounds) || maxRounds <= 0))) {
+  if (!goalRef || !target || (maxRounds !== undefined && (!Number.isInteger(maxRounds) || maxRounds <= 0))) {
     console.error("Usage: keyoku run <goalSlug> --on omnigent[:agentName] [--max-rounds N]");
     process.exitCode = 2;
     return;

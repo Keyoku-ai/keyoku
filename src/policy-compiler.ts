@@ -36,7 +36,7 @@ const HANDLERS = [
   },
 ] as const;
 
-const KNOWN_HANDLERS = new Set(HANDLERS.map((h) => h.handler));
+const KNOWN_HANDLERS: ReadonlySet<string> = new Set(HANDLERS.map((h) => h.handler));
 
 function celString(value: string): string {
   return JSON.stringify(value);

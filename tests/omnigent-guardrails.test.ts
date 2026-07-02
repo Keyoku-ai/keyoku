@@ -55,7 +55,7 @@ describe("driveToConvergence", () => {
       .fn()
       .mockResolvedValueOnce({ converged: false, unmet: ["[c1] build fails"] })
       .mockResolvedValueOnce({ converged: true, unmet: [] });
-    const postMessage = vi.fn(async () => {});
+    const postMessage = vi.fn(async (_text: string) => {});
 
     await expect(
       driveToConvergence({
@@ -76,7 +76,7 @@ describe("driveToConvergence", () => {
   });
 
   it("leaves the gate installed when max rounds are exhausted", async () => {
-    const callTool = vi.fn(async () => ({ text: JSON.stringify({ id: "gate_1" }), isError: false }));
+    const callTool = vi.fn(async (_name: string, _tool: string) => ({ text: JSON.stringify({ id: "gate_1" }), isError: false }));
     const assess = vi.fn(async () => ({ converged: false, unmet: ["[c1] still failing"] }));
     const postMessage = vi.fn(async () => {});
 
