@@ -34,6 +34,13 @@ The protocol:
    converged goals become reusable workflows suggested for similar goals).
 5. Repeat from step 2 until the report says converged.
 
+Build-then-verify is fully supported: if you did the work BEFORE the first
+assess and the goal converges immediately, goal_record is still accepted on
+the converged goal — retroactive records spend no iteration budget and fold
+into the promoted workflow. Record what you actually did, one record per real
+step; otherwise the harness can only infer steps from the activity log (or
+learns nothing at all).
+
 Autonomy levels (set per goal): observe = never act, only report findings;
 suggest = propose actions and let the user run them; approve = ask the user
 before each action; autonomous = act without asking, within the constraints.
@@ -178,6 +185,11 @@ export function buildCreateGuidance(goal: Goal): string {
   return [
     `Goal '${goal.slug}' created with ${goal.criteria.length} machine-checkable criteria (autonomy: ${goal.autonomy}, budget: ${goal.maxIterations} iterations).`,
     "Next: call goal_assess to baseline the current state and get the convergence plan.",
+    // The learning contract (audit 2026-06-17): a run that converges with an
+    // empty trace teaches nothing. Surface this at create time so the agent
+    // records as it works — and knows retroactive records are accepted if it
+    // builds first and verifies after.
+    "Learning contract: call goal_record for each real action BEFORE the final assess — the recorded trace is what becomes the reusable workflow. If you do the work first and assess after (build-then-verify), goal_record is still accepted after convergence and spends no budget; without records the workflow can only be inferred from the activity log, or is not learned at all.",
   ].join("\n");
 }
 
