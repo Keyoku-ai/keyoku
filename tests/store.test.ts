@@ -64,10 +64,54 @@ describe("Store", () => {
       result: "success",
       at: new Date().toISOString(),
     });
+    store.appendObservation({
+      id: newId("obs"),
+      goalId: g.id,
+      goalSlug: g.slug,
+      kind: "assessment",
+      summary: "1/1 criteria unmet: c1",
+      unmet: ["c1"],
+      at: new Date().toISOString(),
+    });
     expect(store.listRecords(g.id)).toHaveLength(1);
+    expect(store.listObservations(g.id)).toHaveLength(1);
     expect(store.deleteGoal(g.id)).toBe(true);
     expect(store.getGoal(g.id)).toBeUndefined();
     expect(store.listRecords(g.id)).toHaveLength(0);
+    expect(store.listObservations(g.id)).toHaveLength(0); // observations no longer orphaned
+  });
+
+  it("listAudit skips a torn/corrupt line instead of throwing", () => {
+    const auditPath = join(dir, "audit.jsonl");
+    const good = JSON.stringify({ id: "a", at: "2026-01-01T00:00:00Z", actor: "cli", op: "x", summary: "ok", ok: true });
+    // A corrupt (unparseable) line sitting between valid ones — the reader must
+    // skip it rather than throw and darken the whole trail.
+    writeFileSync(auditPath, `${good}\n{"id":"torn","at":"2026\n`);
+    store.appendAudit({ id: "after", at: "2026-06-18T00:00:00Z", actor: "agent", op: "y", summary: "z", ok: true });
+    const entries = store.listAudit(10);
+    expect(entries.some((e) => e.id === "a")).toBe(true);
+    expect(entries.some((e) => e.id === "after")).toBe(true);
+    expect(entries.some((e) => e.id === "torn")).toBe(false); // corrupt line dropped, not fatal
+  });
+
+  it("caps executions.json: keeps in-flight runs + most recent terminal ones", () => {
+    const mkExec = (n: number, status: "done" | "running"): import("../src/types.js").WorkflowExecution => ({
+      id: `exec_${n}`,
+      templateId: "t",
+      templateSlug: "t",
+      status,
+      steps: [],
+      currentStep: 0,
+      startedAt: new Date().toISOString(),
+      triggeredBy: "on_demand",
+    });
+    for (let i = 0; i < 205; i++) store.saveExecution(mkExec(i, "done"));
+    store.saveExecution(mkExec(9999, "running")); // an in-flight run
+    const all = store.listExecutions();
+    expect(all.filter((e) => e.status === "done").length).toBeLessThanOrEqual(200);
+    expect(all.some((e) => e.id === "exec_9999")).toBe(true); // in-flight never dropped
+    expect(all.some((e) => e.id === "exec_204")).toBe(true); // newest terminal kept
+    expect(all.some((e) => e.id === "exec_0")).toBe(false); // oldest terminal evicted
   });
 
   it("appends and reads JSONL records in order", () => {

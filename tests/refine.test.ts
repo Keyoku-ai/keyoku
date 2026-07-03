@@ -64,6 +64,13 @@ describe("refineSuggestions", () => {
     expect(await refineSuggestions(boom, drafts, [])).toEqual(drafts);
   });
 
+  it("honors a well-formed empty array as the model's drop-all verdict (does not resurrect raw drafts)", async () => {
+    // The SLM judged every heuristic draft coincidental and returned []. That
+    // is a decision, not a failure — we must NOT fall back to the raw drafts
+    // and mislabel them "Model-refined".
+    expect(await refineSuggestions(fake('{"suggestions": []}'), drafts, [])).toEqual([]);
+  });
+
   it("passes empty drafts through without calling the model", async () => {
     let called = false;
     const spy: SlmProvider = {

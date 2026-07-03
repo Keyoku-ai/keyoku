@@ -35,10 +35,11 @@ any contributor. See `docs/REPO-MAP.md`.
 
 ### ✅ Store growth bounds (done, pre-existing)
 `activity.jsonl` self-caps (trims at ~2.5 MB → last 8k events, `store.ts`);
-observations cap per goal (500 → 400). A large file on disk just means the
-*old* global install (pre-cap) was writing it — the current build trims it.
-Remaining minor gaps (🔵): `audit.jsonl` and `knowledge.jsonl` are unbounded
-(both small today); add the same size-cap if they grow.
+observations cap per goal (500 → 400); `audit.jsonl` caps at ~1 MB (v2.12.1);
+`executions.json` caps at 200 terminal runs while keeping all in-flight ones
+(2.17.x). A large file on disk just means the *old* global install (pre-cap)
+was writing it — the current build trims it. Remaining minor gap (🔵):
+`knowledge.jsonl` is still unbounded (small today); add the same size-cap if it grows.
 
 ### 🔵 Store concurrency
 The JSON store is synchronous, atomic (tmp+rename), cacheless, last-writer-wins

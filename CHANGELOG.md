@@ -2,6 +2,60 @@
 
 ## Unreleased
 
+## 2.18.0 — 2026-07-02
+
+Security + correctness hardening. A full-codebase adversarial validation
+(28 confirmed findings) fixed **27**, each with a regression test and driven to
+convergence through three rounds of independent adversarial re-verification.
+Test suite 290 → 321.
+
+### Convergence correctness
+- **Silent false convergence closed (the "one unforgivable bug").** `goal_assess`
+  could report a goal converged while its probe did not actually verify the
+  property — a down HTTP service satisfied `status ne 500`, a timed-out or
+  failed command satisfied vacuous/tautological transport assertions. Rebuilt
+  around what the probe *produced*: a probe that did not COMPLETE (command
+  timeout/signal sentinel, HTTP no-response, unparseable output, mcp error) can
+  never satisfy a criterion, and a completed-but-FAILED probe (nonzero exit,
+  non-2xx HTTP — `runHttp` now marks these) satisfies a criterion only via an
+  EXACT `exitCode`/`status` match. Uniform across command / HTTP / mcp probes.
+- **Retroactive `goal_record` no longer inflates a workflow's convergence count**,
+  and **re-promotion preserves self-pruning stats** (suggested/helped) instead
+  of wiping the precision signal. Failure-only traces surface their pitfalls on
+  similar goals without a false "workflow promoted" claim.
+
+### Security / trust
+- **Workflow `{{param}}` values can no longer inject shell.** Params are bound as
+  environment variables the command references (quote-state aware), so a value
+  like `$(rm -rf ~)` is always data, in every quoting context, while normal
+  substitution still works.
+- **Omnigent drive respects the autonomy ladder** on the MCP tools *and* the
+  `keyoku converge` / `keyoku guardrails` CLI subcommands (was ungated on the CLI).
+- **Approval-gated workflow steps can't be hand-completed without approval** —
+  the step is linked to its approval and requires it decided+executed.
+- **Secret redaction** now covers Basic-auth, DB/URL connection-string passwords,
+  and the empty-username URL form (`redis://:pass@`); `activity_record` /
+  `goal_record` MCP tools redact before storing (previously only the hook path did).
+- **`keyoku pause` stops all server-side recording** — including `connector_call`
+  activity and `goal_assess` observations (previously leaked while paused).
+
+### Reliability / correctness
+- Bash workflow steps run in their own process group, so a timeout or shutdown
+  kills grandchildren too; the SIGKILL escalation timer no longer fires post-exit.
+- `listAudit` tolerates a torn/corrupt line instead of crashing the audit trail;
+  `executions.json` is now growth-bounded; `deleteGoal` removes orphaned
+  observations; nudge/marker files are written `0600`.
+- `keyoku doctor` / `init` identify keyoku's own hooks structurally (no
+  false-green on a decoy substring, no duplicate/foreign-hook deletion, legacy
+  `keyoku <verb>` recognized); `export` writes valid YAML frontmatter even when
+  the description contains `:`; `init` heals a stale Codex path.
+- Backfill prefers the goal-owning session (focus / bookkeeping, whole-token
+  match) over raw event volume when attributing build-then-verify work.
+
+### Docs
+- Corrected the package name in `HARNESS.md` (`keyoku`, not `@keyoku/harness`)
+  and the growth-bound status in `PRODUCTION-READINESS.md`.
+
 ## 2.17.0 — 2026-07-02
 
 - **Record-before-assess learning contract surfaced.** `goal_create` now states

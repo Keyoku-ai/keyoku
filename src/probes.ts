@@ -112,10 +112,17 @@ async function runHttp(
     });
     const text = await res.text();
     const parsed = parseOutput(text, probe.parse);
+    // A non-2xx response is a completed-but-FAILED probe (the HTTP analogue of a
+    // nonzero exit): mark it with a transport error so a goal cannot silently
+    // converge on a matching body while the service returned 4xx/5xx. The status
+    // and body stay observable, so a criterion that DELIBERATELY inspects the
+    // failure (e.g. `status eq 503`) still passes via the assess exemption.
+    const httpError = res.ok ? undefined : `HTTP ${res.status}`;
+    const error = [httpError, parsed.parseError].filter(Boolean).join("; ");
     return {
       output: parsed.value,
       status: res.status,
-      ...(parsed.parseError ? { error: parsed.parseError } : {}),
+      ...(error ? { error } : {}),
     };
   } catch (err) {
     const aborted = err instanceof Error && err.name === "AbortError";

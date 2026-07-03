@@ -14,7 +14,7 @@ import {
 } from "./omnigent-guardrails.js";
 import { compileConstraintsToPolicies } from "./policy-compiler.js";
 import { CONNECTOR_PRESETS } from "./presets.js";
-import { runGoalOnOmnigent } from "./run.js";
+import { assertOmnigentDriveAuthorized, runGoalOnOmnigent } from "./run.js";
 import { buildServer, VERSION } from "./server.js";
 import { resolveSlmFromEnv } from "./slm.js";
 import { redactSecrets } from "./activity.js";
@@ -80,6 +80,33 @@ function unmetCriteria(report: ConvergenceReport): string[] {
     });
 }
 
+/**
+ * Matches keyoku's own hook command (`node <…>/index.js <verb>`) STRUCTURALLY —
+ * regardless of whether the install path happens to contain the literal
+ * "keyoku". Used by both init (idempotent self-heal — no duplicate hooks, and
+ * foreign hooks that merely mention "keyoku" survive) and doctor (a decoy
+ * " record" substring can no longer false-green a missing hook).
+ */
+// Matches BOTH the current `node <…>/index.js <verb>` form AND the legacy bare
+// `keyoku <verb>` (with optional path prefix) that v1.x shipped when keyoku was
+// on PATH — so doctor greens a legacy install and init dedups/replaces it
+// instead of double-wiring. ANCHORED (^…$): the whole command must BE the keyoku
+// invocation, so a foreign hook that merely passes "keyoku record" as a DATA
+// argument (echo keyoku record, worklog keyoku record) is NOT claimed — init
+// must never green or delete someone else's hook.
+const KEYOKU_HOOK_RE = /^(?:node\s+\S*index\.js|(?:\S*[/\\])?keyoku)\s+(record|brief|context)\s*$/;
+
+function isKeyokuHookGroup(entry: unknown, verb?: "record" | "brief" | "context"): boolean {
+  if (typeof entry !== "object" || entry === null) return false;
+  const inner = (entry as { hooks?: unknown }).hooks;
+  if (!Array.isArray(inner)) return false;
+  return inner.some((h) => {
+    const cmd = h && typeof (h as { command?: unknown }).command === "string" ? (h as { command: string }).command : "";
+    const m = cmd.match(KEYOKU_HOOK_RE);
+    return m !== null && (!verb || m[1] === verb);
+  });
+}
+
 async function serve(): Promise<void> {
   const harness = buildHarness();
   const server = buildServer(harness);
@@ -87,6 +114,21 @@ async function serve(): Promise<void> {
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
+    // Kill any in-flight bash step and its whole process group — grandchildren
+    // must not outlive the server — and mark the executions they belonged to
+    // failed so a restart doesn't see a permanently-"running" ghost.
+    const { killAllBashSteps } = await import("./executor.js");
+    killAllBashSteps();
+    for (const exec of harness.store.listExecutions("running")) {
+      exec.status = "failed";
+      const step = exec.steps[exec.currentStep];
+      if (step && step.status === "running") {
+        step.status = "failed";
+        step.error = "interrupted by server shutdown";
+      }
+      exec.completedAt = new Date().toISOString();
+      harness.store.saveExecution(exec);
+    }
     // Don't let a wedged connector child block exit forever — cap the close.
     await Promise.race([
       harness.connectors.closeAll(),
@@ -240,6 +282,10 @@ async function convergeCmd(rest: string[]): Promise<void> {
 
   const harness = buildHarness();
   try {
+    // Same autonomy gate as the goal_converge MCP tool — this CLI subcommand
+    // drives the identical mutating Omnigent calls (install policy, post events)
+    // over the raw connector path and must NOT bypass the trust ladder.
+    assertOmnigentDriveAuthorized(harness.connectors);
     const goal = harness.getGoal(goalRef);
     const result = await driveToConvergence({
       connectors: harness.connectors,
@@ -283,6 +329,7 @@ async function guardrailsCmd(rest: string[]): Promise<void> {
 
   const harness = buildHarness();
   try {
+    assertOmnigentDriveAuthorized(harness.connectors);
     const goal = harness.getGoal(goalRef);
     const specs = await compileConstraintsToPolicies(goal.constraints, { slm: harness.slm });
     const policyIds = await installPolicies(harness.connectors, session, specs);
@@ -870,9 +917,13 @@ Codex and every AGENTS.md-reading agent now knows this workflow.`);
     return;
   }
 
+  // JSON.stringify yields a valid YAML double-quoted scalar (quotes/backslashes
+  // escaped) — so a description containing ':' or '#' or a leading '[' can't
+  // produce invalid frontmatter that breaks every skill-loading agent.
+  const descLine = `${template.description.replace(/\n/g, " ")} (learned by keyoku from observed activity; prefer running it via the keyoku MCP server)`;
   const skill = `---
-name: ${template.slug}
-description: ${template.description.replace(/\n/g, " ")} (learned by keyoku from observed activity; prefer running it via the keyoku MCP server)
+name: ${JSON.stringify(template.slug)}
+description: ${JSON.stringify(descLine)}
 ---
 
 # ${template.name}
@@ -910,7 +961,7 @@ async function pause(): Promise<void> {
   const { writeFileSync } = await import("node:fs");
   const { join } = await import("node:path");
   const store = new Store();
-  writeFileSync(join(store.dir, "paused"), new Date().toISOString());
+  writeFileSync(join(store.dir, "paused"), new Date().toISOString(), { mode: 0o600 });
   console.log("keyoku paused — nothing will be recorded or injected until `keyoku resume`.");
 }
 
@@ -937,21 +988,36 @@ async function doctor(): Promise<void> {
   };
   console.log("keyoku doctor\n");
 
-  let settings = "";
-  try { settings = readFileSync(join(homedir(), ".claude", "settings.json"), "utf8"); } catch { /* missing */ }
-  check(settings.includes(" record"), "PostToolUse hook (recording)");
-  check(settings.includes(" brief"), "SessionStart hook (brief)");
-  check(settings.includes(" context"), "UserPromptSubmit hook (practice injection)");
+  // Parse the config STRUCTURALLY — a substring check false-greens on any
+  // unrelated hook whose command happens to contain " record"/" brief" etc.
+  let settingsObj: Record<string, unknown> = {};
+  try { settingsObj = JSON.parse(readFileSync(join(homedir(), ".claude", "settings.json"), "utf8")); } catch { /* missing/invalid */ }
+  const hookGroups = (event: string): unknown[] => {
+    const hooks = (settingsObj.hooks ?? {}) as Record<string, unknown>;
+    return Array.isArray(hooks[event]) ? (hooks[event] as unknown[]) : [];
+  };
+  check(hookGroups("PostToolUse").some((h) => isKeyokuHookGroup(h, "record")), "PostToolUse hook (recording)");
+  check(hookGroups("SessionStart").some((h) => isKeyokuHookGroup(h, "brief")), "SessionStart hook (brief)");
+  check(hookGroups("UserPromptSubmit").some((h) => isKeyokuHookGroup(h, "context")), "UserPromptSubmit hook (practice injection)");
 
-  let claudeJson = "";
-  try { claudeJson = readFileSync(join(homedir(), ".claude.json"), "utf8"); } catch { /* missing */ }
-  check(claudeJson.includes('"keyoku"'), "MCP server registered in ~/.claude.json");
+  let claudeObj: Record<string, unknown> = {};
+  try { claudeObj = JSON.parse(readFileSync(join(homedir(), ".claude.json"), "utf8")); } catch { /* missing/invalid */ }
+  const mcpServers = (claudeObj.mcpServers ?? {}) as Record<string, unknown>;
+  check(typeof mcpServers.keyoku === "object" && mcpServers.keyoku !== null, "MCP server registered in ~/.claude.json");
 
   const codexCfg = join(homedir(), ".codex", "config.toml");
   if (existsSync(codexCfg)) {
     let toml = "";
     try { toml = readFileSync(codexCfg, "utf8"); } catch { /* unreadable */ }
-    check(toml.includes("[mcp_servers.keyoku]"), "Codex MCP registration (~/.codex/config.toml)", "run keyoku init to wire");
+    const block = toml.match(/\[mcp_servers\.keyoku\][\s\S]*?(?=\n\[|$)/)?.[0];
+    const wiredPath = block?.match(/args\s*=\s*\[\s*"((?:[^"\\]|\\.)*)"/)?.[1]?.replace(/\\(.)/g, "$1");
+    if (!block) {
+      check(false, "Codex MCP registration (~/.codex/config.toml)", "run keyoku init to wire");
+    } else if (wiredPath && !existsSync(wiredPath)) {
+      check(false, "Codex MCP registration (~/.codex/config.toml)", "stale path — re-run keyoku init to heal");
+    } else {
+      check(true, "Codex MCP registration (~/.codex/config.toml)");
+    }
   } else {
     check("info", "Codex not detected", "skipping");
   }
@@ -1038,7 +1104,7 @@ async function record(): Promise<void> {
       /* first run */
     }
     n += 1;
-    writeFileSync(counterPath, String(n));
+    writeFileSync(counterPath, String(n), { mode: 0o600 });
     if (n % every !== 0) return;
 
     const { formatNudge, loadSurfaced, resolveRipe, saveSurfaced } = await import("./nudge.js");
@@ -1155,9 +1221,7 @@ async function init(argv: string[] = []): Promise<void> {
   const postToolUse = (Array.isArray(hooks.PostToolUse) ? hooks.PostToolUse : []) as unknown[];
   // Drop any previous keyoku hook entry (it may point at a stale install path),
   // then add the current one — idempotent and self-healing across upgrades.
-  const others = postToolUse.filter(
-    (h) => !(typeof h === "object" && h !== null && JSON.stringify(h).includes("keyoku")),
-  );
+  const others = postToolUse.filter((h) => !isKeyokuHookGroup(h));
   others.push({
     matcher: "Bash|Edit|Write|Read|mcp__.*",
     hooks: [{ type: "command", command: hookCmd }],
@@ -1168,9 +1232,7 @@ async function init(argv: string[] = []): Promise<void> {
   // catalog and whether unsaved patterns are waiting.
   const briefCmd = hookCmd.replace(/ record$/, " brief");
   const sessionStart = (Array.isArray(hooks.SessionStart) ? hooks.SessionStart : []) as unknown[];
-  const ssOthers = sessionStart.filter(
-    (h) => !(typeof h === "object" && h !== null && JSON.stringify(h).includes("keyoku")),
-  );
+  const ssOthers = sessionStart.filter((h) => !isKeyokuHookGroup(h));
   ssOthers.push({ hooks: [{ type: "command", command: briefCmd }] });
   hooks.SessionStart = ssOthers;
 
@@ -1178,9 +1240,7 @@ async function init(argv: string[] = []): Promise<void> {
   // are consulted before the agent acts — the practice layer's wire.
   const contextCmdStr = hookCmd.replace(/ record$/, " context");
   const promptSubmit = (Array.isArray(hooks.UserPromptSubmit) ? hooks.UserPromptSubmit : []) as unknown[];
-  const psOthers = promptSubmit.filter(
-    (h) => !(typeof h === "object" && h !== null && JSON.stringify(h).includes("keyoku")),
-  );
+  const psOthers = promptSubmit.filter((h) => !isKeyokuHookGroup(h));
   psOthers.push({ hooks: [{ type: "command", command: contextCmdStr }] });
   hooks.UserPromptSubmit = psOthers;
 
@@ -1198,12 +1258,25 @@ async function init(argv: string[] = []): Promise<void> {
     } catch {
       mkdirSync(join(home, ".codex"), { recursive: true });
     }
-    if (toml.includes("[mcp_servers.keyoku]")) {
+    const codexBlockRe = /\[mcp_servers\.keyoku\][\s\S]*?(?=\n\[|$)/;
+    const existingBlock = toml.match(codexBlockRe)?.[0];
+    const wiredPath = existingBlock?.match(/args\s*=\s*\[\s*"((?:[^"\\]|\\.)*)"/)?.[1]?.replace(/\\(.)/g, "$1");
+    const escaped = selfPath.replace(/\\/g, "\\\\");
+    if (existingBlock && wiredPath === selfPath) {
       codexLine = "Codex:            already wired";
+    } else if (existingBlock) {
+      // Heal a stale path SURGICALLY — rewrite only the args line inside the
+      // keyoku block, leaving the rest of the user's config untouched. Reporting
+      // "already wired" while the path is dead would leave Codex silently broken.
+      const healed = toml.replace(codexBlockRe, (blk) =>
+        blk.replace(/args\s*=\s*\[[^\]]*\]/, `args = ["${escaped}"]`),
+      );
+      writeFileSync(codexCfgPath, healed);
+      codexLine = `Codex:            stale MCP path healed in ${codexCfgPath}`;
     } else {
       writeFileSync(
         codexCfgPath,
-        `${toml.replace(/\n*$/, toml ? "\n\n" : "")}[mcp_servers.keyoku]\ncommand = "node"\nargs = ["${selfPath}"]\n`,
+        `${toml.replace(/\n*$/, toml ? "\n\n" : "")}[mcp_servers.keyoku]\ncommand = "node"\nargs = ["${escaped}"]\n`,
       );
       codexLine = `Codex:            MCP server added to ${codexCfgPath}`;
     }

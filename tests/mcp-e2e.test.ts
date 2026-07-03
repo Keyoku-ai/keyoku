@@ -86,6 +86,32 @@ describe("MCP protocol e2e — muscle memory", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
+  it("redacts secrets in activity_record and goal_record before they hit the store", async () => {
+    await client.tool("activity_record", {
+      summary: "export GITHUB_TOKEN=ghp_supersecretvalue123 && deploy",
+      detail: "curl -H 'Authorization: Bearer eyJsecretjwtpayload.aaa.bbb' https://api",
+      type: "manual",
+    });
+    const list = await client.tool("activity_list", { limit: 5 });
+    const dump = JSON.stringify(list);
+    expect(dump).not.toContain("ghp_supersecretvalue123");
+    expect(dump).not.toContain("eyJsecretjwtpayload");
+    expect(dump).toContain("«redacted»");
+
+    await client.tool("goal_create", {
+      objective: "secret redaction in traces",
+      slug: "e2e-redact",
+      criteria: crit("ready", "ready"),
+    });
+    await client.tool("goal_record", {
+      goal: "e2e-redact",
+      summary: "set api_key=sk-live-shouldnotleak in config",
+      result: "success",
+    });
+    const g = await client.tool("goal_get", { goal: "e2e-redact" });
+    expect(JSON.stringify(g)).not.toContain("sk-live-shouldnotleak");
+  });
+
   it("iterative run: captures step + pitfall, then reuses both on a similar goal", async () => {
     await client.tool("goal_create", {
       objective: "fix the flaky auth test",

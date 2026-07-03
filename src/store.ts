@@ -128,7 +128,20 @@ export class Store {
     const remaining = goals.filter((g) => g.id !== id);
     this.write("goals", remaining);
     rmSync(this.recordsFile(id), { force: true });
+    // Observations are keyed per goal in their own file — remove them too, or a
+    // deleted goal leaks its episodic memory forever (and a same-slug rebirth
+    // could inherit stale observations).
+    rmSync(this.observationsFile(id), { force: true });
     return remaining.length < goals.length;
+  }
+
+  /**
+   * True when `keyoku pause` has written the privacy stop-flag. Checked
+   * per-call by the server-side write tools (activity_record, goal_record, …)
+   * so a mid-session pause actually stops recording — not just at startup.
+   */
+  isPaused(): boolean {
+    return existsSync(join(this.dir, "paused"));
   }
 
   /**
@@ -318,11 +331,13 @@ export class Store {
   listAudit(limit = 100): AuditEntry[] {
     const path = this.auditFile();
     if (!existsSync(path)) return [];
-    return readFileSync(path, "utf8")
+    // Skip torn/partial lines instead of throwing — one interrupted append
+    // must not darken the entire audit trail (matches listActivity/knowledge).
+    const all = readFileSync(path, "utf8")
       .split("\n")
       .filter((line) => line.trim() !== "")
-      .slice(-limit)
-      .map((line) => JSON.parse(line) as AuditEntry);
+      .flatMap((l) => { try { return [JSON.parse(l) as AuditEntry]; } catch { return []; } });
+    return limit <= 0 ? [] : all.slice(-limit);
   }
 
   // ----- workflows -----
@@ -437,6 +452,20 @@ export class Store {
     const idx = executions.findIndex((e) => e.id === execution.id);
     if (idx >= 0) executions[idx] = execution;
     else executions.push(execution);
-    this.write("executions", executions);
+    this.write("executions", this.capExecutions(executions));
+  }
+
+  /**
+   * Bound executions.json growth: keep every in-flight run (running /
+   * waiting_agent / waiting_human — losing one would strand a resumable
+   * execution) plus the most recent terminal runs (done / failed). Preserves
+   * array order so the newest terminal runs survive.
+   */
+  private capExecutions(executions: WorkflowExecution[], maxTerminal = 200): WorkflowExecution[] {
+    const isTerminal = (e: WorkflowExecution): boolean => e.status === "done" || e.status === "failed";
+    const terminal = executions.filter(isTerminal);
+    if (terminal.length <= maxTerminal) return executions;
+    const keep = new Set(terminal.slice(-maxTerminal).map((e) => e.id));
+    return executions.filter((e) => !isTerminal(e) || keep.has(e.id));
   }
 }

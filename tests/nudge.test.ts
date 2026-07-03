@@ -138,3 +138,19 @@ describe("hook pipeline (CLI, end to end)", () => {
     expect(out).not.toContain("undefined");
   });
 });
+
+describe("KEYOKU_HOME file modes", () => {
+  it("saveRipe and saveSurfaced write 0600 files (advertised ~/.aws posture)", async () => {
+    const { statSync } = await import("node:fs");
+    const home = mkdtempSync(join(tmpdir(), "keyoku-modes-"));
+    try {
+      saveRipe(home, []);
+      saveSurfaced(home, new Set(["seen"]));
+      for (const f of ["ripe.json", "surfaced.json"]) {
+        expect((statSync(join(home, f)).mode & 0o777).toString(8)).toBe("600");
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});

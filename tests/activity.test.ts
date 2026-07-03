@@ -150,9 +150,31 @@ describe("redactSecrets", () => {
     expect(redactSecrets("password: hunter22")).toBe("password: «redacted»");
   });
 
-  it("leaves benign text untouched", () => {
+  it("masks Basic-auth credentials without leaking the token", () => {
+    const out = redactSecrets("curl -H 'Authorization: Basic dXNlcjpzM2NyZXRwYXNz'");
+    expect(out).toContain("Basic «redacted»");
+    expect(out).not.toContain("dXNlcjpzM2NyZXRwYXNz"); // the actual credential is gone
+  });
+
+  it("masks the password in a DB/URL connection string, keeping scheme+user+host", () => {
+    const out = redactSecrets("DATABASE_URL=postgres://appuser:s3cr3tp4ss@db.internal:5432/prod");
+    expect(out).not.toContain("s3cr3tp4ss");
+    expect(out).toContain("postgres://appuser:«redacted»@db.internal");
+  });
+
+  it("masks the password in the EMPTY-username URL form (redis://:pass@, mongodb+srv://:pass@)", () => {
+    const redis = redactSecrets("REDIS_URL=redis://:s3cr3tRedisPass@cache.internal:6379/0");
+    expect(redis).not.toContain("s3cr3tRedisPass");
+    expect(redis).toContain("redis://:«redacted»@cache.internal");
+    const mongo = redactSecrets("mongodb+srv://:m0ngoPass@cluster0.example.net");
+    expect(mongo).not.toContain("m0ngoPass");
+  });
+
+  it("leaves benign text and plain host:port URLs untouched", () => {
     const benign = "git commit -m 'update key layout docs' && npm test";
     expect(redactSecrets(benign)).toBe(benign);
+    const url = "curl http://localhost:8080/health";
+    expect(redactSecrets(url)).toBe(url); // a port is not a password
   });
 });
 

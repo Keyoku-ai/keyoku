@@ -80,7 +80,7 @@ describe("ensureOmnigentConnector", () => {
   it("skips when omnigent is already registered", async () => {
     const add = vi.fn();
     const connectors = {
-      get: vi.fn(() => ({ name: "omnigent" })),
+      get: vi.fn(() => ({ name: "omnigent", autonomy: "autonomous" })),
       add,
       callTool: vi.fn(),
     };
@@ -105,7 +105,7 @@ describe("runGoalOnOmnigent", () => {
       return { text: "{}", isError: false };
     });
     const connectors = {
-      get: vi.fn(() => ({ name: "omnigent" })),
+      get: vi.fn(() => ({ name: "omnigent", autonomy: "autonomous" })),
       add: vi.fn(),
       callTool,
     };
@@ -181,7 +181,7 @@ describe("runGoalOnOmnigent", () => {
       return { text: "{}", isError: false };
     });
     const connectors = {
-      get: vi.fn(() => ({ name: "omnigent" })),
+      get: vi.fn(() => ({ name: "omnigent", autonomy: "autonomous" })),
       add: vi.fn(),
       callTool,
     };
@@ -209,5 +209,30 @@ describe("runGoalOnOmnigent", () => {
     expect(callTool).toHaveBeenCalledWith("omnigent", "create_session_v1_sessions_post", {
       body: { agent_id: "agent_1", title: "keyoku:ship-it" },
     });
+  });
+
+  it("refuses to drive when the omnigent connector is not autonomous (autonomy ladder)", async () => {
+    const callTool = vi.fn(async () => ({ text: "{}", isError: false }));
+    const connectors = {
+      get: vi.fn(() => ({ name: "omnigent", autonomy: "approve" })),
+      add: vi.fn(async (_c: unknown) => ({ tools: [] })),
+      callTool,
+    };
+    const engine = { slm: null, getGoal: vi.fn(() => goal()), assess: vi.fn() };
+
+    await expect(
+      runGoalOnOmnigent({
+        engine: engine as any,
+        connectors: connectors as any,
+        goalSlug: "ship-it",
+        agentName: "codex-test",
+      }),
+    ).rejects.toThrow(/autonomy is 'approve'/);
+    // No session was created — the drive was refused before any mutating call.
+    expect(callTool).not.toHaveBeenCalledWith(
+      "omnigent",
+      "create_session_v1_sessions_post",
+      expect.anything(),
+    );
   });
 });

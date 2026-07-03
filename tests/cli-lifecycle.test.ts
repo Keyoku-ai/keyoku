@@ -1,6 +1,6 @@
 // pause/resume privacy switch, doctor, and AGENTS.md baking — CLI surface.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -29,6 +29,49 @@ function cli(args: string[], input?: string): { out: string; code: number } {
 
 const recordInput = JSON.stringify({ tool_name: "Bash", tool_input: { command: "echo hi" }, session_id: "s" });
 
+describe("CLI Omnigent drive respects the connector autonomy ladder", () => {
+  const seedOmnigent = (h: string, autonomy: "approve" | "autonomous") => {
+    const store = new Store(h);
+    store.saveConnector({
+      name: "omnigent",
+      transport: { type: "openapi", specUrl: "http://127.0.0.1:1/openapi.json", baseUrl: "http://127.0.0.1:1", allowMutating: true, auth: { kind: "none" } },
+      autonomy,
+      addedAt: new Date().toISOString(),
+    } as any);
+  };
+  const run = (h: string, args: string[]): { out: string; err: string; code: number } => {
+    try {
+      const out = execFileSync(process.execPath, [ENTRY, ...args], {
+        env: { ...process.env, KEYOKU_HOME: h } as NodeJS.ProcessEnv,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      return { out, err: "", code: 0 };
+    } catch (e) {
+      const x = e as { stdout?: string; stderr?: string; status?: number };
+      return { out: x.stdout ?? "", err: x.stderr ?? "", code: x.status ?? 1 };
+    }
+  };
+
+  it("`keyoku converge` refuses when the omnigent connector is not autonomous", () => {
+    const h = mkdtempSync(join(tmpdir(), "keyoku-cli-conv-"));
+    seedOmnigent(h, "approve");
+    const r = run(h, ["converge", "--goal", "ship-it", "--session", "sess_abc"]);
+    expect(r.code).not.toBe(0);
+    expect(r.err + r.out).toContain("autonomy is 'approve'");
+    rmSync(h, { recursive: true, force: true });
+  });
+
+  it("`keyoku guardrails` refuses when the omnigent connector is not autonomous", () => {
+    const h = mkdtempSync(join(tmpdir(), "keyoku-cli-guard-"));
+    seedOmnigent(h, "approve");
+    const r = run(h, ["guardrails", "--goal", "ship-it", "--session", "sess_abc"]);
+    expect(r.code).not.toBe(0);
+    expect(r.err + r.out).toContain("autonomy is 'approve'");
+    rmSync(h, { recursive: true, force: true });
+  });
+});
+
 describe("pause / resume", () => {
   it("pause stops recording; resume restores it", () => {
     cli(["record"], recordInput);
@@ -51,6 +94,77 @@ describe("doctor", () => {
     expect(out).toContain("keyoku doctor");
     expect(out).toContain("activity log: 2 events");
     expect(out).toContain("SLM tier:");
+  });
+
+  const doctorWithHome = (fakeHome: string): string => {
+    try {
+      return execFileSync(process.execPath, [ENTRY, "doctor"], {
+        env: { ...process.env, HOME: fakeHome, KEYOKU_HOME: join(fakeHome, ".keyoku") } as NodeJS.ProcessEnv,
+        encoding: "utf8",
+      });
+    } catch (err) {
+      return (err as { stdout?: string }).stdout ?? "";
+    }
+  };
+
+  it("does NOT false-green a hook check on a decoy ' record' substring (structural parse)", () => {
+    const fake = mkdtempSync(join(tmpdir(), "keyoku-doctor-decoy-"));
+    mkdirSync(join(fake, ".claude"), { recursive: true });
+    // A foreign hook whose command merely CONTAINS the word "record" — not
+    // keyoku's `node …/index.js record` — must be reported as missing.
+    writeFileSync(
+      join(fake, ".claude", "settings.json"),
+      JSON.stringify({ hooks: { PostToolUse: [{ matcher: "*", hooks: [{ type: "command", command: "echo about to record something" }] }] } }),
+    );
+    const out = doctorWithHome(fake);
+    expect(out).toContain("✗ PostToolUse hook (recording)");
+    rmSync(fake, { recursive: true, force: true });
+  });
+
+  it("greens the hook checks on a real keyoku wiring", () => {
+    const fake = mkdtempSync(join(tmpdir(), "keyoku-doctor-real-"));
+    mkdirSync(join(fake, ".claude"), { recursive: true });
+    const cmd = (verb: string) => ({ hooks: [{ type: "command", command: `node ${ENTRY} ${verb}` }] });
+    writeFileSync(
+      join(fake, ".claude", "settings.json"),
+      JSON.stringify({ hooks: { PostToolUse: [cmd("record")], SessionStart: [cmd("brief")], UserPromptSubmit: [cmd("context")] } }),
+    );
+    writeFileSync(join(fake, ".claude.json"), JSON.stringify({ mcpServers: { keyoku: { type: "stdio", command: "node", args: [ENTRY] } } }));
+    const out = doctorWithHome(fake);
+    expect(out).toContain("✓ PostToolUse hook (recording)");
+    expect(out).toContain("✓ SessionStart hook (brief)");
+    expect(out).toContain("✓ UserPromptSubmit hook (practice injection)");
+    expect(out).toContain("✓ MCP server registered in ~/.claude.json");
+    rmSync(fake, { recursive: true, force: true });
+  });
+
+  it("greens a LEGACY bare 'keyoku <verb>' hook (v1.x form) — no false-red on upgrade", () => {
+    const fake = mkdtempSync(join(tmpdir(), "keyoku-doctor-legacy-"));
+    mkdirSync(join(fake, ".claude"), { recursive: true });
+    const cmd = (verb: string) => ({ hooks: [{ type: "command", command: `keyoku ${verb}` }] });
+    writeFileSync(
+      join(fake, ".claude", "settings.json"),
+      JSON.stringify({ hooks: { PostToolUse: [cmd("record")], SessionStart: [cmd("brief")], UserPromptSubmit: [cmd("context")] } }),
+    );
+    const out = doctorWithHome(fake);
+    expect(out).toContain("✓ PostToolUse hook (recording)");
+    expect(out).toContain("✓ SessionStart hook (brief)");
+    expect(out).toContain("✓ UserPromptSubmit hook (practice injection)");
+    rmSync(fake, { recursive: true, force: true });
+  });
+
+  it("does NOT claim a FOREIGN hook that merely passes 'keyoku record' as a data argument", () => {
+    const fake = mkdtempSync(join(tmpdir(), "keyoku-doctor-foreign-"));
+    mkdirSync(join(fake, ".claude"), { recursive: true });
+    // `echo keyoku record` runs echo, not keyoku — doctor must report the hook
+    // missing (and init must never delete such a hook as if it were keyoku's).
+    writeFileSync(
+      join(fake, ".claude", "settings.json"),
+      JSON.stringify({ hooks: { PostToolUse: [{ matcher: "*", hooks: [{ type: "command", command: "echo keyoku record" }] }] } }),
+    );
+    const out = doctorWithHome(fake);
+    expect(out).toContain("✗ PostToolUse hook (recording)");
+    rmSync(fake, { recursive: true, force: true });
   });
 });
 

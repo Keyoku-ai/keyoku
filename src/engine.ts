@@ -5,7 +5,7 @@ import { buildGuidance } from "./guidance.js";
 import { relevantPatterns } from "./learn.js";
 import { observationFromReport, recordObservation } from "./observe.js";
 import { runProbe } from "./probes.js";
-import { effectiveStability } from "./types.js";
+import { effectiveStability, type Probe, type ProbeEnvelope } from "./types.js";
 import type { SlmProvider } from "./slm.js";
 import { newId, slugify, type Store } from "./store.js";
 import type {
@@ -165,6 +165,31 @@ export interface RecordActionInput {
   detail?: string;
   tool?: string;
   result?: ActionResult;
+}
+
+/**
+ * Did the probe fail to produce a trustworthy RESULT (vs. completing and
+ * reporting a real failure)? A non-completion leaves transport fields absent or
+ * as synthesized sentinels, so no assertion over them can honor convergence.
+ * Grounded in what the probe produced, not in the assertion's op.
+ */
+function probeDidNotComplete(probe: Probe, envelope: ProbeEnvelope): boolean {
+  if (envelope.error === undefined) return false; // completed cleanly
+  switch (probe.kind) {
+    case "command":
+      // -1 = synthesized timeout/signal/maxBuffer sentinel; null output = the
+      // stdout could not be parsed into the requested shape.
+      return envelope.exitCode === -1 || envelope.output === null;
+    case "http":
+      // fetch threw (connection refused / DNS / TLS / abort) → no response; or
+      // the body couldn't be parsed.
+      return envelope.status === undefined || envelope.output === null;
+    case "mcp":
+      // the connector tool call itself errored — no usable result came back.
+      return true;
+    default:
+      return false;
+  }
 }
 
 /**
@@ -338,17 +363,49 @@ export class Harness {
         const started = Date.now();
         const envelope = await runProbe(criterion.probe, this.connectors);
         const result = evaluateAssertion(envelope, criterion.assert);
-        // A probe that failed at the transport level (nonzero exit, timeout,
-        // connector failure, parse error) must not satisfy a criterion —
-        // unless the assertion's path IS a transport field (exact match: a
-        // path like output.status targets the body, not the transport), in
-        // which case inspecting failure IS the criterion. Silent false
-        // convergence is the one unforgivable bug in a harness whose promise
-        // is deterministic verification.
-        const inspectsTransport = /^(exitCode|status|stderr|error)$/.test(
-          (criterion.assert.path ?? "").trim(),
-        );
-        const pass = result.pass && (!envelope.error || inspectsTransport);
+        // Silent false convergence — a goal reported converged while its probe
+        // did not actually verify the property — is the one unforgivable bug in
+        // a harness whose promise is deterministic verification. Two guards,
+        // grounded in what the probe PRODUCED (not in op names, which are
+        // trivially re-phrased):
+        //
+        // 1. If the probe DID NOT COMPLETE (timeout/signal/maxBuffer → exitCode
+        //    sentinel -1; fetch threw → no status; output unparseable → null;
+        //    mcp tool errored), its transport fields are absent or synthesized
+        //    sentinels, so NO assertion over them is meaningful — the criterion
+        //    fails regardless of op.
+        // 2. If the probe COMPLETED but reported a failure (real nonzero exit /
+        //    real HTTP status), its transport values are genuine, so a
+        //    transport-field assertion is honored ONLY when it is positive and
+        //    non-vacuous: not a negative op (vacuously true on absence) and not
+        //    an equality/containment against an EMPTY value (vacuously true on a
+        //    blank field). This lets "exitCode eq 1" / "stderr contains <text>"
+        //    / "error contains <text>" through, while blocking "stderr eq ''",
+        //    "exitCode ne 2", "stderr not_contains X" on a failed command.
+        const incompleteProbe = probeDidNotComplete(criterion.probe, envelope);
+        // A completed-but-FAILED probe (real nonzero exit) may satisfy a
+        // criterion ONLY if the assertion SPECIFICALLY and non-vacuously
+        // inspects that failure — not merely references a transport field. The
+        // dangerous class is the TAUTOLOGY: a positive op that passes for
+        // essentially any failure value (exitCode gte 0 / gte -1 / lte 255,
+        // stderr matches '.*', error exists, error contains ''). So the
+        // exemption is exactly ONE shape: exitCode/status matched to an EXACT
+        // expected value ("must exit 1" / "service returns 503"). The `error`
+        // MESSAGE path is deliberately EXCLUDED — it is unavoidably
+        // tautology-prone, because the harness's own synthesized text ("command
+        // exited with code N") carries generic tokens ("code", "exited"), so
+        // `error contains 'code'` / `error matches '.*'` would pass for ANY
+        // failing probe while verifying nothing. Exact exitCode/status already
+        // expresses every legitimate "assert a specific failure" goal.
+        // Everything else on a failed probe fails the criterion.
+        const path = (criterion.assert.path ?? "").trim();
+        const op = criterion.assert.op;
+        const value = criterion.assert.value;
+        const nonEmptyValue = typeof value === "string" ? value.length > 0 : value != null;
+        const meaningfulFailureAssertion =
+          (path === "exitCode" || path === "status") && op === "eq" && nonEmptyValue;
+        const pass =
+          result.pass && !incompleteProbe && (!envelope.error || meaningfulFailureAssertion);
         const error = [
           envelope.error,
           result.error,
@@ -476,8 +533,9 @@ export class Harness {
         driftDetected,
         patterns,
         // Honest convergence message: only claim a workflow was learned if one
-        // actually exists (a zero-action convergence has none — nudge to record).
-        workflowPromoted: converged ? this.store.getWorkflow(fresh.slug) != null : undefined,
+        // actually has runnable STEPS. A pitfalls-only (failure-only) artifact
+        // has none — keep nudging to record the steps that worked.
+        workflowPromoted: converged ? (this.store.getWorkflow(fresh.slug)?.steps.length ?? 0) > 0 : undefined,
       }) + candidateGuidance;
 
     // Perception (M2): every assessment becomes episodic memory the learning
@@ -485,11 +543,16 @@ export class Harness {
     // Only a FRESH convergence is a "convergence" transition — re-asserting an
     // already-converged goal is a plain assessment, or drift counts inflate.
     try {
-      const observation = observationFromReport(report);
-      if (observation.kind === "convergence" && wasConverged) {
-        observation.kind = "assessment";
+      // Honor `keyoku pause` — an observation is episodic recording too, so the
+      // privacy switch must stop it (assessment stays read-only + correct; only
+      // the persisted memory is withheld).
+      if (!this.store.isPaused()) {
+        const observation = observationFromReport(report);
+        if (observation.kind === "convergence" && wasConverged) {
+          observation.kind = "assessment";
+        }
+        recordObservation(this.store, observation);
       }
-      recordObservation(this.store, observation);
     } catch {
       // Observation recording is best-effort.
     }
@@ -539,14 +602,16 @@ export class Harness {
     this.store.appendRecord(record);
     this.store.saveGoal(goal);
     // The trace of a converged goal just grew — refresh its workflow so the
-    // retroactively-captured steps become muscle memory.
-    if (retroactive) this.promoteWorkflow(goal);
+    // retroactively-captured steps become muscle memory. This is NOT a new
+    // convergence (the goal converged once), so don't inflate the count.
+    if (retroactive) this.promoteWorkflow(goal, { countConvergence: false });
     return { record, goal };
   }
 
   // ----- learning slice: trace → workflow, workflow → suggestion -----
 
-  private promoteWorkflow(goal: Goal): WorkflowArtifact | null {
+  private promoteWorkflow(goal: Goal, opts: { countConvergence?: boolean } = {}): WorkflowArtifact | null {
+    const countConvergence = opts.countConvergence ?? true;
     const trace = this.store.listRecords(goal.id);
     const steps = trace
       .filter((r) => r.result !== "failure")
@@ -587,7 +652,13 @@ export class Harness {
           criteria: goal.criteria.map((c) => c.description),
           ...(pitfalls.length > 0 ? { pitfalls } : {}),
           stats: {
-            convergences: existing.stats.convergences + 1,
+            // Preserve self-pruning counters (suggested/helped) — re-promotion
+            // must not wipe the precision signal that ranks recall.
+            ...existing.stats,
+            // Only a genuine (re-)convergence increments this. Retroactive
+            // goal_records re-promote to refresh steps but pass
+            // countConvergence:false, so N records don't look like N convergences.
+            convergences: existing.stats.convergences + (countConvergence ? 1 : 0),
             // The trace is cumulative (all records ever), so this is an
             // absolute count, not an increment.
             totalActions: trace.length,
@@ -623,6 +694,39 @@ export class Harness {
    * the product's headline feature — muscle memory — from silently producing
    * empty workflows just because the agent didn't call goal_record mid-run.
    */
+  /**
+   * The session that OWNS a goal's backfill window — the one that actually drove
+   * this goal — from the strongest available signal, or null when none exists
+   * (then the caller falls back to the highest-volume session). Signals: a live
+   * goal_focus session, else the session that issued this goal's keyoku
+   * bookkeeping (goal_create/record/assess) in the window. Bookkeeping events are
+   * excluded from backfill CANDIDATES but still identify the owner.
+   */
+  private resolveOwningSession(goal: Goal, since: number, until: number): string | null {
+    const focus = this.store.getFocus();
+    if (focus?.goalId === goal.id && focus.sessionId) return focus.sessionId;
+    // Match the slug/id as a WHOLE token, not a substring — otherwise slug 'api'
+    // would falsely claim a concurrent 'api-v2' goal's bookkeeping and select the
+    // wrong session. (Delimiters: anything that isn't a slug char [a-z0-9-_].)
+    const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const refRe = new RegExp(`(?:^|[^a-z0-9_-])(?:${esc(goal.slug)}|${esc(goal.id)})(?:[^a-z0-9_-]|$)`);
+    let owner: string | null = null;
+    let latest = -1;
+    for (const e of this.store.listActivity()) {
+      const tool = e.tool ?? "";
+      if (!tool.startsWith("mcp__keyoku__") && !tool.startsWith("keyoku")) continue;
+      const t = Date.parse(e.at);
+      if (Number.isNaN(t) || t < since || t > until) continue;
+      const haystack = `${e.summary} ${e.detail ?? ""}`;
+      if (!refRe.test(haystack)) continue;
+      if (e.sessionId && t >= latest) {
+        latest = t;
+        owner = e.sessionId;
+      }
+    }
+    return owner;
+  }
+
   private backfillStepsFromActivity(goal: Goal): WorkflowStep[] {
     const created = Date.parse(goal.createdAt);
     if (Number.isNaN(created)) return [];
@@ -648,17 +752,34 @@ export class Harness {
     // another project's actions. Same within-session principle the pattern miner
     // uses; an SLM pass can refine further. (Real-data check: this is what
     // stopped a headroom goal from absorbing job-search edits.)
-    const perSession = new Map<string, number>();
-    for (const e of candidates) {
-      const s = e.sessionId ?? "_";
-      perSession.set(s, (perSession.get(s) ?? 0) + 1);
-    }
-    let dominant = "_";
-    let best = -1;
-    for (const [s, n] of perSession) {
-      if (n > best) {
-        best = n;
-        dominant = s;
+    // Prefer an OWNERSHIP signal over raw volume: a concurrent unrelated session
+    // that merely did more work in this window must not hijack the goal's
+    // backfill (discarding its real steps). Use the goal's own driving session
+    // (focus, or its keyoku bookkeeping) when known; fall back to highest-volume
+    // only when no ownership signal exists.
+    // Prefer an OWNERSHIP signal (focus / bookkeeping, matched by whole token);
+    // otherwise fall back to the highest-volume session — a documented
+    // best-effort: it is correct when the goal's own driver did the most work in
+    // the window (the common build-then-verify shape), and can mis-attribute in
+    // the rare case an unrelated concurrent session did more. A real goal_record
+    // always wins over this inference, and `keyoku repair` can re-attribute.
+    const owner = this.resolveOwningSession(goal, since, until);
+    let dominant: string;
+    if (owner && candidates.some((e) => (e.sessionId ?? "_") === owner)) {
+      dominant = owner;
+    } else {
+      const perSession = new Map<string, number>();
+      for (const e of candidates) {
+        const s = e.sessionId ?? "_";
+        perSession.set(s, (perSession.get(s) ?? 0) + 1);
+      }
+      dominant = "_";
+      let best = -1;
+      for (const [s, n] of perSession) {
+        if (n > best) {
+          best = n;
+          dominant = s;
+        }
       }
     }
     let scoped = candidates.filter((e) => (e.sessionId ?? "_") === dominant);
@@ -820,7 +941,10 @@ export class Harness {
     };
     return this.store
       .listWorkflows()
-      .filter((w) => w.slug !== goal.slug && w.steps.length > 0)
+      // Surface a workflow that has runnable steps OR captured pitfalls — a
+      // failure-only goal's "avoid (failed before)" memory is worth surfacing
+      // on a similar goal even with no positive steps yet.
+      .filter((w) => w.slug !== goal.slug && (w.steps.length > 0 || (w.pitfalls?.length ?? 0) > 0))
       .map((w) => {
         const similarity = jaccard(goalTokens, tokens(`${w.objective} ${w.slug}`));
         return {
@@ -906,7 +1030,7 @@ export class Harness {
     const goalTokens = tokens(`${goal.objective} ${goal.slug}`);
     return this.store
       .listWorkflows()
-      .filter((w) => w.slug !== goal.slug && w.steps.length > 0)
+      .filter((w) => w.slug !== goal.slug && (w.steps.length > 0 || (w.pitfalls?.length ?? 0) > 0))
       .map((w) => ({
         ov: overlap(goalTokens, tokens(`${w.objective} ${w.slug}`)),
         s: {

@@ -27,7 +27,7 @@ import {
 import { compileConstraintsToPolicies } from "./policy-compiler.js";
 import { refineSuggestions } from "./refine.js";
 import { observationDigest, stateTransitions } from "./observe.js";
-import { runGoalOnOmnigent } from "./run.js";
+import { assertOmnigentDriveAuthorized, runGoalOnOmnigent } from "./run.js";
 import { resolveSlmFromEnv } from "./slm.js";
 import { newId, slugify } from "./store.js";
 import {
@@ -325,6 +325,7 @@ export function buildServer(harness: Harness): McpServer {
     },
     async ({ goal: ref, session, maxRounds }) => {
       try {
+        assertOmnigentDriveAuthorized(harness.connectors);
         const result = await driveToConvergence({
           connectors: harness.connectors,
           sessionId: session,
@@ -364,6 +365,7 @@ export function buildServer(harness: Harness): McpServer {
     },
     async ({ goal: ref, session }) => {
       try {
+        assertOmnigentDriveAuthorized(harness.connectors);
         const goal = harness.getGoal(ref);
         const warnings: string[] = [];
         const specs = await compileConstraintsToPolicies(goal.constraints, {
@@ -439,7 +441,15 @@ export function buildServer(harness: Harness): McpServer {
     },
     async ({ goal: ref, ...input }) => {
       try {
-        const { record, goal } = harness.recordAction(ref, input);
+        if (harness.store.isPaused()) return json({ recorded: false, paused: true });
+        // Secrets must never enter a goal's trace — it is promoted into a
+        // reusable workflow and can be baked into a repo-committed skill.
+        const safe = {
+          ...input,
+          summary: redactSecrets(input.summary),
+          ...(input.detail ? { detail: redactSecrets(input.detail) } : {}),
+        };
+        const { record, goal } = harness.recordAction(ref, safe);
         logAudit("goal_record", goal.slug, record.summary.slice(0, 120), record.result !== "failure");
         return json({
           recorded: { iteration: record.iteration, summary: record.summary, result: record.result },
@@ -665,8 +675,9 @@ export function buildServer(harness: Harness): McpServer {
         logAudit("connector_call", name, `${tool} → ${result.isError ? "error" : "ok"}`, !result.isError);
         // Feed the observation stream — connector usage is activity too, so
         // repeated external workflows (file issue → post message → …) become
-        // detectable patterns that draft as runnable mcp_call steps.
-        if (!result.isError) {
+        // detectable patterns that draft as runnable mcp_call steps. Honor
+        // `keyoku pause`: the privacy switch must stop THIS recording path too.
+        if (!result.isError && !harness.store.isPaused()) {
           harness.store.appendActivity(
             enrichWithEntities({
               id: newId("ev"),
@@ -957,6 +968,21 @@ export function buildServer(harness: Harness): McpServer {
    * human_review; fails fast on a misconfigured step instead of leaving it
    * stuck in "running".
    */
+  // Executions cancelled mid-flight. execution_cancel records here for an
+  // immediate same-process signal; advanceExecution also re-reads the store so
+  // a cross-process cancel (another session) is honored too.
+  const cancelledExecutions = new Set<string>();
+  const isCancelled = (execId: string): boolean =>
+    cancelledExecutions.has(execId) || harness.store.getExecution(execId)?.status === "failed";
+  const cancelledResult = (execId: string): ToolResult => {
+    const persisted = harness.store.getExecution(execId);
+    return json({
+      execution: persisted ? summarizeExecution(persisted) : { id: execId, status: "failed" },
+      cancelled: true,
+      guidance: "Execution was cancelled; remaining steps were not run.",
+    });
+  };
+
   async function advanceExecution(
     exec: WorkflowExecution,
     template: WorkflowTemplate | undefined,
@@ -970,6 +996,12 @@ export function buildServer(harness: Harness): McpServer {
     };
 
     for (let i = startIdx; i < exec.steps.length; i++) {
+      // Cancellation can arrive (as a separate execution_cancel tool call)
+      // while we are awaiting a step. Re-check before starting each step and
+      // bail without overwriting the cancelled record — otherwise cancel is a
+      // no-op and every remaining step still runs.
+      if (isCancelled(exec.id)) return cancelledResult(exec.id);
+
       const s = exec.steps[i];
       s.status = "running";
       s.startedAt = new Date().toISOString();
@@ -977,7 +1009,19 @@ export function buildServer(harness: Harness): McpServer {
       harness.store.saveExecution(exec);
 
       if (s.type === "bash") {
-        const { result, ok } = await executeBashStep(s.command ?? s.summary, s.cwd);
+        if (!s.command) {
+          // No fallback to s.summary — running a human-readable summary as a
+          // shell command is never intended and is a data-integrity hazard.
+          s.status = "failed";
+          s.error = "bash step is missing a command";
+          s.completedAt = new Date().toISOString();
+          return failAt(i, s.error);
+        }
+        const { result, ok } = await executeBashStep(s.command, {
+          ...(s.cwd ? { cwd: s.cwd } : {}),
+          ...(exec.paramEnv ? { env: exec.paramEnv } : {}),
+        });
+        if (isCancelled(exec.id)) return cancelledResult(exec.id);
         s.result = result;
         s.status = ok ? "done" : "failed";
         s.completedAt = new Date().toISOString();
@@ -1014,6 +1058,7 @@ export function buildServer(harness: Harness): McpServer {
             reason: `workflow '${exec.templateSlug}' step ${i} — connector autonomy is 'approve'`,
           });
           s.status = "waiting_human";
+          s.approvalId = approval.id; // link so execution_complete can require it be decided
           exec.status = "waiting_human";
           harness.store.saveExecution(exec);
           return json({
@@ -1025,6 +1070,7 @@ export function buildServer(harness: Harness): McpServer {
           });
         }
         const { result, ok } = await executeMcpStep(s.connector, s.tool, s.args ?? {}, harness.connectors);
+        if (isCancelled(exec.id)) return cancelledResult(exec.id);
         s.result = result;
         s.status = ok ? "done" : "failed";
         s.completedAt = new Date().toISOString();
@@ -1147,11 +1193,15 @@ export function buildServer(harness: Harness): McpServer {
     },
     async (args) => {
       try {
+        // `keyoku pause` is the privacy switch — honor it on the server-side
+        // path too (hooks stop separately), checked per-call so a mid-session
+        // pause takes effect immediately.
+        if (harness.store.isPaused()) return json({ recorded: false, paused: true });
         let event: ActivityEvent = {
           id: newId("ev"),
           type: args.type ?? "manual",
-          summary: args.summary,
-          ...(args.detail ? { detail: args.detail.slice(0, 500) } : {}),
+          summary: redactSecrets(args.summary),
+          ...(args.detail ? { detail: redactSecrets(args.detail).slice(0, 500) } : {}),
           ...(args.tool ? { tool: args.tool } : {}),
           ...(args.entities?.length ? { entities: args.entities } : {}),
           ...(args.sessionId ? { sessionId: args.sessionId } : {}),
@@ -1209,6 +1259,7 @@ export function buildServer(harness: Harness): McpServer {
     },
     async ({ subject, kind, fact, source }) => {
       try {
+        if (harness.store.isPaused()) return json({ stored: false, paused: true });
         const entry = {
           id: newId("kn"),
           subject,
@@ -1398,25 +1449,45 @@ export function buildServer(harness: Harness): McpServer {
         description: z.string().min(1),
         steps: z
           .array(
-            z.object({
-              type: z.enum(["bash", "agent_prompt", "mcp_call", "human_review"]),
-              summary: z.string().min(1),
-              command: z.string().optional(),
-              cwd: z.string().optional().describe("Working directory for bash steps (default: the server's cwd)."),
-              prompt: z.string().optional(),
-              connector: z.string().optional(),
-              tool: z.string().optional(),
-              args: z.record(z.unknown()).optional(),
-              message: z.string().optional(),
-            }),
+            z
+              .object({
+                type: z.enum(["bash", "agent_prompt", "mcp_call", "human_review"]),
+                summary: z.string().min(1),
+                command: z.string().optional(),
+                cwd: z.string().optional().describe("Working directory for bash steps (default: the server's cwd)."),
+                prompt: z.string().optional(),
+                connector: z.string().optional(),
+                tool: z.string().optional(),
+                args: z.record(z.unknown()).optional(),
+                message: z.string().optional(),
+              })
+              .superRefine((s, ctx) => {
+                // A bash step with no command would otherwise fall through to
+                // running its human summary as a shell command — reject at the
+                // trust boundary. (mcp_call misconfig is caught gracefully at
+                // execution time so a partial template can still be inspected.)
+                if (s.type === "bash" && !s.command)
+                  ctx.addIssue({ code: z.ZodIssueCode.custom, message: "a bash step requires a 'command'" });
+              }),
           )
           .min(1),
+        overwrite: z
+          .boolean()
+          .optional()
+          .describe("Set true to replace an existing template with the same slug. Default false — collisions are refused."),
       },
     },
-    async ({ slug, name, description, steps }) => {
+    async ({ slug, name, description, steps, overwrite }) => {
       try {
         const now = new Date().toISOString();
         const existing = harness.store.getTemplate(slug);
+        if (existing && !overwrite)
+          return fail(
+            new Error(
+              `A template '${slug}' already exists (ran ${existing.timesRun}× since ${existing.approvedAt}). ` +
+                `Pass overwrite: true to replace it, edit it in place with workflow_update, or choose a different slug.`,
+            ),
+          );
         const template: WorkflowTemplate = existing
           ? { ...existing, name, description, steps: steps as WorkflowStepTemplate[], updatedAt: now }
           : {
@@ -1583,10 +1654,61 @@ export function buildServer(harness: Harness): McpServer {
 
         // {{placeholders}} become real here: fill from params, refuse to run
         // with holes — a half-substituted command is worse than no run.
+        // SECURITY: bash `command` params are NOT interpolated into the command
+        // string (that let `{{x}}` = "; rm -rf ~" inject). They are bound as
+        // environment variables the command references via "$VAR", so `sh`
+        // treats them as data in every quoting context. Prompt/message are text
+        // (shown to an agent/human, never executed) → plain substitution.
         const missing = new Set<string>();
+        const paramEnv: Record<string, string> = {};
+        const keyToEnv = new Map<string, string>();
+        const envNameFor = (key: string, value: string): string => {
+          let envName = keyToEnv.get(key);
+          if (!envName) {
+            envName = `KEYOKU_PARAM_${keyToEnv.size}`;
+            keyToEnv.set(key, envName);
+            paramEnv[envName] = value;
+          }
+          return envName;
+        };
+        // Bind each {{param}} in a bash command to an env var reference, chosen by
+        // the SHELL QUOTE STATE at that position so the value is always data,
+        // never code, AND substitution still works in every context:
+        //   unquoted {{x}}  → "$VAR"        (double-quote to stop word-splitting)
+        //   "…{{x}}…"       → $VAR          (already inside dq — expands as data)
+        //   '…{{x}}…'       → '"$VAR"'      (close sq, dq the var, reopen sq)
+        // Even if quote tracking is imperfect on exotic input, all three forms are
+        // injection-safe — a value like $(rm -rf ~) can never be re-evaluated.
+        const bindCommand = (cmd: string | undefined): string | undefined => {
+          if (!cmd) return cmd;
+          let out = "";
+          let quote: "'" | '"' | null = null;
+          for (let i = 0; i < cmd.length; ) {
+            const m = /^\{\{\s*([\w-]+)\s*\}\}/.exec(cmd.slice(i));
+            if (m) {
+              const key = m[1];
+              const value = (params ?? {})[key];
+              if (value === undefined) {
+                missing.add(key);
+                out += m[0];
+              } else {
+                const v = `$${envNameFor(key, value)}`;
+                out += quote === "'" ? `'"${v}"'` : quote === '"' ? v : `"${v}"`;
+              }
+              i += m[0].length;
+              continue;
+            }
+            const c = cmd[i];
+            if (quote === null && (c === "'" || c === '"')) quote = c;
+            else if (quote === c) quote = null;
+            out += c;
+            i += 1;
+          }
+          return out;
+        };
         const filled = template.steps.map((s) => ({
           ...s,
-          command: fillPlaceholders(s.command, params ?? {}, missing),
+          command: bindCommand(s.command),
           prompt: fillPlaceholders(s.prompt, params ?? {}, missing),
           message: fillPlaceholders(s.message, params ?? {}, missing),
         }));
@@ -1619,6 +1741,7 @@ export function buildServer(harness: Harness): McpServer {
           currentStep: 0,
           startedAt: now,
           triggeredBy: triggered_by ?? "on_demand",
+          ...(Object.keys(paramEnv).length > 0 ? { paramEnv } : {}),
         };
 
         return advanceExecution(execution, template, 0);
@@ -1652,6 +1775,37 @@ export function buildServer(harness: Harness): McpServer {
         if (!step) return fail(new Error(`No step ${step_index} in execution '${id}'.`));
         if (step_index !== execution.currentStep)
           return fail(new Error(`Expected step_index ${execution.currentStep}, got ${step_index}. Steps must be completed in order.`));
+        // Only a step actually PAUSED for input may be completed by hand. Guards
+        // against double-execution of downstream steps and fabricated completion
+        // of a running/pending/done step (e.g. an approval-gated mcp_call).
+        if (step.status !== "waiting_agent" && step.status !== "waiting_human")
+          return fail(
+            new Error(
+              `Step ${step_index} is '${step.status}', not awaiting input — only waiting_agent/waiting_human steps can be completed with execution_complete.`,
+            ),
+          );
+        // Approval-gated step: it may only be completed once its linked approval
+        // has been DECIDED and executed — otherwise a caller could fabricate the
+        // outcome of a gated mcp_call without any human approval.
+        if (step.approvalId) {
+          const approval = harness.store.getApproval(step.approvalId);
+          if (!approval || approval.status === "pending")
+            return fail(
+              new Error(
+                `Step ${step_index} is gated by approval '${step.approvalId}', which is not yet decided — resolve it with approval_approve / approval_deny first; it cannot be hand-completed.`,
+              ),
+            );
+          if (approval.status !== "executed") {
+            step.status = "failed";
+            step.error = `linked approval '${step.approvalId}' was ${approval.status}`;
+            step.completedAt = new Date().toISOString();
+            execution.status = "failed";
+            harness.store.saveExecution(execution);
+            return json({ execution: summarizeExecution(execution), failed_at: step_index, error: step.error });
+          }
+          // Prefer the approval's real executed result over any provided text.
+          if (typeof approval.result === "string" && approval.result) result = approval.result;
+        }
         step.result = result;
         step.status = ok ? "done" : "failed";
         step.completedAt = new Date().toISOString();
@@ -1684,8 +1838,11 @@ export function buildServer(harness: Harness): McpServer {
         if (!execution) return fail(new Error(`No execution '${id}'.`));
         if (execution.status === "done" || execution.status === "failed")
           return fail(new Error(`Execution '${id}' is already ${execution.status}.`));
+        // Signal an in-flight advanceExecution loop to stop between steps BEFORE
+        // persisting — otherwise its next saveExecution could clobber this cancel.
+        cancelledExecutions.add(id);
         const step = execution.steps[execution.currentStep];
-        if (step) {
+        if (step && (step.status === "running" || step.status === "waiting_agent" || step.status === "waiting_human")) {
           step.status = "failed";
           step.error = "cancelled by user";
           step.completedAt = new Date().toISOString();

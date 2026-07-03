@@ -114,10 +114,13 @@ describe("http probes", () => {
     expect(envelope.output).toEqual({ healthy: true, replicas: 2 });
   });
 
-  it("non-2xx is still observable (status + body)", async () => {
+  it("non-2xx is still observable (status + body) AND flagged as a probe failure", async () => {
     const envelope = await runProbe({ kind: "http", url: `${base}/missing` }, noConnectors);
     expect(envelope.status).toBe(404);
     expect(envelope.output).toBe("nope");
+    // A 4xx/5xx must set the transport error so the engine can't silently
+    // converge on a matching body while the service returned an error status.
+    expect(envelope.error).toContain("HTTP 404");
   });
 
   it("times out and reports the failure in the envelope", async () => {

@@ -1,7 +1,7 @@
 // Plug-and-play connector validation over real MCP stdio: register a fake
 // external MCP server, call it, verify activity feeds the learning loop,
 // verify the autonomy gate holds for direct calls AND workflow steps.
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -136,11 +136,49 @@ describe("autonomy gate", () => {
     expect(done.completed).toBe(true);
   });
 
+  it("REFUSES to hand-complete an approval-gated step that was never approved", async () => {
+    await call("connector_set_autonomy", { name: "fake-github", autonomy: "approve" });
+    const run = await call("workflow_execute", { slug: "file-issue" });
+    expect(run.waiting_for).toBe("human");
+    expect(run.execution.status).toBe("waiting_human");
+    // Fabricate completion WITHOUT calling approval_approve — must be rejected,
+    // the downstream tool must not run, and the execution must not go 'done'.
+    const forged = await call("execution_complete", {
+      id: run.execution.id,
+      step_index: 0,
+      result: "issue #999 created (FABRICATED)",
+    });
+    expect(forged._isError).toBe(true);
+    expect(JSON.stringify(forged)).toContain("not yet decided");
+    // The execution is still parked waiting for the human decision.
+    const list = await call("execution_list", {});
+    const rec = list.executions.find((e: any) => e.id === run.execution.id);
+    expect(rec.status).toBe("waiting_human");
+    await call("execution_cancel", { id: run.execution.id }); // clean up
+  });
+
   it("executes workflow mcp_call steps directly when autonomy is 'autonomous'", async () => {
     await call("connector_set_autonomy", { name: "fake-github", autonomy: "autonomous" });
     const run = await call("workflow_execute", { slug: "file-issue" });
     expect(run.completed).toBe(true);
     expect(run.execution.steps[0].result).toContain("created issue #42");
+  });
+});
+
+describe("pause switch stops server-side connector recording", () => {
+  it("connector_call does not append activity while paused", async () => {
+    await call("connector_set_autonomy", { name: "fake-github", autonomy: "autonomous" });
+    const before = (await call("activity_list", { limit: 500 })).count;
+    const pausedFlag = join(home, "paused");
+    writeFileSync(pausedFlag, new Date().toISOString());
+    try {
+      const res = await call("connector_call", { name: "fake-github", tool: "repo_list" });
+      expect(res._isError).toBe(false); // the call still runs...
+      const during = (await call("activity_list", { limit: 500 })).count;
+      expect(during).toBe(before); // ...but nothing was recorded while paused
+    } finally {
+      rmSync(pausedFlag, { force: true });
+    }
   });
 
   it("fails workflow steps cleanly when autonomy is 'observe'", async () => {

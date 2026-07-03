@@ -68,7 +68,13 @@ Return ONLY JSON: {"suggestions":[{"slug":"...","name":"...","description":"..."
           kind: s.kind || draft?.kind || ("automation" as const),
         };
       });
-    return valid.length > 0 ? valid : drafts;
+    if (valid.length > 0) return valid;
+    // A well-formed EMPTY array is the model's deliberate "these are all
+    // coincidental — drop them" verdict; honor it (return []) rather than
+    // resurrecting the raw heuristic drafts and mislabeling them as refined.
+    // Only a response that yielded items but none survived validation falls
+    // back to the heuristic drafts.
+    return parsed.suggestions.length === 0 ? [] : drafts;
   } catch {
     return drafts;
   }

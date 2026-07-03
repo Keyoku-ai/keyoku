@@ -1,6 +1,6 @@
 // Full product loop over real MCP stdio: record activity → detect a pattern →
 // approve the draft → execute → pause for the agent → resume → done.
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -204,5 +204,127 @@ describe("workflow execution lifecycle", () => {
     const run = await call("workflow_execute", { slug: "bad-mcp" });
     expect(run.failed_at).toBe(0);
     expect(run.error).toContain("missing connector");
+  });
+});
+
+describe("hardening regressions (refute 2026-07-02)", () => {
+  const sleep = (ms: number): Promise<void> => new Promise((res) => setTimeout(res, ms));
+
+  it("execution_cancel actually stops a RUNNING execution — remaining steps do not run", async () => {
+    const marker = join(home, `cancel-marker-${process.pid}.txt`);
+    rmSync(marker, { force: true });
+    await call("workflow_approve", {
+      slug: "long-run",
+      name: "Long run",
+      description: "slow first step then a marker step",
+      steps: [
+        { type: "bash", summary: "slow", command: "sleep 1" },
+        { type: "bash", summary: "marker", command: `echo ran > ${marker}` },
+      ],
+    });
+    // Start the run but DON'T await — it's mid-way through `sleep 1`.
+    const running = call("workflow_execute", { slug: "long-run" });
+    let execId: string | undefined;
+    for (let i = 0; i < 20 && !execId; i++) {
+      await sleep(50);
+      const list = await call("execution_list", { status: "running" });
+      execId = list.executions?.find((e: any) => e.templateSlug === "long-run")?.id;
+    }
+    expect(execId).toBeTruthy();
+    const cancelled = await call("execution_cancel", { id: execId });
+    expect(cancelled.cancelled).toBe(true);
+    await running; // let advanceExecution unwind
+    await sleep(200);
+    const final = await call("execution_list", {});
+    const rec = final.executions.find((e: any) => e.id === execId);
+    expect(rec.status).toBe("failed"); // cancel was NOT overwritten with "done"
+    expect(existsSync(marker)).toBe(false); // the second step never executed
+    rmSync(marker, { force: true });
+  }, 15_000);
+
+  it("execution_complete refuses a step that is not awaiting input", async () => {
+    await call("workflow_approve", {
+      slug: "quick",
+      name: "Quick",
+      description: "single bash step, never pauses",
+      steps: [{ type: "bash", summary: "echo", command: "echo hi" }],
+    });
+    const done = await call("workflow_execute", { slug: "quick" });
+    expect(done.completed).toBe(true);
+    // Step 0 already ran to 'done' — you cannot hand-complete it.
+    const bad = await call("execution_complete", { id: done.execution.id, step_index: 0, result: "fake" });
+    expect(bad._isError).toBe(true);
+    expect(JSON.stringify(bad)).toContain("already");
+  });
+
+  it("workflow_approve refuses a colliding slug unless overwrite:true", async () => {
+    const first = await call("workflow_approve", {
+      slug: "collide",
+      name: "First",
+      description: "original",
+      steps: [{ type: "bash", summary: "a", command: "echo a" }],
+    });
+    expect(first._isError).toBe(false);
+    const dup = await call("workflow_approve", {
+      slug: "collide",
+      name: "Second",
+      description: "sneaky overwrite",
+      steps: [{ type: "bash", summary: "b", command: "echo b" }],
+    });
+    expect(dup._isError).toBe(true);
+    expect(JSON.stringify(dup)).toContain("already exists");
+    const ok = await call("workflow_approve", {
+      slug: "collide",
+      name: "Second",
+      description: "explicit overwrite",
+      steps: [{ type: "bash", summary: "b", command: "echo b" }],
+      overwrite: true,
+    });
+    expect(ok._isError).toBe(false);
+  });
+
+  it("workflow_approve rejects a bash step with no command", async () => {
+    const bad = await call("workflow_approve", {
+      slug: "no-cmd",
+      name: "No command",
+      description: "bash step missing command",
+      steps: [{ type: "bash", summary: "rm -rf ~ (as a summary!)" }],
+    });
+    expect(bad._isError).toBe(true);
+  });
+
+  it("params are bound as DATA — a shell-metachar param cannot inject", async () => {
+    const marker = join(home, `pwn-${process.pid}.txt`);
+    rmSync(marker, { force: true });
+    await call("workflow_approve", {
+      slug: "inject-test",
+      name: "Injection probe",
+      description: "echoes a param",
+      steps: [{ type: "bash", summary: "echo", command: "echo {{payload}}" }],
+    });
+    const run = await call("workflow_execute", {
+      slug: "inject-test",
+      params: { payload: `; touch ${marker}` },
+    });
+    expect(run.completed).toBe(true);
+    // The ';' and 'touch' were data, echoed literally — not a second command.
+    expect(run.execution.steps[0].result).toContain("; touch");
+    expect(existsSync(marker)).toBe(false);
+    rmSync(marker, { force: true });
+  });
+
+  it("keyoku pause stops server-side recording (activity_record returns paused)", async () => {
+    const pausedFlag = join(home, "paused");
+    writeFileSync(pausedFlag, new Date().toISOString());
+    try {
+      const rec = await call("activity_record", { summary: "Bash: secret op", type: "shell", tool: "Bash" });
+      expect(rec.recorded).toBe(false);
+      expect(rec.paused).toBe(true);
+    } finally {
+      rmSync(pausedFlag, { force: true });
+    }
+    // Recording resumes once the flag is cleared.
+    const rec2 = await call("activity_record", { summary: "Bash: normal op", type: "shell", tool: "Bash" });
+    expect(rec2.recorded).toBe(true);
   });
 });

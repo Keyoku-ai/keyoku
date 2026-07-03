@@ -95,4 +95,28 @@ describe("driveToConvergence", () => {
     expect(postMessage).toHaveBeenCalledTimes(2);
     expect(callTool.mock.calls.filter((call) => String(call[1]).includes("delete_policy"))).toHaveLength(0);
   });
+
+  it("waits for the agent between rounds instead of re-assessing at probe speed", async () => {
+    const callTool = vi.fn(async (_name: string, _tool: string) => ({ text: JSON.stringify({ id: "gate_1" }), isError: false }));
+    const assess = vi.fn(async () => ({ converged: false, unmet: ["[c1] still failing"] }));
+    const postMessage = vi.fn(async (_t: string) => {});
+    const waited: number[] = [];
+
+    await driveToConvergence({
+      connectors: { callTool },
+      sessionId: "conv_1",
+      goalSlug: "ship-it",
+      assess,
+      maxRounds: 3,
+      postMessage,
+      waitForAgent: async (round: number) => {
+        waited.push(round);
+      },
+    });
+
+    // 3 rounds → assess 3×, post 3×, but wait only after the 2 NON-final rounds.
+    expect(assess).toHaveBeenCalledTimes(3);
+    expect(postMessage).toHaveBeenCalledTimes(3);
+    expect(waited).toEqual([1, 2]);
+  });
 });

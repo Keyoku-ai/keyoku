@@ -1,3 +1,4 @@
+import { createServer, type Server } from "node:http";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -209,6 +210,120 @@ describe("the convergence loop", () => {
     expect(report.converged).toBe(true);
   });
 
+  it("negative/vacuous ops on a failed probe do NOT falsely converge (transport field absent or synthesized)", async () => {
+    // 'stderr not_contains X' on a command that FAILED: stderr empty, op passes
+    // vacuously — but the probe errored, so the criterion must fail.
+    const g1 = harness.createGoal({
+      objective: "stderr must not contain boom",
+      criteria: [
+        {
+          description: "no boom on stderr",
+          probe: { kind: "command", run: "exit 1", parse: "text" },
+          assert: { path: "stderr", op: "not_contains", value: "boom" },
+        },
+      ],
+    });
+    const r1 = await harness.assess(g1.slug);
+    expect(r1.converged).toBe(false);
+    expect(r1.criteria[0].error).toContain("probe itself failed");
+
+    // 'exitCode ne 2' on a command that TIMED OUT: exitCode synthesized to -1,
+    // ne 2 passes vacuously — must not converge.
+    const g2 = harness.createGoal({
+      objective: "exit code is not 2",
+      criteria: [
+        {
+          description: "exitCode ne 2",
+          probe: { kind: "command", run: "sleep 5", parse: "text", timeoutMs: 50 },
+          assert: { path: "exitCode", op: "ne", value: 2 },
+        },
+      ],
+    });
+    expect((await harness.assess(g2.slug)).converged).toBe(false);
+
+    // The headline scenario: 'status ne 500' against a DOWN http service (no
+    // status field at all) must not report the API healthy.
+    const g3 = harness.createGoal({
+      objective: "api must not 500",
+      criteria: [
+        {
+          description: "status ne 500",
+          probe: { kind: "http", url: "http://127.0.0.1:9/health", timeoutMs: 2000 },
+          assert: { path: "status", op: "ne", value: 500 },
+        },
+      ],
+    });
+    expect((await harness.assess(g3.slug)).converged).toBe(false);
+  });
+
+  it("POSITIVE-form vacuous ops on a failed probe also do NOT falsely converge", async () => {
+    // These are the op-blocklist bypasses: positive ops that pass vacuously on a
+    // synthesized/empty transport value. The fix is grounded in whether the probe
+    // COMPLETED, so re-phrasing in positive form no longer helps.
+    const notConverged = async (desc: string, probe: any, assert: any): Promise<boolean> => {
+      const g = harness.createGoal({ objective: desc, criteria: [{ description: desc, probe, assert }] });
+      return (await harness.assess(g.slug)).converged;
+    };
+    // Timed-out command (exitCode synthesized to -1) — every positive vacuous op fails.
+    const timeout = { kind: "command", run: "sleep 5", parse: "text", timeoutMs: 50 };
+    expect(await notConverged("exitCode lte 0 on timeout", timeout, { path: "exitCode", op: "lte", value: 0 })).toBe(false);
+    expect(await notConverged("exitCode gte -1 on timeout", timeout, { path: "exitCode", op: "gte", value: -1 })).toBe(false);
+    expect(await notConverged("stderr matches .* on timeout", timeout, { path: "stderr", op: "matches", value: ".*" })).toBe(false);
+    // Completed-but-failed command with genuinely empty stderr — 'stderr eq ""'
+    // is a vacuous match on a failed probe and must not converge.
+    const exit1 = { kind: "command", run: "exit 1", parse: "text" };
+    expect(await notConverged("stderr eq empty on exit 1", exit1, { path: "stderr", op: "eq", value: "" })).toBe(false);
+    // TAUTOLOGICAL positive transport ops on a COMPLETED-but-failed command must
+    // ALSO not converge (a failing build is not "done"): range ops that pass for
+    // any exit code, matches '.*', and error existence/empty-containment.
+    expect(await notConverged("exitCode gte 0 on exit 1", exit1, { path: "exitCode", op: "gte", value: 0 })).toBe(false);
+    expect(await notConverged("exitCode gte -1 on exit 1", exit1, { path: "exitCode", op: "gte", value: -1 })).toBe(false);
+    expect(await notConverged("exitCode lte 255 on exit 1", exit1, { path: "exitCode", op: "lte", value: 255 })).toBe(false);
+    expect(await notConverged("error exists on exit 1", exit1, { path: "error", op: "exists" })).toBe(false);
+    expect(await notConverged("error contains empty on exit 1", exit1, { path: "error", op: "contains", value: "" })).toBe(false);
+    const boom = { kind: "command", run: "sh -c 'echo boom 1>&2; exit 7'", parse: "text" };
+    expect(await notConverged("stderr matches .* on exit 7", boom, { path: "stderr", op: "matches", value: ".*" })).toBe(false);
+    // The error MESSAGE path is NOT a convergence path at all — its text is the
+    // harness's own synthesized string, so any match over it is a tautology.
+    expect(await notConverged("error matches .* on exit 1", exit1, { path: "error", op: "matches", value: ".*" })).toBe(false);
+    expect(await notConverged("error contains generic token on exit 1", exit1, { path: "error", op: "contains", value: "code" })).toBe(false);
+    expect(await notConverged("error contains full msg on exit 1", exit1, { path: "error", op: "contains", value: "exited with code 1" })).toBe(false);
+    // But SPECIFIC exit-code / status assertions on a completed-failed probe
+    // still converge (no regression): exact exit code is the way to "assert a
+    // command must fail with code N".
+    expect(await notConverged("exitCode eq 1 on exit 1", exit1, { path: "exitCode", op: "eq", value: 1 })).toBe(true);
+    expect(await notConverged("exitCode eq 7 on exit 7", boom, { path: "exitCode", op: "eq", value: 7 })).toBe(true);
+  });
+
+  it("an HTTP 500 with a healthy-looking body does NOT falsely converge a body assertion", async () => {
+    // The server ERRORS (500) but its body says {"status":"ok"} — a goal that
+    // asserts on the body must NOT report converged while the service is down.
+    const server: Server = createServer((_req, res) => {
+      res.writeHead(500, { "content-type": "application/json" });
+      res.end(JSON.stringify({ status: "ok" }));
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const addr = server.address();
+    const base = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}`;
+    try {
+      const bodyGoal = harness.createGoal({
+        objective: "service body says ok",
+        criteria: [{ description: "body status ok", probe: { kind: "http", url: `${base}/health` }, assert: { path: "output.status", op: "eq", value: "ok" } }],
+      });
+      expect((await harness.assess(bodyGoal.slug)).converged).toBe(false); // service errored → not done
+
+      // But deliberately asserting the failure status still converges.
+      const statusGoal = harness.createGoal({
+        objective: "service returns 500",
+        criteria: [{ description: "status 500", probe: { kind: "http", url: `${base}/health` }, assert: { path: "status", op: "eq", value: 500 } }],
+      });
+      expect((await harness.assess(statusGoal.slug)).converged).toBe(true);
+    } finally {
+      server.closeAllConnections?.();
+      server.close();
+    }
+  });
+
   it("drift with an exhausted budget blocks instead of silently re-arming", async () => {
     const state = join(dir, "state.txt");
     writeFileSync(state, "not yet");
@@ -258,6 +373,14 @@ describe("the convergence loop", () => {
     const workflows = harness.store.listWorkflows();
     expect(workflows).toHaveLength(1);
     expect(workflows[0].steps.map((s) => s.summary)).toEqual(["Did the real work"]);
+    expect(workflows[0].stats.convergences).toBe(1);
+
+    // A SECOND retroactive record appends its step but must NOT look like a
+    // second convergence — the goal converged exactly once.
+    harness.recordAction(goal.slug, { summary: "Did more work", tool: "Bash" });
+    const wf2 = harness.store.getWorkflow(goal.slug)!;
+    expect(wf2.stats.convergences).toBe(1); // not inflated per retroactive record
+    expect(wf2.steps.map((s) => s.summary)).toEqual(["Did the real work", "Did more work"]);
   });
 
   it("build-then-verify with activity: an empty trace backfills steps from the activity log", async () => {
@@ -746,6 +869,46 @@ describe("self-pruning (precision-ranked suggestions)", () => {
     await harness.assess(g.slug);
     return g.slug;
   };
+
+  it("re-promotion preserves self-pruning stats (suggested/helped) and doesn't inflate convergences", async () => {
+    const slug = await convergeWith("deploy the payments service to staging", ["run the deploy script"]);
+    const wf = harness.store.getWorkflow(slug)!;
+    wf.stats.suggested = 5;
+    wf.stats.helped = 4;
+    harness.store.saveWorkflow(wf);
+    // A retroactive record re-promotes the workflow (refreshing its steps).
+    harness.recordAction(slug, { summary: "also tag the release" });
+    const after = harness.store.getWorkflow(slug)!;
+    expect(after.stats.suggested).toBe(5); // precision signal preserved, not wiped
+    expect(after.stats.helped).toBe(4);
+    expect(after.stats.convergences).toBe(1);
+  });
+
+  it("a failure-only convergence surfaces its pitfall on a similar goal without claiming a workflow was promoted", async () => {
+    const g = harness.createGoal({
+      objective: "stabilize the flaky payment webhook integration test",
+      criteria: [
+        { description: "ok", probe: { kind: "command", run: "echo ready", parse: "text" }, assert: { op: "contains", value: "ready" } },
+      ],
+    });
+    harness.recordAction(g.slug, { summary: "Tried increasing the retry count", result: "failure" });
+    const conv = await harness.assess(g.slug);
+    expect(conv.converged).toBe(true);
+    const wf = harness.store.getWorkflow(g.slug)!;
+    expect(wf.steps).toHaveLength(0); // failure-only → no runnable steps
+    expect(wf.pitfalls).toContain("Tried increasing the retry count");
+    expect(conv.guidance).not.toMatch(/has been promoted/); // honest: nothing runnable learned
+
+    const similar = harness.createGoal({
+      objective: "stabilize the flaky payment webhook integration test once more",
+      criteria: [
+        { description: "no", probe: { kind: "command", run: "echo nope", parse: "text" }, assert: { op: "contains", value: "ready" } },
+      ],
+    });
+    const report = await harness.assess(similar.slug);
+    const surfaced = report.suggestedWorkflows.some((s) => (s.pitfalls ?? []).includes("Tried increasing the retry count"));
+    expect(surfaced).toBe(true); // negative memory reaches a similar goal
+  });
 
   it("downranks a relevant workflow whose steps never actually recur", async () => {
     const RECUR = "restart the shared service daemon";

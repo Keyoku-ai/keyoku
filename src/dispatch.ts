@@ -139,9 +139,19 @@ export async function chooseAgentForGoal(opts: {
   const log = opts.log ?? ((message: string) => console.warn(message));
 
   if (!slm) {
+    // Degraded (no model): prefer the built-in default, but honor the live
+    // agent list we were handed — returning a hardcoded agent that the fleet
+    // doesn't actually expose would dispatch into the void. Fall back to the
+    // first real candidate when the default is absent. (Empty list keeps the
+    // default: offline discovery may simply have returned nothing.)
+    const hasDefault =
+      opts.agents.length === 0 || opts.agents.some((a) => a.name === OFFLINE_DEFAULT_AGENT);
+    const agent = hasDefault ? OFFLINE_DEFAULT_AGENT : opts.agents[0].name;
     const choice = {
-      agent: OFFLINE_DEFAULT_AGENT,
-      rationale: "no model available — default",
+      agent,
+      rationale: hasDefault
+        ? "no model available — default"
+        : `no model available — '${OFFLINE_DEFAULT_AGENT}' not in the fleet; using first available agent '${agent}'`,
       degraded: true,
     };
     log(

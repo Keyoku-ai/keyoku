@@ -1,3 +1,4 @@
+import { connectorAutonomy } from "./approvals.js";
 import type { ConnectorCallResult, ConnectorManager } from "./connectors.js";
 import type { Harness } from "./engine.js";
 import {
@@ -149,6 +150,33 @@ async function createSession(
   return sessionId;
 }
 
+/**
+ * Driving an Omnigent session (create session, install policies, post
+ * continuation events) performs multiple MUTATING calls on the omnigent
+ * connector — none of which flowed through connector_call's autonomy gate, so
+ * goal_run / goal_converge / goal_guardrails could act on an observe / suggest
+ * / approve connector with no approval. Enforce the trust ladder up front: only
+ * an 'autonomous' omnigent connector authorizes an unattended drive. Anything
+ * lower is refused with guidance — a live multi-round drive cannot pause for
+ * per-call approval on every internal event, so the honest gate is all-or-none.
+ */
+export function assertOmnigentDriveAuthorized(connectors: Pick<ConnectorManager, "get">): void {
+  const connector = connectors.get("omnigent");
+  if (!connector) {
+    throw new Error(
+      "Omnigent connector is not registered — add it before driving a session.",
+    );
+  }
+  const autonomy = connectorAutonomy(connector);
+  if (autonomy !== "autonomous") {
+    throw new Error(
+      `Omnigent connector autonomy is '${autonomy}': driving a session runs multiple mutating calls ` +
+        `(create session, install policies, post events) that cannot each pause for approval. Raise it to ` +
+        `'autonomous' via connector_set_autonomy to authorize an unattended drive, or run the steps yourself.`,
+    );
+  }
+}
+
 export async function ensureOmnigentConnector(connectors: Connectors): Promise<void> {
   if (connectors.get("omnigent")) return;
 
@@ -171,6 +199,7 @@ export async function runGoalOnOmnigent(opts: {
   log?: (message: string) => void;
 }): Promise<{ converged: boolean; rounds: number; sessionId: string; dispatch?: AgentChoice }> {
   await ensureOmnigentConnector(opts.connectors);
+  assertOmnigentDriveAuthorized(opts.connectors);
 
   const goal = opts.engine.getGoal(opts.goalSlug);
   let dispatch: AgentChoice | undefined;

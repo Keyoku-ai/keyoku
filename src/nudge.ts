@@ -27,7 +27,7 @@ export function loadSurfaced(home: string): Set<string> {
 
 export function saveSurfaced(home: string, surfaced: Set<string>): void {
   // Bounded: pattern keys are short and patterns are few; keep the tail.
-  writeFileSync(surfacedPath(home), JSON.stringify([...surfaced].slice(-500)));
+  writeFileSync(surfacedPath(home), JSON.stringify([...surfaced].slice(-500)), { mode: 0o600 });
 }
 
 /** Ripe = runnable patterns not yet surfaced. Practice patterns are filed
@@ -52,7 +52,7 @@ export function ripePath(home: string): string {
 }
 
 export function saveRipe(home: string, suggestions: ActivitySuggestion[]): void {
-  writeFileSync(ripePath(home), JSON.stringify({ at: new Date().toISOString(), suggestions }));
+  writeFileSync(ripePath(home), JSON.stringify({ at: new Date().toISOString(), suggestions }), { mode: 0o600 });
 }
 
 /** Cached ripeness, or null when absent/stale (older than maxAgeMs). */

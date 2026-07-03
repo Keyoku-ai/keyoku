@@ -580,6 +580,10 @@ export interface ExecutionStep {
   completedAt?: string;
   result?: string;
   error?: string;
+  /** For an approval-gated mcp_call step paused as waiting_human: the id of the
+   * approval that must be decided (approved+executed) before the step may
+   * complete. Guards against hand-completing a gated step without approval. */
+  approvalId?: string;
 }
 
 export interface WorkflowExecution {
@@ -592,4 +596,11 @@ export interface WorkflowExecution {
   startedAt: string;
   completedAt?: string;
   triggeredBy: "on_demand" | "hook";
+  /**
+   * Workflow {{params}} bound as environment variables (KEYOKU_PARAM_N) for
+   * bash steps. Values are referenced from the command as data ("$VAR"), never
+   * interpolated into the command text — so a param cannot inject shell. Kept
+   * on the execution so resumed runs (execution_complete) still have them.
+   */
+  paramEnv?: Record<string, string>;
 }

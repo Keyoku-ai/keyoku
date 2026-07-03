@@ -134,6 +134,17 @@ describe("chooseAgentForGoal", () => {
     expect(second).toEqual(first);
     expect(log).toHaveBeenCalledWith(expect.stringContaining("degraded"));
   });
+
+  it("degraded fallback picks a real agent when the fleet lacks the built-in default", async () => {
+    const log = vi.fn();
+    const fleet: OmnigentAgentCandidate[] = [
+      { name: "polly", harness: "polly", description: "Orchestration." },
+      { name: "custom-impl", harness: "custom", description: "Impl." },
+    ];
+    const choice = await chooseAgentForGoal({ goal: goal(), agents: fleet, slm: null, log });
+    expect(choice.agent).toBe("polly"); // first real candidate, not the absent 'codex-native-ui'
+    expect(choice.degraded).toBe(true);
+  });
 });
 
 describe("runGoalOnOmnigent dispatch", () => {
@@ -149,7 +160,7 @@ describe("runGoalOnOmnigent dispatch", () => {
       return { text: "{}", isError: false };
     });
     const connectors = {
-      get: vi.fn(() => ({ name: "omnigent" })),
+      get: vi.fn(() => ({ name: "omnigent", autonomy: "autonomous" })),
       add: vi.fn(),
       callTool,
     };
@@ -197,7 +208,7 @@ describe("runGoalOnOmnigent dispatch", () => {
       return { text: "{}", isError: false };
     });
     const connectors = {
-      get: vi.fn(() => ({ name: "omnigent" })),
+      get: vi.fn(() => ({ name: "omnigent", autonomy: "autonomous" })),
       add: vi.fn(),
       callTool,
     };
