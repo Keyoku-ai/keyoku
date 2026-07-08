@@ -1,3 +1,5 @@
+import { execSync } from "node:child_process";
+
 import { isActionEvent } from "./activity.js";
 import { evaluateAssertion } from "./assert.js";
 import type { ConnectorManager } from "./connectors.js";
@@ -122,6 +124,28 @@ function sameProject(a: string, b: string): boolean {
   return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
 }
 
+/**
+ * Resolve the git repo root for `cwd`, or `cwd` itself if it isn't inside a
+ * git repo (or git isn't on PATH) — NEVER throws. Used to stamp `Goal.project`
+ * (belay's ADR-35 cross-project scoping): normalizing to the repo root means
+ * a goal created/focused from any monorepo subdir lands on the same project
+ * value, instead of `sameProject`'s prefix-subtree matching having to do that
+ * work again on every read.
+ */
+export function projectForCwd(cwd: string): string {
+  try {
+    const root = execSync("git rev-parse --show-toplevel", {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 2000,
+    }).trim();
+    return root || cwd;
+  } catch {
+    return cwd;
+  }
+}
+
 /** Cap a step list keeping the first `head` (setup) and the most recent
  * `max - head` (build/verify); a marker records the omission so the draft stays
  * honest about the gap. Lists at or under `max` pass through unchanged. */
@@ -159,6 +183,14 @@ export interface CreateGoalInput {
   constraints?: string[];
   autonomy?: Autonomy;
   maxIterations?: number;
+  /**
+   * Project dir this goal is being created from, for cross-project scoping
+   * (see `Goal.project`). Optional — the MCP handler supplies its best
+   * available signal (an explicit caller-supplied cwd, else the server
+   * process's own cwd); direct engine callers (tests, scripts) may omit it,
+   * in which case the goal is created unstamped (backward-compat shape).
+   */
+  cwd?: string;
 }
 
 export interface RecordActionInput {
@@ -234,6 +266,7 @@ export class Harness {
       updatedAt: now,
       convergedAt: null,
       lastAssessedAt: null,
+      ...(input.cwd ? { cwd: input.cwd, project: projectForCwd(input.cwd) } : {}),
     };
     this.store.saveGoal(goal);
     return goal;
@@ -428,13 +461,26 @@ export class Harness {
   /** Mark a goal as the live-capture focus: while focused, the activity
    * recorder also appends each real action to this goal's trace (source:
    * "activity"), so the run becomes muscle memory live. Scoped to the given
-   * cwd/session so concurrent work on one ~/.keyoku doesn't bleed in. */
+   * cwd/session so concurrent work on one ~/.keyoku doesn't bleed in.
+   *
+   * Also backfills `Goal.project`/`Goal.cwd` (belay's ADR-35 cross-project
+   * scoping) the first time a goal with neither is focused from a known
+   * cwd — this is how a goal created before the field existed, or created
+   * without a cwd, becomes scopeable. Never overwrites an already-stamped
+   * goal: first stamp wins, so re-focusing an established goal from a
+   * different directory can't reassign its project. */
   setFocus(ref: string, scope: { cwd?: string; sessionId?: string } = {}): FocusState {
     const goal = this.getGoal(ref);
     if (goal.status !== "active") {
       throw new Error(
         `Can only focus an active goal — '${goal.slug}' is ${goal.status}. Reactivate it first if you mean to keep working on it.`,
       );
+    }
+    if (scope.cwd && !goal.project) {
+      goal.project = projectForCwd(scope.cwd);
+      goal.cwd = scope.cwd;
+      goal.updatedAt = new Date().toISOString();
+      this.store.saveGoal(goal);
     }
     const focus: FocusState = {
       goalId: goal.id,

@@ -182,6 +182,24 @@ export interface Goal {
   updatedAt: string;
   convergedAt: string | null;
   lastAssessedAt: string | null;
+  /**
+   * Project this goal belongs to — cross-project scoping so a portfolio/
+   * proposal view over one `~/.keyoku` doesn't bleed goals between unrelated
+   * repos (the coordinated keyoku side of belay's ADR-35; belay's
+   * `goalOwnProject` reads this field off the goal row when present). The
+   * git repo root of the cwd it was stamped from, or that raw cwd if it
+   * isn't inside a git repo. Stamped once — at `goal_create` when a cwd is
+   * available, and backfilled at `goal_focus` if still unset — and never
+   * overwritten afterward (first stamp wins), so re-focusing an existing
+   * goal from a different directory can't reassign it. Optional for
+   * backward compat: goals persisted before this field existed have neither
+   * `project` nor `cwd` and are NOT retroactively scoped (see CHANGELOG).
+   */
+  project?: string;
+  /** Raw cwd captured at the same time as `project` (pre-git-root
+   *  normalization) — kept alongside for provenance/debugging. Optional for
+   *  the same backward-compat reason as `project`. */
+  cwd?: string;
 }
 
 export interface CriterionEvaluation {

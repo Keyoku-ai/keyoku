@@ -3,6 +3,46 @@
 ## Unreleased
 
 ### Added
+- **ADR-35: `Goal.project`/`Goal.cwd` — the keyoku side of belay's cross-project
+  scoping fix.** belay's loop portfolio/proposals now scope by project to stop
+  goals bleeding across unrelated repos sharing one `~/.keyoku`; that read a
+  `project`/`cwd` off the goal row, but the goal record had no such field —
+  this adds it.
+  - **What cwd context is actually available to an MCP tool handler** (the
+    key finding): MCP does not hand a tool call the client's cwd — there is
+    no protocol-level "caller's cwd" param. The only two reliable signals are
+    (a) an explicit `cwd` argument the calling agent chooses to pass, and (b)
+    `process.cwd()` of the long-lived stdio server process itself, fixed at
+    the moment Claude Code spawned it (typically the project dir the session
+    started in). `goal_focus` already leaned on exactly this — `cwd` optional,
+    defaulting to `process.cwd()` — so that's the established, trusted
+    convention this change follows for `goal_create` too, rather than
+    inventing a new mechanism.
+  - **`goal_create` gains an optional `cwd` param**, defaulting to the
+    server's `process.cwd()` when omitted — so every newly created goal is
+    stamped going forward, not just focused ones. Stored as two fields:
+    `Goal.cwd` (the raw dir) and `Goal.project` (the git repo root of that
+    dir, or the dir itself outside a repo — `never-throw`, via
+    `projectForCwd()` in `engine.ts`) — repo-root normalization means a goal
+    created from any subdir of a monorepo checkout lands on the same
+    `project` value.
+  - **`goal_focus` backfills `project`/`cwd`** on a goal that doesn't have
+    them yet, from the focus `cwd` (itself already optional-with-a-
+    `process.cwd()`-default on that tool). **First stamp wins** — focusing an
+    already-stamped goal from a different directory never reassigns it, so a
+    shared/portfolio goal can't get bounced between projects by whoever
+    focuses it next.
+  - **Surfaced** in `goal_get` (full goal object) and `goal_list`/`goal_create`
+    responses (`goalSummary`, `project` only, when set) — as well as directly
+    in `goals.json`, which is how belay itself reads it.
+  - **Backward compat, stated plainly:** the ~97 goals that existed before
+    this field shipped have neither `project` nor `cwd` and are **NOT**
+    retroactively scoped — there is no backfill migration, because inferring
+    a project from a goal's free-text objective/activity would produce false
+    positives that are worse than "unscoped." An old goal becomes scopeable
+    only once it is re-focused (`goal_focus`) from a real cwd, or recreated.
+    belay-side scoping logic must treat an absent `project`/`cwd` as
+    "unknown," not "global."
 - **B2: edit a goal's criteria in place.** `goal_update` gains `addCriteria` /
   `removeCriteriaIds` / `editCriteria`, so a wrong or incomplete criterion no
   longer forces creating a whole new goal (which was fragmenting the loop

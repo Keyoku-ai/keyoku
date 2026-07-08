@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -235,5 +235,36 @@ describe("MCP protocol e2e — muscle memory", () => {
     });
     expect(plain.criteria).toBeUndefined();
     expect(plain.goal.objective).toBe("criteria can be refined in place (renamed)");
+  });
+
+  it("stamps `project` at goal_create from the server's own cwd (belay ADR-35 cross-project scoping), surfaced in goal_get and goal_list", async () => {
+    // The child server was spawned with no explicit `cwd` override, so it
+    // inherits this test process's cwd — the package root, a real git repo.
+    const expectedRoot = execSync("git rev-parse --show-toplevel", { encoding: "utf8" }).trim();
+
+    await client.tool("goal_create", {
+      objective: "cross-project scoping stamp",
+      slug: "e2e-project-stamp",
+      criteria: crit("ready", "ready"),
+    });
+
+    const got = await client.tool("goal_get", { goal: "e2e-project-stamp" });
+    expect(got.goal.project).toBe(expectedRoot);
+    expect(typeof got.goal.cwd).toBe("string");
+
+    const listed = await client.tool("goal_list", { status: "active" });
+    const summary = listed.goals.find((g: any) => g.slug === "e2e-project-stamp");
+    expect(summary.project).toBe(expectedRoot);
+
+    // An explicit cwd wins over the server's own — the escape hatch for a
+    // caller that knows better than the server process's cwd.
+    await client.tool("goal_create", {
+      objective: "cross-project scoping explicit cwd",
+      slug: "e2e-project-stamp-explicit",
+      criteria: crit("ready", "ready"),
+      cwd: "/tmp/not-this-repo",
+    });
+    const got2 = await client.tool("goal_get", { goal: "e2e-project-stamp-explicit" });
+    expect(got2.goal.project).not.toBe(expectedRoot);
   });
 });

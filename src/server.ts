@@ -83,6 +83,9 @@ function goalSummary(goal: Goal) {
     iterations: `${goal.usedIterations}/${goal.maxIterations}`,
     lastAssessedAt: goal.lastAssessedAt,
     convergedAt: goal.convergedAt,
+    // Cross-project scoping (ADR-35). Absent on goals stamped before this
+    // field existed and never re-focused since — see CHANGELOG.
+    ...(goal.project ? { project: goal.project } : {}),
   };
 }
 
@@ -192,11 +195,17 @@ export function buildServer(harness: Harness): McpServer {
         constraints: z.array(z.string()).optional().describe("Hard constraints the agent must respect while acting."),
         autonomy: AutonomySchema.optional().describe("Default: suggest."),
         maxIterations: z.number().int().positive().max(1000).optional().describe("Action budget before the goal blocks (default 10)."),
+        cwd: z
+          .string()
+          .optional()
+          .describe(
+            "Project dir this goal belongs to, for cross-project scoping (default: the server's own cwd). Stamped once at creation as `project` (the git repo root of this dir, or the dir itself outside a repo); pass it explicitly if the server's cwd doesn't match where the goal is really being worked.",
+          ),
       },
     },
     async (args) => {
       try {
-        const goal = harness.createGoal(args);
+        const goal = harness.createGoal({ ...args, cwd: args.cwd ?? process.cwd() });
         logAudit("goal_create", goal.slug, goal.objective.slice(0, 120), true);
         return json({
           goal: goalSummary(goal),
@@ -485,7 +494,7 @@ export function buildServer(harness: Harness): McpServer {
     {
       title: "Focus a goal for live capture",
       description:
-        "Declare that you are now working toward this goal. While focused, every real action you take (Bash/Edit/Write/connector — not inspection) is captured into the goal's trace LIVE as a source:'activity' record, so a build-then-verify run becomes a reusable workflow without you calling goal_record by hand. Capture is scoped to this session/project so it won't absorb other work. Clears automatically when the goal converges; call goal_unfocus to stop early.",
+        "Declare that you are now working toward this goal. While focused, every real action you take (Bash/Edit/Write/connector — not inspection) is captured into the goal's trace LIVE as a source:'activity' record, so a build-then-verify run becomes a reusable workflow without you calling goal_record by hand. Capture is scoped to this session/project so it won't absorb other work. Also backfills the goal's `project` (cross-project scoping) from this cwd if it wasn't already stamped at goal_create. Clears automatically when the goal converges; call goal_unfocus to stop early.",
       inputSchema: {
         goal: GOAL_REF,
         cwd: z.string().optional().describe("Project dir to scope capture to (default: the server's cwd)."),

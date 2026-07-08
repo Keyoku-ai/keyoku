@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { ConnectorManager } from "../src/connectors.js";
-import { Harness, autoRecordToFocusGoal, type CreateGoalInput } from "../src/engine.js";
+import { Harness, autoRecordToFocusGoal, projectForCwd, type CreateGoalInput } from "../src/engine.js";
 import { Store } from "../src/store.js";
 import type { SlmProvider } from "../src/slm.js";
 import type { ActivityEvent } from "../src/types.js";
@@ -1256,6 +1256,92 @@ describe("live capture (goal_focus + auto-record)", () => {
     const goal = harness.createGoal(echoGoal("inactive"));
     harness.updateGoal(goal.slug, { status: "abandoned" });
     expect(() => harness.setFocus(goal.slug)).toThrow(/active/);
+  });
+});
+
+describe("cross-project scoping — Goal.project / Goal.cwd (belay ADR-35)", () => {
+  const echoGoal = (objective: string, extra: Partial<CreateGoalInput> = {}): CreateGoalInput => ({
+    objective,
+    criteria: [
+      {
+        description: "echo ok",
+        probe: { kind: "command", run: "echo ok", parse: "text" },
+        assert: { op: "eq", value: "ok" },
+      },
+    ],
+    ...extra,
+  });
+
+  it("projectForCwd resolves the git repo root for a cwd inside this repo, never throwing", async () => {
+    const { execSync } = await import("node:child_process");
+    const expectedRoot = execSync("git rev-parse --show-toplevel", { encoding: "utf8" }).trim();
+    expect(projectForCwd(process.cwd())).toBe(expectedRoot);
+  });
+
+  it("projectForCwd falls back to the raw cwd outside a git repo (never throws)", () => {
+    // `dir` (the per-test tmpdir) is not inside a git repo.
+    expect(projectForCwd(dir)).toBe(dir);
+  });
+
+  it("goal_create stamps project + cwd when a cwd is supplied, and leaves both unset when it isn't (backward-compat shape)", () => {
+    const stamped = harness.createGoal(echoGoal("stamped at create", { cwd: dir }));
+    expect(stamped.cwd).toBe(dir);
+    expect(stamped.project).toBe(dir); // dir isn't a git repo — project falls back to cwd
+
+    const unstamped = harness.createGoal(echoGoal("no cwd supplied"));
+    expect(unstamped.cwd).toBeUndefined();
+    expect(unstamped.project).toBeUndefined();
+  });
+
+  it("goal_focus backfills project/cwd on a goal that has neither (the pre-ADR-35 shape)", () => {
+    const goal = harness.createGoal(echoGoal("backfill on focus"));
+    expect(goal.project).toBeUndefined();
+
+    harness.setFocus(goal.slug, { cwd: dir });
+    const refocused = harness.getGoal(goal.slug);
+    expect(refocused.cwd).toBe(dir);
+    expect(refocused.project).toBe(dir);
+    expect(refocused.updatedAt).not.toBe(goal.updatedAt);
+  });
+
+  it("first stamp wins: re-focusing an already-stamped goal from a different cwd does not reassign it", () => {
+    const goal = harness.createGoal(echoGoal("first stamp wins", { cwd: "/proj-a" }));
+    expect(goal.project).toBe("/proj-a");
+
+    harness.setFocus(goal.slug, { cwd: "/proj-b" });
+    expect(harness.getGoal(goal.slug).project).toBe("/proj-a");
+  });
+
+  it("backward compat: a goal persisted before this field existed (no project/cwd keys at all) loads fine and can still be backfilled", () => {
+    const legacy = {
+      id: "goal_legacy1",
+      slug: "legacy-goal",
+      objective: "predates ADR-35",
+      criteria: [
+        {
+          id: "c1",
+          description: "echo ok",
+          probe: { kind: "command" as const, run: "echo ok", parse: "text" as const },
+          assert: { op: "eq" as const, value: "ok" },
+        },
+      ],
+      constraints: [],
+      autonomy: "suggest" as const,
+      maxIterations: 10,
+      usedIterations: 0,
+      status: "active" as const,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      convergedAt: null,
+      lastAssessedAt: null,
+      // deliberately no `project` / `cwd` keys — the real shape of ~97
+      // pre-existing goals in the field.
+    };
+    harness.store.saveGoal(legacy);
+    expect(harness.getGoal("legacy-goal").project).toBeUndefined();
+
+    harness.setFocus("legacy-goal", { cwd: dir });
+    expect(harness.getGoal("legacy-goal").project).toBe(dir);
   });
 });
 
