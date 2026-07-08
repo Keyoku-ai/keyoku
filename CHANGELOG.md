@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+### Added
+- **B2: edit a goal's criteria in place.** `goal_update` gains `addCriteria` /
+  `removeCriteriaIds` / `editCriteria`, so a wrong or incomplete criterion no
+  longer forces creating a whole new goal (which was fragmenting the loop
+  portfolio into duplicate `-v2`-style goals with their own, disconnected
+  learned workflow). `addCriteria` appends new criteria (ids continue the
+  goal's `c<N>` sequence, never colliding with survivors after a removal);
+  `removeCriteriaIds` drops criteria by id; `editCriteria` patches an
+  existing criterion's `description`/`probe`/`assert` by id — fields left
+  out of the patch are preserved. Criteria not referenced by any of the three
+  pass through completely unchanged (verified by identity-equality in tests,
+  not just value equality). Backward compatible: a `goal_update` call with
+  none of the three new params behaves byte-for-byte as before (same patch
+  application, same response shape — the redacted `criteria` array is only
+  added to the response when a criteria edit actually happened).
+  - **Re-validated on every edit**, through the same gate `goal_create` uses:
+    at least one criterion must remain, and any `mcp` criterion (added or
+    edited-in) must reference a connector that's actually registered. A
+    rejected edit never partially applies — the goal's criteria are left
+    exactly as they were.
+  - **Converged-goal guard, safe default (no force flag):** editing criteria
+    on a `converged` goal reopens it — to `active`, or to `blocked` if its
+    iteration budget is already exhausted — mirroring the existing
+    drift-detection auto-reactivation in `assess()`. Rationale: a
+    `converged` status is a proof that criteria held; changing the criteria
+    invalidates that proof, so leaving the status untouched would be a
+    second silent-false-convergence hole right next to the one closed in
+    2.18.0. No flag is needed to opt into the safe behavior — the harness
+    never leaves a goal claiming a convergence it hasn't re-verified.
+  - **The edit lands in the goal's trace/history** (visible via `goal_get`)
+    as a new `source:"system"` `ActionRecord` — distinct from `"recorded"`
+    (an explicit `goal_record` corrective action) and `"activity"` (live
+    capture). It does NOT spend the corrective-action iteration budget, and
+    it is excluded from workflow-step promotion and the `totalActions` stat
+    — a criteria edit is bookkeeping about the goal's definition of done, not
+    a reusable action toward it, so it must not pollute a learned workflow's
+    steps.
+  - Server instructions (`PROTOCOL`) and `goal_update`'s tool description
+    updated — the old "criteria are IMMUTABLE after goal_create... make a
+    NEW goal to change them" guidance is now actively wrong and has been
+    replaced with guidance to refine in place instead.
+
 ## 2.18.0 — 2026-07-02
 
 Security + correctness hardening. A full-codebase adversarial validation

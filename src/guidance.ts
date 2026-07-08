@@ -63,8 +63,12 @@ guidance — prefer them; they encode how this user does things. Everything
 consequential lands in the audit trail (audit_list).
 
 Discipline that makes the loop work: make criteria BEHAVIORAL ("does the thing
-actually work?") not mere file-presence; criteria are IMMUTABLE after
-goal_create — get them right, and make a NEW goal to change them; call
+actually work?") not mere file-presence; if a criterion turns out wrong or
+incomplete, REFINE it in place with goal_update (addCriteria/
+removeCriteriaIds/editCriteria) rather than creating a duplicate goal — a new
+goal per refinement just fragments the loop's history and its learned
+workflow. Editing criteria on a converged goal reopens it (its old
+convergence no longer holds against the new definition of done). Call
 goal_record for EVERY action honestly, including failures (failures teach the
 harness what to avoid and become pitfalls in future suggestions); never fudge a
 criterion that's blocked by the environment — report it honestly and leave the

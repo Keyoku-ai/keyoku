@@ -178,4 +178,62 @@ describe("MCP protocol e2e — muscle memory", () => {
     const wf = after.workflows.find((w: any) => w.slug === "e2e-bv");
     expect(wf?.steps.map((s: any) => s.summary)).toEqual(["Dated the changelog section"]);
   });
+
+  it("goal_update edits criteria in place over the wire — no need to fork a new goal (B2)", async () => {
+    await client.tool("goal_create", {
+      objective: "criteria can be refined in place",
+      slug: "e2e-criteria-edit",
+      criteria: crit("nope", "ready"),
+    });
+
+    const preConverge = await client.tool("goal_assess", { goal: "e2e-criteria-edit" });
+    expect(preConverge.converged).toBe(false);
+
+    // Fix the wrong criterion in place via editCriteria — the whole point of B2.
+    const edited = await client.tool("goal_update", {
+      goal: "e2e-criteria-edit",
+      editCriteria: [
+        {
+          id: "c1",
+          probe: { kind: "command", run: "echo nope", parse: "text" },
+          assert: { op: "contains", value: "nope" },
+        },
+      ],
+    });
+    expect(edited.goal.criteria).toBe(1);
+    expect(edited.criteria[0].id).toBe("c1");
+    expect(edited.criteria[0].assert).toEqual({ op: "contains", value: "nope" });
+
+    const converged = await client.tool("goal_assess", { goal: "e2e-criteria-edit" });
+    expect(converged.converged).toBe(true);
+
+    // Add a criterion post-convergence: must reopen the goal, not silently stay converged.
+    const reopened = await client.tool("goal_update", {
+      goal: "e2e-criteria-edit",
+      addCriteria: [
+        {
+          description: "a second thing",
+          probe: { kind: "command", run: "echo ready", parse: "text" },
+          assert: { op: "contains", value: "ready" },
+        },
+      ],
+    });
+    expect(reopened.goal.status).toBe("active");
+    expect(reopened.goal.criteria).toBe(2);
+
+    const got = await client.tool("goal_get", { goal: "e2e-criteria-edit" });
+    expect(got.goal.criteria.map((c: any) => c.id)).toEqual(["c1", "c2"]);
+    // The edit landed in the trace/history so the learning loop sees it.
+    expect(got.trace.some((r: any) => r.source === "system" && r.tool === "goal_update")).toBe(
+      true,
+    );
+
+    // Plain goal_update calls with no criteria args are unaffected (backward compat).
+    const plain = await client.tool("goal_update", {
+      goal: "e2e-criteria-edit",
+      objective: "criteria can be refined in place (renamed)",
+    });
+    expect(plain.criteria).toBeUndefined();
+    expect(plain.goal.objective).toBe("criteria can be refined in place (renamed)");
+  });
 });

@@ -34,6 +34,7 @@ import {
   ActionResultSchema,
   AutonomySchema,
   ConnectorTransportSchema,
+  CriterionEditSchema,
   CriterionInputSchema,
   effectiveStability,
   type ActivityEvent,
@@ -253,7 +254,7 @@ export function buildServer(harness: Harness): McpServer {
     {
       title: "Update a goal",
       description:
-        "Update objective, autonomy, constraints, or iteration budget. Raising maxIterations unblocks a blocked goal. Set status to 'abandoned' to retire a goal, or 'active' to resume one.",
+        "Update objective, autonomy, constraints, iteration budget, or CRITERIA. Raising maxIterations unblocks a blocked goal. Set status to 'abandoned' to retire a goal, or 'active' to resume one. Refine criteria in place — no need to create a new goal to fix a wrong/incomplete probe: addCriteria appends new ones, removeCriteriaIds drops by id (see goal_get), editCriteria patches an existing criterion's description/probe/assert by id (fields you omit are preserved). Criteria not referenced by any of these are left unchanged. Editing criteria on a converged goal reopens it to 'active' (or 'blocked' if the budget is exhausted) — its convergence was proven against the OLD criteria and no longer holds; re-run goal_assess.",
       inputSchema: {
         goal: GOAL_REF,
         objective: z.string().optional(),
@@ -261,13 +262,30 @@ export function buildServer(harness: Harness): McpServer {
         constraints: z.array(z.string()).optional(),
         maxIterations: z.number().int().positive().max(1000).optional(),
         status: z.enum(["active", "abandoned"]).optional(),
+        addCriteria: z.array(CriterionInputSchema).optional().describe("New criteria to append."),
+        removeCriteriaIds: z
+          .array(z.string())
+          .optional()
+          .describe("Ids of existing criteria to drop (see goal_get for ids)."),
+        editCriteria: z
+          .array(CriterionEditSchema)
+          .optional()
+          .describe(
+            "Patch existing criteria by id. Only the fields given (description/probe/assert) are changed; everything else on that criterion is preserved.",
+          ),
       },
     },
     async ({ goal: ref, ...patch }) => {
       try {
         const goal = harness.updateGoal(ref, patch);
+        const criteriaTouched =
+          (patch.addCriteria?.length ?? 0) + (patch.removeCriteriaIds?.length ?? 0) + (patch.editCriteria?.length ?? 0) >
+          0;
         logAudit("goal_update", goal.slug, Object.keys(patch).join(","), true);
-        return json({ goal: goalSummary(goal) });
+        return json({
+          goal: goalSummary(goal),
+          ...(criteriaTouched ? { criteria: redactCriteria(goal.criteria) } : {}),
+        });
       } catch (err) {
         return fail(err);
       }

@@ -151,6 +151,20 @@ export interface Criterion extends CriterionInput {
   id: string;
 }
 
+/**
+ * A patch to an EXISTING criterion (goal_update's editCriteria). Only the
+ * fields present are changed; everything else on the criterion is preserved.
+ * `id` is required and must reference a criterion already on the goal.
+ */
+export const CriterionEditSchema = z.object({
+  id: z.string().min(1).describe("Id of the criterion to edit (see goal_get)."),
+  description: z.string().min(1).optional(),
+  probe: ProbeSchema.optional(),
+  assert: AssertionSchema.optional(),
+});
+
+export type CriterionEditInput = z.infer<typeof CriterionEditSchema>;
+
 export type GoalStatus = "active" | "converged" | "blocked" | "abandoned";
 
 export interface Goal {
@@ -234,8 +248,11 @@ export interface ActionRecord {
   at: string;
   /** Provenance: "recorded" = an explicit goal_record corrective action;
    *  "activity" = captured live from the activity stream while this goal was
-   *  the focus (goal_focus). Absent means recorded (back-compat). */
-  source?: "recorded" | "activity";
+   *  the focus (goal_focus); "system" = the harness's own bookkeeping (e.g. a
+   *  goal_update criteria edit) — visible in the trace/history but excluded
+   *  from workflow-step promotion (it's not a reusable action). Absent means
+   *  recorded (back-compat). */
+  source?: "recorded" | "activity" | "system";
 }
 
 // ---------------------------------------------------------------------------

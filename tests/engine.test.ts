@@ -75,6 +75,215 @@ describe("Harness goal lifecycle", () => {
   });
 });
 
+describe("goal_update — editing criteria in place (B2)", () => {
+  const threeCriteriaGoal = (): CreateGoalInput => ({
+    objective: "three things must be true",
+    criteria: [
+      {
+        description: "c1: first thing",
+        probe: { kind: "command", run: "echo one", parse: "text" },
+        assert: { op: "contains", value: "one" },
+      },
+      {
+        description: "c2: second thing",
+        probe: { kind: "command", run: "echo two", parse: "text" },
+        assert: { op: "contains", value: "two" },
+      },
+      {
+        description: "c3: third thing",
+        probe: { kind: "command", run: "echo three", parse: "text" },
+        assert: { op: "contains", value: "three" },
+      },
+    ],
+  });
+
+  it("is a no-op on criteria when no criteria args are given (backward compat)", () => {
+    const goal = harness.createGoal(threeCriteriaGoal());
+    const before = goal.criteria;
+    const updated = harness.updateGoal(goal.slug, { objective: "renamed" });
+    expect(updated.objective).toBe("renamed");
+    expect(updated.criteria).toEqual(before);
+    // No criteria args ⇒ no system bookkeeping record either.
+    expect(harness.store.listRecords(goal.id)).toHaveLength(0);
+  });
+
+  it("appends a new criterion via addCriteria", () => {
+    const goal = harness.createGoal(fileGoal("/dev/null"));
+    const updated = harness.updateGoal(goal.slug, {
+      addCriteria: [
+        {
+          description: "a second thing must hold",
+          probe: { kind: "command", run: "echo ok", parse: "text" },
+          assert: { op: "contains", value: "ok" },
+        },
+      ],
+    });
+    expect(updated.criteria).toHaveLength(2);
+    expect(updated.criteria[1].id).toBe("c2");
+    expect(updated.criteria[1].description).toBe("a second thing must hold");
+  });
+
+  it("removes a criterion by id via removeCriteriaIds", () => {
+    const goal = harness.createGoal(threeCriteriaGoal());
+    const updated = harness.updateGoal(goal.slug, { removeCriteriaIds: ["c2"] });
+    expect(updated.criteria.map((c) => c.id)).toEqual(["c1", "c3"]);
+    expect(updated.criteria.map((c) => c.description)).toEqual([
+      "c1: first thing",
+      "c3: third thing",
+    ]);
+  });
+
+  it("edits an existing criterion's probe/assert/description by id, preserving omitted fields", () => {
+    const goal = harness.createGoal(threeCriteriaGoal());
+    const updated = harness.updateGoal(goal.slug, {
+      editCriteria: [{ id: "c2", description: "c2: revised second thing" }],
+    });
+    const c2 = updated.criteria.find((c) => c.id === "c2")!;
+    expect(c2.description).toBe("c2: revised second thing");
+    // Probe/assert untouched since only description was given.
+    expect(c2.probe).toEqual({ kind: "command", run: "echo two", parse: "text" });
+    expect(c2.assert).toEqual({ op: "contains", value: "two" });
+
+    const reprobed = harness.updateGoal(goal.slug, {
+      editCriteria: [{ id: "c2", probe: { kind: "command", run: "echo TWO", parse: "text" } }],
+    });
+    const c2b = reprobed.criteria.find((c) => c.id === "c2")!;
+    expect(c2b.probe).toEqual({ kind: "command", run: "echo TWO", parse: "text" });
+    // Description from the previous edit survives (not clobbered by this edit).
+    expect(c2b.description).toBe("c2: revised second thing");
+  });
+
+  it("preserves criteria not referenced by add/remove/edit unchanged", () => {
+    const goal = harness.createGoal(threeCriteriaGoal());
+    const c1Before = goal.criteria.find((c) => c.id === "c1");
+    const c3Before = goal.criteria.find((c) => c.id === "c3");
+    const updated = harness.updateGoal(goal.slug, {
+      editCriteria: [{ id: "c2", description: "c2: changed" }],
+      addCriteria: [
+        {
+          description: "c4: new",
+          probe: { kind: "command", run: "echo four", parse: "text" },
+          assert: { op: "contains", value: "four" },
+        },
+      ],
+    });
+    expect(updated.criteria.find((c) => c.id === "c1")).toEqual(c1Before);
+    expect(updated.criteria.find((c) => c.id === "c3")).toEqual(c3Before);
+    expect(updated.criteria.map((c) => c.id)).toEqual(["c1", "c2", "c3", "c4"]);
+  });
+
+  it("reopens a converged goal when its criteria are edited, and re-validates", async () => {
+    const state = join(dir, "state.txt");
+    writeFileSync(state, "ready");
+    const goal = harness.createGoal(fileGoal(state));
+    const first = await harness.assess(goal.slug);
+    expect(first.converged).toBe(true);
+    expect(harness.getGoal(goal.slug).status).toBe("converged");
+
+    const updated = harness.updateGoal(goal.slug, {
+      addCriteria: [
+        {
+          description: "state file must also say more",
+          probe: { kind: "command", run: `cat ${state}`, parse: "text" },
+          assert: { op: "contains", value: "more" },
+        },
+      ],
+    });
+    expect(updated.status).toBe("active");
+    expect(updated.convergedAt).toBeNull();
+
+    // The new criterion isn't satisfied yet, so re-assessing stays unconverged.
+    const second = await harness.assess(goal.slug);
+    expect(second.converged).toBe(false);
+  });
+
+  it("reopens a converged goal to 'blocked' (not 'active') when its budget is already exhausted", async () => {
+    const state = join(dir, "state.txt");
+    writeFileSync(state, "not yet");
+    const goal = harness.createGoal(fileGoal(state, { maxIterations: 1 }));
+    harness.recordAction(goal.slug, { summary: "fix it" });
+    writeFileSync(state, "ready");
+    const assessed = await harness.assess(goal.slug);
+    expect(assessed.converged).toBe(true);
+    expect(harness.getGoal(goal.slug).usedIterations).toBe(1);
+
+    const updated = harness.updateGoal(goal.slug, {
+      editCriteria: [{ id: "c1", description: "state file contains 'ready' (revised)" }],
+    });
+    expect(updated.status).toBe("blocked");
+  });
+
+  it("records the criteria edit into the goal's trace as source:'system', visible in history but excluded from the learned workflow's steps", async () => {
+    const state = join(dir, "state.txt");
+    writeFileSync(state, "not yet");
+    const goal = harness.createGoal(fileGoal(state));
+
+    harness.updateGoal(goal.slug, {
+      editCriteria: [{ id: "c1", description: "state file contains 'ready' (tightened)" }],
+    });
+    const trace = harness.store.listRecords(goal.id);
+    expect(trace).toHaveLength(1);
+    expect(trace[0].source).toBe("system");
+    expect(trace[0].tool).toBe("goal_update");
+
+    // Editing criteria must not itself spend the corrective-action budget.
+    expect(harness.getGoal(goal.slug).usedIterations).toBe(0);
+
+    writeFileSync(state, "ready");
+    harness.recordAction(goal.slug, { summary: "wrote ready to the file" });
+    await harness.assess(goal.slug);
+
+    const wf = harness.store.getWorkflow(goal.slug);
+    expect(wf?.steps.map((s) => s.summary)).toEqual(["wrote ready to the file"]);
+    expect(wf?.steps.some((s) => s.summary.startsWith("Edited criteria"))).toBe(false);
+  });
+
+  it("rejects an unknown criterion id in editCriteria or removeCriteriaIds", () => {
+    const goal = harness.createGoal(threeCriteriaGoal());
+    expect(() => harness.updateGoal(goal.slug, { removeCriteriaIds: ["c99"] })).toThrow(
+      /Unknown criterion id.*c99/,
+    );
+    expect(() =>
+      harness.updateGoal(goal.slug, { editCriteria: [{ id: "ghost", description: "x" }] }),
+    ).toThrow(/Unknown criterion id.*ghost/);
+    // Rejected edits must not partially apply.
+    expect(harness.getGoal(goal.slug).criteria).toHaveLength(3);
+  });
+
+  it("rejects removing every criterion (would leave the goal unverifiable)", () => {
+    const goal = harness.createGoal(fileGoal("/dev/null"));
+    expect(() =>
+      harness.updateGoal(goal.slug, { removeCriteriaIds: ["c1"] }),
+    ).toThrow(/machine-checkable/);
+    expect(harness.getGoal(goal.slug).criteria).toHaveLength(1);
+  });
+
+  it("rejects a criterion (added or edited-in) referencing an unknown mcp connector", () => {
+    const goal = harness.createGoal(threeCriteriaGoal());
+    expect(() =>
+      harness.updateGoal(goal.slug, {
+        addCriteria: [
+          {
+            description: "y",
+            probe: { kind: "mcp", connector: "ghost", tool: "t" },
+            assert: { op: "truthy" },
+          },
+        ],
+      }),
+    ).toThrow(/unknown connector 'ghost'/);
+    expect(() =>
+      harness.updateGoal(goal.slug, {
+        editCriteria: [
+          { id: "c1", probe: { kind: "mcp", connector: "ghost", tool: "t" } },
+        ],
+      }),
+    ).toThrow(/unknown connector 'ghost'/);
+    // Neither rejected edit applied.
+    expect(harness.getGoal(goal.slug).criteria).toHaveLength(3);
+    expect(harness.getGoal(goal.slug).criteria[0].probe.kind).toBe("command");
+  });
+});
+
 describe("the convergence loop", () => {
   it("assess → act → record → assess converges and promotes a workflow", async () => {
     const state = join(dir, "state.txt");

@@ -15,6 +15,7 @@ import type {
   Autonomy,
   ConvergenceReport,
   Criterion,
+  CriterionEditInput,
   CriterionEvaluation,
   CriterionInput,
   FocusState,
@@ -215,18 +216,7 @@ export class Harness {
   // ----- goal lifecycle -----
 
   createGoal(input: CreateGoalInput): Goal {
-    if (input.criteria.length === 0) {
-      throw new Error(
-        "A goal needs at least one machine-checkable criterion — otherwise convergence can never be detected. Ask the user how success would be verified, then encode it as a probe + assertion.",
-      );
-    }
-    for (const c of input.criteria) {
-      if (c.probe.kind === "mcp" && !this.store.getConnector(c.probe.connector)) {
-        throw new Error(
-          `Criterion '${c.description}' references unknown connector '${c.probe.connector}'. Register it first with connector_add.`,
-        );
-      }
-    }
+    this.assertValidCriteria(input.criteria);
     const now = new Date().toISOString();
     const goal: Goal = {
       id: newId("goal"),
@@ -260,11 +250,51 @@ export class Harness {
     return goal;
   }
 
+  /**
+   * Shared well-formedness gate for a goal's criteria set — used at
+   * goal_create AND after any goal_update criteria edit, so a goal can never
+   * end up with zero criteria or a criterion pointing at an unregistered mcp
+   * connector, however it got there.
+   */
+  private assertValidCriteria(criteria: { description: string; probe: Probe }[]): void {
+    if (criteria.length === 0) {
+      throw new Error(
+        "A goal needs at least one machine-checkable criterion — otherwise convergence can never be detected. Ask the user how success would be verified, then encode it as a probe + assertion.",
+      );
+    }
+    for (const c of criteria) {
+      if (c.probe.kind === "mcp" && !this.store.getConnector(c.probe.connector)) {
+        throw new Error(
+          `Criterion '${c.description}' references unknown connector '${c.probe.connector}'. Register it first with connector_add.`,
+        );
+      }
+    }
+  }
+
+  /** Next free `c<N>` id given the criteria already on the goal (post-edit),
+   *  so appended criteria never collide with survivors even after removals. */
+  private nextCriterionId(criteria: Criterion[]): string {
+    let max = 0;
+    for (const c of criteria) {
+      const m = /^c(\d+)$/.exec(c.id);
+      if (m) max = Math.max(max, Number(m[1]));
+    }
+    return `c${max + 1}`;
+  }
+
   updateGoal(
     ref: string,
     patch: Partial<
       Pick<Goal, "objective" | "autonomy" | "maxIterations" | "constraints">
-    > & { status?: "active" | "abandoned" },
+    > & {
+      status?: "active" | "abandoned";
+      /** New criteria to append. */
+      addCriteria?: CriterionInput[];
+      /** Ids of existing criteria to drop (see goal_get for ids). */
+      removeCriteriaIds?: string[];
+      /** Patch existing criteria by id; fields not given are preserved. */
+      editCriteria?: CriterionEditInput[];
+    },
   ): Goal {
     const goal = this.getGoal(ref);
     if (patch.objective !== undefined) goal.objective = patch.objective;
@@ -291,6 +321,95 @@ export class Harness {
       }
       goal.status = patch.status;
     }
+
+    const addCriteria = patch.addCriteria ?? [];
+    const removeIds = new Set(patch.removeCriteriaIds ?? []);
+    const edits = patch.editCriteria ?? [];
+    const editsById = new Map(edits.map((e) => [e.id, e]));
+    const editsCriteria = addCriteria.length > 0 || removeIds.size > 0 || edits.length > 0;
+
+    if (editsCriteria) {
+      const knownIds = new Set(goal.criteria.map((c) => c.id));
+      const unknown = [...new Set([...removeIds, ...editsById.keys()])].filter(
+        (id) => !knownIds.has(id),
+      );
+      if (unknown.length > 0) {
+        throw new Error(
+          `Unknown criterion id(s) on goal '${goal.slug}': ${unknown.join(", ")}. Known ids: ${
+            [...knownIds].join(", ") || "(none)"
+          } (see goal_get).`,
+        );
+      }
+
+      // Criteria not referenced by removeCriteriaIds/editCriteria pass through
+      // unchanged. Order: survivors (edited in place) first, then appended
+      // criteria — id assignment for appends only ever grows the counter, so
+      // it never collides with a survivor even after removals.
+      const next: Criterion[] = [];
+      for (const c of goal.criteria) {
+        if (removeIds.has(c.id)) continue;
+        const edit = editsById.get(c.id);
+        next.push(
+          edit
+            ? {
+                id: c.id,
+                description: edit.description ?? c.description,
+                probe: edit.probe ?? c.probe,
+                assert: edit.assert ?? c.assert,
+              }
+            : c,
+        );
+      }
+      for (const added of addCriteria) {
+        next.push({ ...added, id: this.nextCriterionId(next) });
+      }
+
+      // Re-validate: the edited set must still be machine-checkable — non-empty,
+      // and any mcp criterion (added or edited-in) must reference a registered
+      // connector.
+      this.assertValidCriteria(next);
+      goal.criteria = next;
+
+      // Converged-goal guard: criteria changed, so any prior convergence was
+      // proven against a DIFFERENT definition of done and no longer holds.
+      // Safe default (no force flag needed): reopen automatically, exactly
+      // like drift-detection's auto-reactivation elsewhere in assess() — never
+      // leave a goal reporting 'converged' against criteria that were never
+      // actually verified. Budget rules still apply: exhausted stays blocked.
+      if (goal.status === "converged") {
+        goal.status = goal.usedIterations >= goal.maxIterations ? "blocked" : "active";
+        goal.convergedAt = null;
+      }
+
+      // Recorded into the goal's trace (not the corrective-action budget) as a
+      // source:"system" entry — visible in goal_get / the learning loop's
+      // input, but excluded from workflow-step promotion since a criteria
+      // edit isn't a reusable action toward the goal.
+      const parts = [
+        addCriteria.length > 0 ? `+${addCriteria.length}` : null,
+        removeIds.size > 0 ? `-${removeIds.size}` : null,
+        edits.length > 0 ? `~${edits.length}` : null,
+      ].filter((p): p is string => p !== null);
+      const detailParts = [
+        addCriteria.length > 0
+          ? `added: ${addCriteria.map((c) => c.description).join("; ")}`
+          : null,
+        removeIds.size > 0 ? `removed: ${[...removeIds].join(", ")}` : null,
+        edits.length > 0 ? `edited: ${[...editsById.keys()].join(", ")}` : null,
+      ].filter((p): p is string => p !== null);
+      this.store.appendRecord({
+        id: newId("act"),
+        goalId: goal.id,
+        iteration: goal.usedIterations,
+        summary: `Edited criteria (${parts.join(" ")}) for '${goal.slug}'`,
+        detail: detailParts.join(" | "),
+        tool: "goal_update",
+        result: "success",
+        source: "system",
+        at: new Date().toISOString(),
+      });
+    }
+
     goal.updatedAt = new Date().toISOString();
     this.store.saveGoal(goal);
     return goal;
@@ -613,7 +732,14 @@ export class Harness {
   private promoteWorkflow(goal: Goal, opts: { countConvergence?: boolean } = {}): WorkflowArtifact | null {
     const countConvergence = opts.countConvergence ?? true;
     const trace = this.store.listRecords(goal.id);
-    const steps = trace
+    // System bookkeeping records (e.g. a goal_update criteria edit) are
+    // visible history but not a reusable ACTION toward the goal — exclude
+    // them from workflow steps and action-count stats so they don't pollute
+    // the learned trace.
+    const actionTrace = trace.filter(
+      (r): r is ActionRecord & { source?: "recorded" | "activity" } => r.source !== "system",
+    );
+    const steps = actionTrace
       .filter((r) => r.result !== "failure")
       .map((r) => ({
         summary: r.summary,
@@ -624,7 +750,7 @@ export class Harness {
       }));
     // Failed approaches are negative muscle memory — capture them so a similar
     // goal doesn't repeat the dead ends.
-    const failures = trace.filter((r) => r.result === "failure").map((r) => r.summary);
+    const failures = actionTrace.filter((r) => r.result === "failure").map((r) => r.summary);
 
     const existing = this.store.getWorkflow(goal.slug);
     // Build-then-verify: the goal converged but the agent recorded nothing
@@ -661,7 +787,7 @@ export class Harness {
             convergences: existing.stats.convergences + (countConvergence ? 1 : 0),
             // The trace is cumulative (all records ever), so this is an
             // absolute count, not an increment.
-            totalActions: trace.length,
+            totalActions: actionTrace.length,
           },
           updatedAt: now,
         }
@@ -672,7 +798,7 @@ export class Harness {
           steps: effectiveSteps,
           criteria: goal.criteria.map((c) => c.description),
           ...(pitfalls.length > 0 ? { pitfalls } : {}),
-          stats: { convergences: 1, totalActions: trace.length },
+          stats: { convergences: 1, totalActions: actionTrace.length },
           createdAt: now,
           updatedAt: now,
         };
@@ -848,7 +974,12 @@ export class Harness {
         report.push({ slug: goal.slug, before, inferred: before, status: "skipped" });
         continue;
       }
-      const recorded = this.store.listRecords(goal.id).filter((r) => r.result !== "failure");
+      const recorded = this.store
+        .listRecords(goal.id)
+        .filter(
+          (r): r is ActionRecord & { source?: "recorded" | "activity" } =>
+            r.result !== "failure" && r.source !== "system",
+        );
       const inferred: WorkflowStep[] =
         recorded.length > 0
           ? recorded.map((r) => ({
