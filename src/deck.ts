@@ -436,6 +436,7 @@ function renderSignoffSlide(section: z.infer<typeof SignoffSectionSchema>, factf
     <button type="button" onclick="soDownload()">Download decisions.json</button>
     <span id="so-done" role="status"></span>
   </div>
+  <textarea id="so-out" class="so-comment" hidden style="margin-top:10px;min-height:120px" aria-label="Response text"></textarea>
 </div>
 <script>
 function soCollect(){
@@ -453,13 +454,28 @@ function soText(d){
   return lines.join('\n');
 }
 function soCopy(){
-  var d=soCollect();
-  navigator.clipboard.writeText(soText(d)+'\n\nJSON:\n'+JSON.stringify(d,null,1)).then(function(){document.getElementById('so-done').textContent='Copied — paste it into the chat.';});
+  var d=soCollect();var txt=soText(d)+'\n\nJSON:\n'+JSON.stringify(d,null,1);
+  var ok=function(){document.getElementById('so-done').textContent='Copied — paste it into the chat.';};
+  var fallback=function(){
+    var ta=document.createElement('textarea');ta.value=txt;ta.style.position='fixed';ta.style.opacity='0';
+    document.body.appendChild(ta);ta.focus();ta.select();
+    try{document.execCommand('copy');ok();}catch(e){document.getElementById('so-done').textContent='Select-all in the box below and copy manually.';var out=document.getElementById('so-out');out.hidden=false;out.value=txt;}
+    document.body.removeChild(ta);
+  };
+  if(navigator.clipboard&&window.isSecureContext){navigator.clipboard.writeText(txt).then(ok,fallback);}else{fallback();}
 }
 function soDownload(){
-  var d=soCollect();var b=new Blob([JSON.stringify(d,null,1)],{type:'application/json'});
-  var a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='decisions.json';a.click();
-  document.getElementById('so-done').textContent='Downloaded decisions.json — send it back.';
+  var d=soCollect();
+  try{
+    var b=new Blob([JSON.stringify(d,null,1)],{type:'application/json'});
+    var a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='decisions.json';
+    document.body.appendChild(a);a.click();document.body.removeChild(a);
+    setTimeout(function(){URL.revokeObjectURL(a.href);},2000);
+    document.getElementById('so-done').textContent='Downloaded decisions.json — send it back.';
+  }catch(e){
+    var out=document.getElementById('so-out');out.hidden=false;out.value=JSON.stringify(d,null,1);
+    document.getElementById('so-done').textContent='Download blocked here — copy the JSON below instead.';
+  }
 }
 </script>`,
     },
@@ -637,6 +653,8 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,Bl
 .so-comment{width:100%;min-height:44px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font:inherit;font-size:13px;padding:8px 10px;resize:vertical}
 .so-footer{display:flex;align-items:center;gap:10px;margin-top:14px;flex-wrap:wrap}
 .so-footer input{border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);font:inherit;font-size:13px;padding:8px 10px}
+.so-footer input:focus,.so-comment:focus{outline:none;border-color:var(--muted);box-shadow:0 0 0 3px color-mix(in srgb,var(--muted) 18%,transparent)}
+.so-choices input{accent-color:var(--ink)}
 .so-footer button{border:1px solid var(--line);border-radius:8px;background:var(--ink);color:var(--bg);font:inherit;font-size:13px;font-weight:600;padding:8px 14px;cursor:pointer}
 .so-footer button:hover{opacity:.88}
 #so-done{font-size:12.5px;color:var(--muted)}
