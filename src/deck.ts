@@ -383,10 +383,15 @@ interface RenderedSlide {
 }
 
 function renderIntroSlide(section: z.infer<typeof IntroSectionSchema>, root: string, sources: DeckConfig["sources"]): RenderedSlide[] {
-  const videoBlock =
-    section.video && sources.demoVideo
-      ? `<div class="intro-video"><video src="${dataUri(resolveSourcePath(root, sources.demoVideo))}" controls playsinline></video></div>`
-      : "";
+  const videoBlock = (() => {
+    if (!section.video || !sources.demoVideo) return "";
+    const path = resolveSourcePath(root, sources.demoVideo);
+    const mime = MIME[extname(path).toLowerCase()] ?? "video/mp4";
+    const b64 = readFileSync(path).toString("base64");
+    // A data: URI src fails in webviews that cap data URLs (~2MB, e.g. the
+    // Teams preview pane); decoding to a Blob URL at runtime has no such cap.
+    return `<div class="intro-video"><video controls playsinline data-mime="${mime}"></video><script type="text/plain" class="video-b64">${b64}</script></div>`;
+  })();
   return [
     {
       sectionType: "intro",
@@ -770,7 +775,17 @@ paint();
     else document.documentElement.setAttribute('data-theme',mode);
     btn.textContent='Theme: '+mode.charAt(0).toUpperCase()+mode.slice(1);
   }
-  var lsGet=function(k){try{return localStorage.getItem(k);}catch(e){return null;}};
+  document.querySelectorAll('.intro-video').forEach(function(w){
+  var v=w.querySelector('video'),d=w.querySelector('.video-b64');
+  if(!v||!d)return;
+  try{
+    var bin=atob(d.textContent.trim()),n=bin.length,arr=new Uint8Array(n);
+    for(var i=0;i<n;i++)arr[i]=bin.charCodeAt(i);
+    v.src=URL.createObjectURL(new Blob([arr],{type:v.dataset.mime||'video/mp4'}));
+  }catch(e){}
+  d.remove();
+});
+var lsGet=function(k){try{return localStorage.getItem(k);}catch(e){return null;}};
   var lsSet=function(k,v){try{localStorage.setItem(k,v);}catch(e){}};
   var stored=lsGet(KEY)||'system';
   apply(stored);
