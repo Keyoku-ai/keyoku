@@ -453,8 +453,15 @@ function soText(d){
   d.decisions.forEach(function(x){lines.push('- ['+x.choice.toUpperCase()+'] '+x.item+(x.comment?' — "'+x.comment+'"':''));});
   return lines.join('\\n');
 }
+function soReady(){
+  var d=soCollect();
+  if(d.decisions.length&&d.decisions.every(function(x){return x.choice==='undecided';})){
+    if(!confirm('You have not decided anything yet - export anyway?'))return null;
+  }
+  return d;
+}
 function soCopy(){
-  var d=soCollect();var txt=soText(d)+'\\n\\nJSON:\\n'+JSON.stringify(d,null,1);
+  var d=soReady();if(!d)return;var txt=soText(d)+'\\n\\nJSON:\\n'+JSON.stringify(d,null,1);
   var ok=function(){document.getElementById('so-done').textContent='Copied — paste it into the chat.';};
   var fallback=function(){
     var ta=document.createElement('textarea');ta.value=txt;ta.style.position='fixed';ta.style.opacity='0';
@@ -465,7 +472,7 @@ function soCopy(){
   if(navigator.clipboard&&window.isSecureContext){navigator.clipboard.writeText(txt).then(ok,fallback);}else{fallback();}
 }
 function soDownload(){
-  var d=soCollect();
+  var d=soReady();if(!d)return;
   try{
     var b=new Blob([JSON.stringify(d,null,1)],{type:'application/json'});
     var a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='decisions.json';
