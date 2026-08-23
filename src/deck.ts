@@ -4,6 +4,7 @@ import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path
 import { parse } from "yaml";
 import { z } from "zod";
 
+import { ArchEdgeSchema, ArchNodeSchema, ArchZoneSchema, ARCH_CSS, ICON_IDS, renderArchSvg } from "./arch.js";
 import { KEYOKU_DIR } from "./contribution.js";
 
 // ---------------------------------------------------------------------------
@@ -71,27 +72,17 @@ const StatusSectionSchema = z.object({
   fromFactfile: z.boolean().default(true),
 });
 
-const ICONS = ["browser", "ui", "api", "db", "gear", "agent", "doc", "shield", "cloud", "queue"] as const;
-
-const DiagramNodeSchema = z.object({
-  id: z.string().min(1),
-  icon: z.enum(ICONS),
-  label: z.string().min(1),
-  sub: z.string().min(1).optional(),
-});
-
-const DiagramEdgeSchema = z.object({
-  from: z.string().min(1),
-  to: z.string().min(1),
-  label: z.string().min(1).optional(),
-});
-
+// Node/edge/zone shapes come from `./arch.js` (keyoku.dev/arch/v1alpha1) — a
+// superset of this section's original inline shape (adds `zone` on nodes,
+// `style` on edges, top-level `zones`), so every deck.yaml written against
+// the original 10-icon subset still validates unchanged.
 const ArchitectureSectionSchema = z.object({
   type: z.literal("architecture"),
   label: z.string().min(1).optional(),
   diagram: z.object({
-    nodes: z.array(DiagramNodeSchema).min(1),
-    edges: z.array(DiagramEdgeSchema).default([]),
+    nodes: z.array(ArchNodeSchema).min(1),
+    edges: z.array(ArchEdgeSchema).default([]),
+    zones: z.array(ArchZoneSchema).default([]),
   }),
   explain: z.record(z.string().min(1)).default({}),
 });
@@ -360,200 +351,6 @@ function dataUri(path: string): string {
   return `data:${mime};base64,${buf.toString("base64")}`;
 }
 
-// ---- built-in icon set (minimal line icons, currentColor, no fixed fills) -
-
-const ICON_DEFS = `
-<symbol id="icon-browser" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-  <rect x="2.5" y="4" width="19" height="16" rx="2"/>
-  <line x1="2.5" y1="8.5" x2="21.5" y2="8.5"/>
-  <circle cx="5.5" cy="6.25" r="0.6" fill="currentColor" stroke="none"/>
-  <circle cx="7.7" cy="6.25" r="0.6" fill="currentColor" stroke="none"/>
-</symbol>
-<symbol id="icon-ui" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-  <rect x="3" y="3" width="8" height="8" rx="1.2"/>
-  <rect x="13" y="3" width="8" height="5" rx="1.2"/>
-  <rect x="13" y="10" width="8" height="11" rx="1.2"/>
-  <rect x="3" y="13" width="8" height="8" rx="1.2"/>
-</symbol>
-<symbol id="icon-api" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-  <path d="M4 8h13"/>
-  <path d="M13 4l4 4-4 4"/>
-  <path d="M20 16H7"/>
-  <path d="M11 20l-4-4 4-4"/>
-</symbol>
-<symbol id="icon-db" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-  <ellipse cx="12" cy="5.5" rx="8" ry="3"/>
-  <path d="M4 5.5v13c0 1.66 3.58 3 8 3s8-1.34 8-3v-13"/>
-  <path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/>
-</symbol>
-<symbol id="icon-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-  <circle cx="12" cy="12" r="3.2"/>
-  <path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>
-</symbol>
-<symbol id="icon-agent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-  <rect x="5" y="8" width="14" height="11" rx="2"/>
-  <circle cx="9.5" cy="13.5" r="1.1" fill="currentColor" stroke="none"/>
-  <circle cx="14.5" cy="13.5" r="1.1" fill="currentColor" stroke="none"/>
-  <path d="M12 8V4"/>
-  <circle cx="12" cy="3" r="1" fill="currentColor" stroke="none"/>
-  <path d="M2 13h3M19 13h3"/>
-</symbol>
-<symbol id="icon-doc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-  <path d="M6 2.5h9l4 4V21a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1z"/>
-  <path d="M14.5 2.5V7h4.5"/>
-  <path d="M8 12h8M8 15.5h8M8 19h5"/>
-</symbol>
-<symbol id="icon-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-  <path d="M12 2.5l7.5 3v6c0 5-3.2 8.6-7.5 10-4.3-1.4-7.5-5-7.5-10v-6z"/>
-  <path d="M8.7 12l2.4 2.4 4.6-4.8"/>
-</symbol>
-<symbol id="icon-cloud" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-  <path d="M7.5 18a4.5 4.5 0 0 1-.5-8.97A5.5 5.5 0 0 1 17.9 9.1 4 4 0 0 1 17.5 18h-10z"/>
-</symbol>
-<symbol id="icon-queue" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-  <rect x="3" y="4.5" width="18" height="4" rx="1"/>
-  <rect x="3" y="10" width="18" height="4" rx="1"/>
-  <rect x="3" y="15.5" width="18" height="4" rx="1"/>
-</symbol>`;
-
-// ---- architecture diagram layout + render ---------------------------------
-
-interface DiagramNode {
-  id: string;
-  icon: string;
-  label: string;
-  sub?: string;
-}
-interface DiagramEdge {
-  from: string;
-  to: string;
-  label?: string;
-}
-
-/** Longest-path layering: a node's layer is 1 + the max layer of every node
- * with an edge into it (0 if none). Bounded relaxation passes so a cyclic
- * diagram degrades gracefully instead of looping forever. */
-function layerNodes(nodes: DiagramNode[], edges: DiagramEdge[]): Map<string, number> {
-  const incoming = new Map<string, string[]>();
-  for (const n of nodes) incoming.set(n.id, []);
-  for (const e of edges) {
-    if (!incoming.has(e.to)) continue; // edge references an unknown node — ignore defensively
-    incoming.get(e.to)!.push(e.from);
-  }
-  const layer = new Map<string, number>();
-  for (const n of nodes) layer.set(n.id, 0);
-  for (let pass = 0; pass < nodes.length + 1; pass++) {
-    let changed = false;
-    for (const n of nodes) {
-      let maxIn = -1;
-      for (const src of incoming.get(n.id) ?? []) {
-        if (!layer.has(src)) continue;
-        maxIn = Math.max(maxIn, layer.get(src)!);
-      }
-      const next = maxIn + 1;
-      if (next > (layer.get(n.id) ?? 0)) {
-        layer.set(n.id, next);
-        changed = true;
-      }
-    }
-    if (!changed) break;
-  }
-  return layer;
-}
-
-function renderArchitectureSvg(nodes: DiagramNode[], edges: DiagramEdge[], title: string): string {
-  const layer = layerNodes(nodes, edges);
-  const uniqueLayers = [...new Set(nodes.map((n) => layer.get(n.id) ?? 0))].sort((a, b) => a - b);
-  const colOf = new Map(uniqueLayers.map((l, i) => [l, i]));
-  const columns: DiagramNode[][] = uniqueLayers.map(() => []);
-  for (const n of nodes) columns[colOf.get(layer.get(n.id) ?? 0)!]!.push(n);
-
-  const boxW = 208;
-  const boxH = 84;
-  const colGap = 76;
-  const rowGap = 30;
-  const margin = 44;
-  const numCols = columns.length;
-  const maxRows = Math.max(...columns.map((c) => c.length), 1);
-  const width = margin * 2 + numCols * boxW + (numCols - 1) * colGap;
-  const height = margin * 2 + maxRows * boxH + (maxRows - 1) * rowGap;
-
-  const pos = new Map<string, { x: number; y: number }>();
-  columns.forEach((col, ci) => {
-    const colHeight = col.length * boxH + (col.length - 1) * rowGap;
-    const startY = margin + (height - margin * 2 - colHeight) / 2;
-    col.forEach((n, ri) => {
-      pos.set(n.id, { x: margin + ci * (boxW + colGap), y: startY + ri * (boxH + rowGap) });
-    });
-  });
-
-  const nodesSvg = nodes
-    .map((n) => {
-      const p = pos.get(n.id);
-      if (!p) return "";
-      const iconId = ICONS.includes(n.icon as (typeof ICONS)[number]) ? n.icon : "doc";
-      return `<g class="arch-node">
-  <rect class="node-box" x="${p.x}" y="${p.y}" width="${boxW}" height="${boxH}" rx="10"/>
-  <use class="node-icon" href="#icon-${iconId}" x="${p.x + 14}" y="${p.y + 14}" width="20" height="20"/>
-  <text class="node-label" x="${p.x + 44}" y="${p.y + 28}">${esc(n.label)}</text>
-  ${n.sub ? `<text class="node-sub" x="${p.x + 14}" y="${p.y + 54}">${esc(n.sub)}</text>` : ""}
-</g>`;
-    })
-    .join("\n");
-
-  const edgesSvg = edges
-    .map((e) => {
-      const from = pos.get(e.from);
-      const to = pos.get(e.to);
-      if (!from || !to) return ""; // defensive: never fail a build over a typo'd edge id
-      const sameCol = from.x === to.x;
-      let sx: number, sy: number, tx: number, ty: number, c1x: number, c1y: number, c2x: number, c2y: number;
-      if (sameCol) {
-        sx = from.x + boxW / 2;
-        sy = from.y + boxH;
-        tx = to.x + boxW / 2;
-        ty = to.y;
-        c1x = sx;
-        c1y = sy + rowGap / 2;
-        c2x = tx;
-        c2y = ty - rowGap / 2;
-      } else if (to.x >= from.x) {
-        sx = from.x + boxW;
-        sy = from.y + boxH / 2;
-        tx = to.x;
-        ty = to.y + boxH / 2;
-        c1x = sx + colGap / 2;
-        c1y = sy;
-        c2x = tx - colGap / 2;
-        c2y = ty;
-      } else {
-        sx = from.x;
-        sy = from.y + boxH / 2;
-        tx = to.x + boxW;
-        ty = to.y + boxH / 2;
-        c1x = sx - colGap / 2;
-        c1y = sy;
-        c2x = tx + colGap / 2;
-        c2y = ty;
-      }
-      const midX = (sx + tx) / 2;
-      const midY = (sy + ty) / 2;
-      const label = e.label
-        ? `<g class="edge-label"><rect x="${midX - esc(e.label).length * 2.9 - 6}" y="${midY - 15}" width="${esc(e.label).length * 5.8 + 12}" height="16" rx="4"/><text x="${midX}" y="${midY - 3}" text-anchor="middle">${esc(e.label)}</text></g>`
-        : "";
-      return `<path class="edge-line" d="M${sx},${sy} C${c1x},${c1y} ${c2x},${c2y} ${tx},${ty}" marker-end="url(#arrow-head)"/>${label}`;
-    })
-    .join("\n");
-
-  return `<svg class="arch-svg" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${esc(title)} architecture diagram">
-<defs>${ICON_DEFS}
-<marker id="arrow-head" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="edge-arrow"/></marker>
-</defs>
-<g class="arch-edges">${edgesSvg}</g>
-<g class="arch-nodes">${nodesSvg}</g>
-</svg>`;
-}
-
 // ---- section renderers: each returns one or more full slide `inner` HTML --
 
 interface RenderedSlide {
@@ -679,7 +476,13 @@ function renderStatusSlides(
 
 function renderArchitectureSlide(section: z.infer<typeof ArchitectureSectionSchema>, personaName: string, title: string): RenderedSlide[] {
   const explainText = section.explain[personaName] ?? Object.values(section.explain)[0] ?? "";
-  const svg = renderArchitectureSvg(section.diagram.nodes, section.diagram.edges, title);
+  // embedded: true — the deck's own <style> (renderStyle, via ARCH_CSS) themes
+  // the diagram with the page's light/dark tokens instead of arch.ts's
+  // standalone fallback <style> block.
+  const svg = renderArchSvg(
+    { title, nodes: section.diagram.nodes, edges: section.diagram.edges, zones: section.diagram.zones },
+    { embedded: true, title },
+  );
   return [
     {
       sectionType: "architecture",
@@ -765,15 +568,8 @@ table.criteria .repro-row td{border-bottom:1px solid var(--line);padding-top:0}
 table.criteria code{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;color:var(--muted);word-break:break-all}
 .arch-wrap{max-width:1080px;width:100%;text-align:center}
 .arch-wrap h2{font-size:26px;margin:0 0 10px;letter-spacing:-.01em}
-.arch-svg{width:100%;height:auto;max-height:calc(100dvh - 300px)}
-.arch-svg .node-box{fill:var(--surface);stroke:var(--line)}
-.arch-svg .node-icon{color:var(--ink)}
-.arch-svg .node-label{fill:var(--ink);font-family:-apple-system,sans-serif;font-size:13.5px;font-weight:600}
-.arch-svg .node-sub{fill:var(--muted);font-family:-apple-system,sans-serif;font-size:10.5px}
-.arch-svg .edge-line{fill:none;stroke:var(--muted);stroke-width:1.6}
-.arch-svg .edge-arrow{fill:var(--muted)}
-.arch-svg .edge-label rect{fill:var(--surface);stroke:var(--line)}
-.arch-svg .edge-label text{fill:var(--ink);font-family:ui-monospace,monospace;font-size:10px}
+.arch-svg{max-height:calc(100dvh - 300px)}
+${ARCH_CSS}
 .arch-wrap .explain{max-width:760px;margin:16px auto 0;font-size:14px;line-height:1.6;color:var(--muted);text-align:left}
 .topbar{position:fixed;top:0;left:0;right:0;z-index:6;display:flex;align-items:center;gap:18px;padding:0 18px;height:52px;background:var(--tabbg);backdrop-filter:blur(6px);border-bottom:1px solid var(--line)}
 .brand{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);white-space:nowrap}
@@ -943,7 +739,7 @@ ${rel} MUST validate against this exact shape (schemaVersion "keyoku.dev/deck/v1
     - { type: intro, label?: <string>, headline: <string>, body: <string>, video?: <bool> }
     - { type: slides, label?: <string>, frames: [{ frame: <filename in framesDir>, title: <string>, caption: <string> }, ...] }
     - { type: status, label?: <string>, fromFactfile: true }
-    - { type: architecture, label?: <string>, diagram: { nodes: [{ id, icon: browser|ui|api|db|gear|agent|doc|shield|cloud|queue, label, sub? }], edges: [{ from, to, label? }] }, explain: { <personaName>: <string>, ... } }
+    - { type: architecture, label?: <string>, diagram: { nodes: [{ id, icon: ${ICON_IDS.join("|")}, label, sub?, zone? }], edges: [{ from, to, label?, style?: solid|dashed }], zones?: [{ id, label }] }, explain: { <personaName>: <string>, ... } }
     - { type: summary, label?: <string>, bullets: [<string>, ...], proof?: <string> }
   personas:
     <personaName>:

@@ -185,9 +185,9 @@ describe("keyoku deck build", () => {
       expect(developer).toContain("npm run build");
       expect(developer).toContain("npm test");
 
-      // architecture: node + labeled edge + arrowhead marker
+      // architecture: node + labeled edge + arrowhead marker (rendered via arch.ts, embedded mode)
       expect((developer.match(/class="arch-node"/g) ?? []).length).toBe(3);
-      expect(developer).toContain("marker-end=\"url(#arrow-head)\"");
+      expect(developer).toContain('marker-end="url(#arch-arrow-head)"');
       expect(developer).toContain(">HTTP<");
       expect(developer).toContain("Technical explanation.");
       expect(stakeholder).toContain("Plain language explanation.");
@@ -229,7 +229,7 @@ describe("renderDeck", () => {
     const factfile = FactfileSchema.parse(factfileJson());
     const html = renderDeck(config, "developer", config.personas.developer, factfile, root);
     // 3 nodes across a 3-hop chain browser->api->db should produce 3 distinct x positions
-    const xs = [...html.matchAll(/class="node-box" x="([\d.]+)"/g)].map((m) => Number(m[1]));
+    const xs = [...html.matchAll(/class="arch-node-box" x="([\d.]+)"/g)].map((m) => Number(m[1]));
     expect(new Set(xs).size).toBe(3);
   });
 });
