@@ -770,9 +770,11 @@ paint();
     else document.documentElement.setAttribute('data-theme',mode);
     btn.textContent='Theme: '+mode.charAt(0).toUpperCase()+mode.slice(1);
   }
-  var stored=localStorage.getItem(KEY)||'system';
+  var lsGet=function(k){try{return localStorage.getItem(k);}catch(e){return null;}};
+  var lsSet=function(k,v){try{localStorage.setItem(k,v);}catch(e){}};
+  var stored=lsGet(KEY)||'system';
   apply(stored);
-  btn.onclick=function(){var idx=order.indexOf(stored);stored=order[(idx+1)%order.length];localStorage.setItem(KEY,stored);apply(stored);};
+  btn.onclick=function(){var idx=order.indexOf(stored);stored=order[(idx+1)%order.length];lsSet(KEY,stored);apply(stored);};
 })();
 </script>`;
 }
