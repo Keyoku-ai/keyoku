@@ -707,7 +707,7 @@ function renderScript(sectionRanges: Array<{ type: string; start: number }>, tot
 var SECTION_RANGES=${scriptJson(sectionRanges)};
 var deck=document.getElementById('deck'),N=${totalSlides},cur=0;
 function sectionForIndex(i){var owner=SECTION_RANGES[0];for(var k=0;k<SECTION_RANGES.length;k++){if(SECTION_RANGES[k].start<=i)owner=SECTION_RANGES[k];}return owner;}
-function go(i){cur=Math.max(0,Math.min(N-1,i));deck.scrollTo({left:cur*window.innerWidth});paint();}
+function go(i,instant){var prev=cur;cur=Math.max(0,Math.min(N-1,i));var far=Math.abs(cur-prev)>1;deck.scrollTo({left:cur*window.innerWidth,behavior:(instant||far)?'auto':'smooth'});paint();}
 function paint(){
   document.querySelectorAll('.dot').forEach(function(d,i){d.classList.toggle('on',i===cur);});
   var c=document.getElementById('count');if(c)c.textContent=(cur+1)+' / '+N;
@@ -719,7 +719,7 @@ function paint(){
 document.getElementById('prev').onclick=function(){go(cur-1)};
 document.getElementById('next').onclick=function(){go(cur+1)};
 document.querySelectorAll('.dot').forEach(function(d){d.onclick=function(){go(+d.dataset.i)};});
-document.querySelectorAll('.tab').forEach(function(t){t.onclick=function(){go(+t.dataset.start)};});
+document.querySelectorAll('.tab').forEach(function(t){t.onclick=function(){go(+t.dataset.start,true)};});
 document.addEventListener('keydown',function(e){if(e.key==='ArrowRight'||e.key===' ')go(cur+1);if(e.key==='ArrowLeft')go(cur-1);});
 deck.addEventListener('scroll',function(){var i=Math.round(deck.scrollLeft/window.innerWidth);if(i!==cur){cur=i;paint();}});
 window.addEventListener('resize',function(){go(cur)});
