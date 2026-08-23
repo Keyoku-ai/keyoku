@@ -35,7 +35,7 @@ const SourcesSchema = z.object({
 
 const LinkSchema = z.object({ label: z.string().min(1), url: z.string().min(1) });
 
-const SECTION_TYPES = ["intro", "slides", "status", "architecture", "summary"] as const;
+const SECTION_TYPES = ["intro", "slides", "status", "architecture", "signoff", "summary"] as const;
 type SectionType = (typeof SECTION_TYPES)[number];
 
 const DEFAULT_SECTION_LABEL: Record<SectionType, string> = {
@@ -43,19 +43,29 @@ const DEFAULT_SECTION_LABEL: Record<SectionType, string> = {
   slides: "Demo",
   status: "Status",
   architecture: "Architecture",
+  signoff: "Sign-off",
   summary: "Summary",
 };
 
 const IntroSectionSchema = z.object({
   type: z.literal("intro"),
   label: z.string().min(1).optional(),
-  headline: z.string().min(1),
-  body: z.string().min(1),
+  // The standard opening format is structured: `ask` + `outcome` lists render
+  // as a fixed "The ask / The outcome" layout every deck shares. `headline`/
+  // `body` remain for freeform intros; when ask/outcome are present they win.
+  headline: z.string().min(1).default("Change request — delivered"),
+  body: z.string().optional(),
+  ask: z.array(z.string().min(1)).optional(),
+  outcome: z.array(z.string().min(1)).optional(),
+  note: z.string().optional(),
   video: z.boolean().default(true),
 });
 
 const SlideFrameSchema = z.object({
   frame: z.string().min(1),
+  // Set false to keep the full frame (e.g. a popover that extends into the
+  // region the global frameCrop would slice off).
+  crop: z.boolean().default(true),
   title: z.string().min(1),
   caption: z.string().min(1),
 });
@@ -69,7 +79,18 @@ const SlidesSectionSchema = z.object({
 const StatusSectionSchema = z.object({
   type: z.literal("status"),
   label: z.string().min(1).optional(),
+  // Optional plain-language paragraph rendered above the verdict — use it to
+  // say what this status MEANS for the audience (the factfile supplies the
+  // machine facts; the lead supplies the framing).
+  lead: z.string().optional(),
   fromFactfile: z.boolean().default(true),
+});
+
+const SignoffSectionSchema = z.object({
+  type: z.literal("signoff"),
+  label: z.string().min(1).optional(),
+  // Shown above the decision cards — who to send the response to, deadlines, etc.
+  note: z.string().optional(),
 });
 
 // Node/edge/zone shapes come from `./arch.js` (keyoku.dev/arch/v1alpha1) — a
@@ -96,6 +117,7 @@ const SummarySectionSchema = z.object({
 
 const SectionSchema = z.discriminatedUnion("type", [
   IntroSectionSchema,
+  SignoffSectionSchema,
   SlidesSectionSchema,
   StatusSectionSchema,
   ArchitectureSectionSchema,
@@ -166,6 +188,8 @@ const FactfileSchema = z.object({
   outcome: z.object({ humanCriteria: z.array(FactfileHumanCriterionSchema).default([]) }),
   evidence: z.array(FactfileCriterionSchema).default([]),
   reviews: z.array(FactfileReviewSchema).default([]),
+  contribution: z.object({ id: z.string().optional() }).partial().optional(),
+  digest: z.string().optional(),
   session: z
     .object({
       work: z.array(FactfileWorkItemSchema).default([]),
@@ -367,9 +391,77 @@ function renderIntroSlide(section: z.infer<typeof IntroSectionSchema>, root: str
     {
       sectionType: "intro",
       inner: `<div class="intro-wrap">
-  <div class="intro-text"><h1>${esc(section.headline)}</h1><p>${esc(section.body)}</p></div>
+  <div class="intro-text"><h1>${esc(section.headline)}</h1>${
+    section.ask && section.outcome
+      ? `<div class="ask-outcome">
+  <div><h3>The ask</h3><ul>${section.ask.map((a) => `<li>${esc(a)}</li>`).join("")}</ul></div>
+  <div><h3>The outcome</h3><ul>${section.outcome.map((o) => `<li>${esc(o)}</li>`).join("")}</ul></div>
+</div>${section.note ? `<p class="intro-note">${esc(section.note)}</p>` : ""}`
+      : `<p>${esc(section.body ?? "")}</p>`
+  }</div>
   ${videoBlock}
 </div>`,
+    },
+  ];
+}
+
+function renderSignoffSlide(section: z.infer<typeof SignoffSectionSchema>, factfile: Factfile, config: DeckConfig): RenderedSlide[] {
+  const criteria = factfile.outcome?.humanCriteria ?? [];
+  const reviewed = new Set((factfile.reviews ?? []).map((r: { criterionId?: string }) => r.criterionId).filter(Boolean));
+  const pending = criteria.filter((c) => !reviewed.has(c.id));
+  const cards = pending
+    .map(
+      (c: z.infer<typeof FactfileHumanCriterionSchema>, i: number) => `<div class="so-card" data-id="${esc(c.id)}" data-desc="${esc(c.description)}">
+  <h3>${i + 1} · ${esc(c.description)}</h3>
+  ${c.guidance ? `<p class="so-context">${esc(c.guidance)}</p>` : ""}
+  <div class="so-choices">
+    <label><input type="radio" name="so-${esc(c.id)}" value="approved"> Approve</label>
+    <label><input type="radio" name="so-${esc(c.id)}" value="changes"> Needs changes</label>
+    <label><input type="radio" name="so-${esc(c.id)}" value="discuss"> Let's discuss</label>
+  </div>
+  <textarea class="so-comment" placeholder="Comment / direction (optional)"></textarea>
+</div>`
+    )
+    .join("");
+  return [
+    {
+      sectionType: "signoff",
+      inner: `<div class="so-wrap">
+  <h2>${esc(section.label ?? "Sign-off")}</h2>
+  <p class="so-note">${esc(section.note ?? "Record a decision on each open item, then send the response back — copy it into the chat, or attach the downloaded file.")}</p>
+  ${cards || '<p class="muted-line">No decisions pending.</p>'}
+  <div class="so-footer">
+    <input id="so-name" type="text" placeholder="Your name">
+    <button type="button" onclick="soCopy()">Copy response</button>
+    <button type="button" onclick="soDownload()">Download decisions.json</button>
+    <span id="so-done" role="status"></span>
+  </div>
+</div>
+<script>
+function soCollect(){
+  var out={decided_by:document.getElementById('so-name').value||null,decided_at:new Date().toISOString(),decisions:[]};
+  out.project='${esc(config.project)}';out.contribution='${esc(factfile.contribution?.id ?? "")}';out.factfile_digest='${esc((factfile.digest ?? "").slice(0, 16))}';
+  document.querySelectorAll('.so-card').forEach(function(c){
+    var picked=c.querySelector('input:checked');
+    out.decisions.push({id:c.dataset.id,item:c.dataset.desc,choice:picked?picked.value:'undecided',comment:c.querySelector('.so-comment').value||null});
+  });
+  return out;
+}
+function soText(d){
+  var lines=['Sign-off — '+d.project+' ('+(d.decided_by||'unsigned')+', '+d.decided_at.slice(0,10)+')'];
+  d.decisions.forEach(function(x){lines.push('- ['+x.choice.toUpperCase()+'] '+x.item+(x.comment?' — "'+x.comment+'"':''));});
+  return lines.join('\n');
+}
+function soCopy(){
+  var d=soCollect();
+  navigator.clipboard.writeText(soText(d)+'\n\nJSON:\n'+JSON.stringify(d,null,1)).then(function(){document.getElementById('so-done').textContent='Copied — paste it into the chat.';});
+}
+function soDownload(){
+  var d=soCollect();var b=new Blob([JSON.stringify(d,null,1)],{type:'application/json'});
+  var a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='decisions.json';a.click();
+  document.getElementById('so-done').textContent='Downloaded decisions.json — send it back.';
+}
+</script>`,
     },
   ];
 }
@@ -381,7 +473,7 @@ function renderSlidesSlides(section: z.infer<typeof SlidesSectionSchema>, root: 
   const leftPct = sources.frameCrop?.leftPct ?? 0;
   return section.frames.map((f) => ({
     sectionType: "slides" as const,
-    inner: `<div class="shot"><img src="${dataUri(join(resolveSourcePath(root, sources.framesDir!), f.frame))}" style="margin-left:-${leftPct}%" alt="${esc(f.title)}"></div>
+    inner: `<div class="shot"><img src="${dataUri(join(resolveSourcePath(root, sources.framesDir!), f.frame))}" style="margin-left:-${f.crop ? leftPct : 0}%" alt="${esc(f.title)}"></div>
 <div class="cap"><span class="k">${esc(f.title)}</span><p>${esc(f.caption)}</p></div>`,
   }));
 }
@@ -428,6 +520,7 @@ function renderStatusSlides(
         sectionType: "status",
         inner: `<div class="status-wrap status-short">
   <h2>${esc(section.label ?? "Status")}</h2>
+  ${section.lead ? `<p class="status-lead">${esc(section.lead)}</p>` : ""}
   ${verdictBlock}
   ${conceptNote}
   ${pendingBlock}
@@ -503,7 +596,7 @@ function renderSummarySlide(section: z.infer<typeof SummarySectionSchema>, links
   <h2>${esc(section.label ?? "What shipped")}</h2>
   <ul>${section.bullets.map((b) => `<li>${esc(b)}</li>`).join("")}</ul>
   ${section.proof ? `<p class="proof">${esc(section.proof)}</p>` : ""}
-  ${links.length ? `<p class="links">${links.map((l) => `<a href="${esc(l.url)}">${esc(l.label)}</a>`).join(" &middot; ")}</p>` : ""}
+  ${links.length ? `<p class="links">${links.map((l) => `<a target="_blank" rel="noopener" href="${esc(l.url)}">${esc(l.label)}</a>`).join(" &middot; ")}</p>` : ""}
 </div>`,
     },
   ];
@@ -530,6 +623,23 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,Bl
 .cap p{margin:5px 0 0;font-size:15px;line-height:1.45;color:var(--ink)}
 .intro-wrap{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:36px;max-width:1160px;width:100%}
 .intro-text{flex:1 1 380px;max-width:520px}
+.ask-outcome{display:grid;grid-template-columns:1fr 1fr;gap:10px 28px;margin-top:6px}
+.ask-outcome h3{font-size:11px;text-transform:uppercase;letter-spacing:.11em;color:var(--muted);margin:0 0 8px}
+.ask-outcome ul{margin:0;padding-left:16px;font-size:13.5px;line-height:1.7}
+.intro-note{color:var(--muted);font-size:13px;margin-top:12px}
+.so-wrap{max-width:860px;width:100%;max-height:calc(100dvh - 130px);overflow-y:auto}
+.so-note{color:var(--muted);font-size:14px;margin:0 0 16px;max-width:64ch}
+.so-card{border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:16px 18px;margin-bottom:12px}
+.so-card h3{font-size:14.5px;margin:0 0 6px}
+.so-context{color:var(--muted);font-size:13px;line-height:1.55;margin:0 0 10px}
+.so-choices{display:flex;gap:18px;font-size:13.5px;margin-bottom:10px;flex-wrap:wrap}
+.so-choices label{display:flex;align-items:center;gap:6px;cursor:pointer}
+.so-comment{width:100%;min-height:44px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font:inherit;font-size:13px;padding:8px 10px;resize:vertical}
+.so-footer{display:flex;align-items:center;gap:10px;margin-top:14px;flex-wrap:wrap}
+.so-footer input{border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);font:inherit;font-size:13px;padding:8px 10px}
+.so-footer button{border:1px solid var(--line);border-radius:8px;background:var(--ink);color:var(--bg);font:inherit;font-size:13px;font-weight:600;padding:8px 14px;cursor:pointer}
+.so-footer button:hover{opacity:.88}
+#so-done{font-size:12.5px;color:var(--muted)}
 .intro-text h1{font-size:32px;line-height:1.15;letter-spacing:-.01em;margin:0 0 14px}
 .intro-text p{font-size:15.5px;line-height:1.6;color:var(--muted)}
 .intro-video{flex:1 1 480px;max-width:640px}
@@ -541,6 +651,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,Bl
 .sum .links{font-size:14px}
 .sum a{color:var(--accent);text-decoration:underline;text-underline-offset:3px}
 .status-wrap{max-width:880px;width:100%;max-height:calc(100dvh - 220px);overflow:auto}
+.status-lead{max-width:70ch;line-height:1.55;margin:0 0 14px}
 .status-wrap h2{font-size:26px;margin:0 0 14px;letter-spacing:-.01em}
 .status-wrap h3{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:18px 0 8px}
 .verdict{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
@@ -653,6 +764,9 @@ export function renderDeck(config: DeckConfig, personaName: string, persona: Dec
         break;
       case "architecture":
         rendered = renderArchitectureSlide(section, personaName, config.title);
+        break;
+      case "signoff":
+        rendered = renderSignoffSlide(section, factfile, config);
         break;
       case "summary":
         rendered = renderSummarySlide(section, config.links);
