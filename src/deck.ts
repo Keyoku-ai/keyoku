@@ -454,9 +454,22 @@ function soText(d){
   return lines.join('\\n');
 }
 function soReady(){
-  var d=soCollect();
-  if(d.decisions.length&&d.decisions.every(function(x){return x.choice==='undecided';})){
-    if(!confirm('You have not decided anything yet - export anyway?'))return null;
+  var d=soCollect();var bad=0;
+  document.querySelectorAll('.so-card').forEach(function(c){
+    var undecided=!c.querySelector('input:checked');
+    c.classList.toggle('so-missing',undecided);
+    if(undecided)bad++;
+  });
+  var nameEl=document.getElementById('so-name');
+  var noName=!nameEl.value.trim();
+  nameEl.classList.toggle('so-missing',noName);
+  if(bad||noName){
+    var parts=[];
+    if(bad)parts.push(bad+' item'+(bad>1?'s':'')+' still undecided');
+    if(noName)parts.push('add your name');
+    document.getElementById('so-done').textContent='Not yet: '+parts.join(' · ')+'.';
+    var first=document.querySelector('.so-missing');if(first)first.scrollIntoView({block:'nearest'});
+    return null;
   }
   return d;
 }
@@ -665,6 +678,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,Bl
 .so-footer button{border:1px solid var(--line);border-radius:8px;background:var(--ink);color:var(--bg);font:inherit;font-size:13px;font-weight:600;padding:8px 14px;cursor:pointer}
 .so-footer button:hover{opacity:.88}
 #so-done{font-size:12.5px;color:var(--muted)}
+.so-missing{border-color:color-mix(in srgb,#b42318 55%,var(--line)) !important;box-shadow:0 0 0 3px color-mix(in srgb,#b42318 12%,transparent)}
 .intro-text h1{font-size:32px;line-height:1.15;letter-spacing:-.01em;margin:0 0 14px}
 .intro-text p{font-size:15.5px;line-height:1.6;color:var(--muted)}
 .intro-video{flex:1 1 480px;max-width:640px}
