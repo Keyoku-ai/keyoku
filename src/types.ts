@@ -18,7 +18,10 @@ export const CommandProbeSchema = z.object({
     .min(1)
     .describe("Shell command to execute. Its stdout becomes the probe output."),
   cwd: z.string().optional().describe("Working directory for the command."),
-  timeoutMs: z.number().int().positive().max(300_000).optional(),
+  // Cap raised from 5min to 15min (300_000 -> 900_000): real frontend
+  // production builds (and demo record/watch pipelines) routinely exceed 5
+  // minutes — the old cap made those probes untimeoutable-but-still-fail.
+  timeoutMs: z.number().int().positive().max(900_000).optional(),
   parse: ParseModeSchema.optional(),
 });
 
@@ -28,7 +31,7 @@ export const HttpProbeSchema = z.object({
   method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]).optional(),
   headers: z.record(z.string()).optional(),
   body: z.string().optional(),
-  timeoutMs: z.number().int().positive().max(300_000).optional(),
+  timeoutMs: z.number().int().positive().max(900_000).optional(),
   parse: ParseModeSchema.optional(),
 });
 
