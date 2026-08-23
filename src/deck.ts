@@ -451,10 +451,10 @@ function soCollect(){
 function soText(d){
   var lines=['Sign-off — '+d.project+' ('+(d.decided_by||'unsigned')+', '+d.decided_at.slice(0,10)+')'];
   d.decisions.forEach(function(x){lines.push('- ['+x.choice.toUpperCase()+'] '+x.item+(x.comment?' — "'+x.comment+'"':''));});
-  return lines.join('\n');
+  return lines.join('\\n');
 }
 function soCopy(){
-  var d=soCollect();var txt=soText(d)+'\n\nJSON:\n'+JSON.stringify(d,null,1);
+  var d=soCollect();var txt=soText(d)+'\\n\\nJSON:\\n'+JSON.stringify(d,null,1);
   var ok=function(){document.getElementById('so-done').textContent='Copied — paste it into the chat.';};
   var fallback=function(){
     var ta=document.createElement('textarea');ta.value=txt;ta.style.position='fixed';ta.style.opacity='0';
@@ -716,7 +716,7 @@ nav.dots{position:fixed;bottom:0;left:0;right:0;display:flex;align-items:center;
 .arrow:hover{opacity:1}
 .arrow:focus-visible,.dot:focus-visible,.tab:focus-visible,.theme-toggle:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
 #prev{left:12px}#next{right:12px}
-@media(prefers-reduced-motion:no-preference){.deck{scroll-behavior:smooth}}
+
 </style>`;
 }
 
@@ -725,7 +725,7 @@ function renderScript(sectionRanges: Array<{ type: string; start: number }>, tot
 var SECTION_RANGES=${scriptJson(sectionRanges)};
 var deck=document.getElementById('deck'),N=${totalSlides},cur=0;
 function sectionForIndex(i){var owner=SECTION_RANGES[0];for(var k=0;k<SECTION_RANGES.length;k++){if(SECTION_RANGES[k].start<=i)owner=SECTION_RANGES[k];}return owner;}
-function go(i,instant){var prev=cur;cur=Math.max(0,Math.min(N-1,i));var far=Math.abs(cur-prev)>1;deck.scrollTo({left:cur*window.innerWidth,behavior:(instant||far)?'auto':'smooth'});paint();}
+function go(i){cur=Math.max(0,Math.min(N-1,i));deck.scrollTo({left:cur*window.innerWidth,behavior:'instant'});paint();}
 function paint(){
   document.querySelectorAll('.dot').forEach(function(d,i){d.classList.toggle('on',i===cur);});
   var c=document.getElementById('count');if(c)c.textContent=(cur+1)+' / '+N;
@@ -737,7 +737,7 @@ function paint(){
 document.getElementById('prev').onclick=function(){go(cur-1)};
 document.getElementById('next').onclick=function(){go(cur+1)};
 document.querySelectorAll('.dot').forEach(function(d){d.onclick=function(){go(+d.dataset.i)};});
-document.querySelectorAll('.tab').forEach(function(t){t.onclick=function(){go(+t.dataset.start,true)};});
+document.querySelectorAll('.tab').forEach(function(t){t.onclick=function(){go(+t.dataset.start)};});
 document.addEventListener('keydown',function(e){if(e.key==='ArrowRight'||e.key===' ')go(cur+1);if(e.key==='ArrowLeft')go(cur-1);});
 deck.addEventListener('scroll',function(){var i=Math.round(deck.scrollLeft/window.innerWidth);if(i!==cur){cur=i;paint();}});
 window.addEventListener('resize',function(){go(cur)});
