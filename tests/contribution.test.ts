@@ -38,6 +38,23 @@ afterEach(() => {
 });
 
 describe("repository-local contribution gates", () => {
+  it("distinguishes a clean committed contribution from a dirty worktree", () => {
+    const root = repo();
+    const baseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+    writeFileSync(join(root, "feature.txt"), "committed\n", "utf8");
+    execFileSync("git", ["add", "feature.txt"], { cwd: root });
+    execFileSync("git", ["commit", "-qm", "feature"], { cwd: root });
+
+    const clean = captureRepository(root, baseSha);
+    expect(clean.changedFiles).toEqual(["feature.txt"]);
+    expect(clean.dirty).toBe(false);
+
+    writeFileSync(join(root, "feature.txt"), "uncommitted\n", "utf8");
+    const dirty = captureRepository(root, baseSha);
+    expect(dirty.changedFiles).toEqual(["feature.txt"]);
+    expect(dirty.dirty).toBe(true);
+  });
+
   it("initializes without overwriting an existing project", () => {
     const root = repo();
     const project = initProject({ root, name: "Example Project", summary: "A proof-first example." });

@@ -604,7 +604,10 @@ export function captureRepository(root: string, baseSha: string): RepositorySnap
     baseSha,
     headSha,
     worktreeDigest: digest.digest("hex"),
-    dirty: changedFiles.length > 0,
+    // A committed base-to-head diff is the contribution under review, not a
+    // dirty worktree. Keep these concepts separate so a clean revision-bound
+    // Factfile cannot be mislabeled merely because it contains real changes.
+    dirty: worktreeFiles.length > 0,
     changedFiles,
   };
 }

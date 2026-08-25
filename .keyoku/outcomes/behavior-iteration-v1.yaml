@@ -1,6 +1,6 @@
 schemaVersion: keyoku.dev/outcome/v1alpha1
 id: behavior-iteration-v1
-revision: 1
+revision: 2
 title: Keyoku governs AI product iteration toward observable behavior
 objective: >-
   A coding harness can use Keyoku to move one repository-owned product outcome through bounded,
@@ -22,19 +22,23 @@ scope:
     - src/iteration-cli.ts
     - src/index.ts
     - src/server.ts
+    - src/contribution.ts
     - tests/iteration.test.ts
+    - tests/contribution.test.ts
     - tests/e2e.test.ts
     - tests/mcp-e2e.test.ts
     - docs/ITERATION.md
     - README.md
     - CHANGELOG.md
     - .keyoku/outcomes/behavior-iteration-v1.yaml
-  maxChangedFiles: 11
+  maxChangedFiles: 13
 criteria:
   - description: The behavior-iteration state machine, limit rules, idempotency, and tamper detection pass together
     probe:
       kind: command
-      run: npx vitest run tests/iteration.test.ts
+      run: >-
+        sh -c "npx vitest run tests/iteration.test.ts &&
+        npx vitest run tests/contribution.test.ts -t 'distinguishes a clean committed contribution'"
       timeoutMs: 120000
       parse: text
     assert:
@@ -54,9 +58,8 @@ criteria:
     probe:
       kind: command
       run: >-
-        sh -c "npm run build >/dev/null &&
-        node dist/index.js iterate help | grep -q 'Keyoku behavior iteration' &&
-        npx vitest run tests/e2e.test.ts tests/mcp-e2e.test.ts"
+        sh -c "npx tsx src/index.ts iterate help | grep -q 'Keyoku behavior iteration' &&
+        npx vitest run tests/mcp-e2e.test.ts -t 'provider-neutral iteration protocol'"
       timeoutMs: 180000
       parse: text
     assert:
@@ -120,4 +123,4 @@ humanCriteria:
     description: The product reads as an iteration and proof layer rather than an autonomous coding harness or auto-approval system
     guidance: Inspect README, CLI help, MCP descriptions, and the behavior-iteration guide for conflicting authority claims.
 createdAt: 2026-08-25T17:00:00.000Z
-updatedAt: 2026-08-25T17:00:00.000Z
+updatedAt: 2026-08-25T17:30:00.000Z
