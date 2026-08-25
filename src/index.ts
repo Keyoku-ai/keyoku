@@ -27,6 +27,7 @@ import { startProofSessionServer } from "./session-server.js";
 import { customizeProof, initProof } from "./project-profile.js";
 import { runProofDemo } from "./proof-demo.js";
 import { pulseCmd } from "./pulse-cli.js";
+import { iterationCmd } from "./iteration-cli.js";
 import { Harness } from "./engine.js";
 import { runLearning } from "./learn.js";
 import { buildServer, VERSION } from "./server.js";
@@ -96,6 +97,7 @@ export { buildServer, VERSION } from "./server.js";
 export { Store } from "./store.js";
 export * from "./pulse.js";
 export * from "./pulse-fixtures.js";
+export * from "./iteration.js";
 
 // stdout is the MCP protocol channel in serve mode — all human output in that
 // mode MUST go to stderr.
@@ -1250,6 +1252,9 @@ Usage:
   keyoku gate <contribution>        Verify outcome and render its Factfile
   keyoku factfile <contribution>    Print the generated HTML report path
   keyoku factfile publish <id>      Explicitly upload canonical JSON to keyoku-engine
+  keyoku iterate start <outcome>    Start a bounded prove → repair → re-prove session
+  keyoku iterate status <session>   Inspect exact-round evidence and stop conditions
+  keyoku iterate checkpoint <id>    Re-prove after an idempotent agent checkpoint
   keyoku pulse help                 Append, plan, and render trusted cross-checkpoint progress
   keyoku init                       Wire up Claude Code hook + MCP config
   keyoku status                     Show goals, connectors, learned workflows
@@ -1740,6 +1745,8 @@ async function main(): Promise<void> {
       return factfileCmd(rest);
     case "pulse":
       return pulseCmd(rest);
+    case "iterate":
+      return iterationCmd(rest);
     case "assess":
       return assess(rest[0]);
     case "watch":

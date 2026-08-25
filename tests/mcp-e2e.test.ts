@@ -125,6 +125,19 @@ describe("MCP protocol e2e — muscle memory", () => {
     expect(names).not.toContain("pulse_send");
   });
 
+  it("exposes the provider-neutral iteration protocol without an agent runner or human auto-approval", async () => {
+    const listed = await client.rpc("tools/list", {});
+    const names = listed.result.tools.map((tool: { name: string }) => tool.name);
+    expect(names).toEqual(expect.arrayContaining([
+      "iteration_start",
+      "iteration_status",
+      "iteration_next",
+      "iteration_checkpoint",
+    ]));
+    expect(names).not.toContain("iteration_accept");
+    expect(names).not.toContain("iteration_run_agent");
+  });
+
   it("iterative run: captures step + pitfall, then reuses both on a similar goal", async () => {
     await client.tool("goal_create", {
       objective: "fix the flaky auth test",

@@ -36,6 +36,12 @@ import {
   requestDecision,
 } from "./proof-session.js";
 import {
+  checkpointIteration,
+  currentIterationInstruction,
+  readIteration,
+  startIteration,
+} from "./iteration.js";
+import {
   appendPulseEvent,
   planPulseDispatch,
   readPulseEvents,
@@ -525,6 +531,121 @@ export function buildServer(harness: Harness): McpServer {
       } catch (err) {
         return fail(err);
       }
+    },
+  );
+
+  // ----- bounded behavior iteration -----
+
+  server.registerTool(
+    "iteration_start",
+    {
+      title: "Start a bounded behavior iteration",
+      description:
+        "Evaluate a repository-owned outcome, create an exact-revision Factfile, and issue a deterministic repair instruction when evidence is missing. This executes the outcome's declared probes. It does not run an agent, decide human criteria, or accept the contribution.",
+      inputSchema: {
+        outcome: z.string().min(1),
+        maxRounds: z.number().int().min(1).max(100).optional(),
+        maxMinutes: z.number().positive().max(1440).optional(),
+        maxNoProgressRounds: z.number().int().min(1).max(20).optional(),
+        maxTokens: z.number().int().positive().optional(),
+        maxCostUsd: z.number().positive().optional(),
+        actor: ActorSchema.optional(),
+        cwd: z.string().optional().describe("A path inside the project (default: server cwd)."),
+      },
+    },
+    async ({ outcome, maxRounds, maxMinutes, maxNoProgressRounds, maxTokens, maxCostUsd, actor, cwd }) => {
+      try {
+        const root = findProjectRoot(cwd);
+        const state = await startIteration({ root, outcomeId: outcome, ...(actor ? { actor } : {}), limits: {
+          ...(maxRounds !== undefined ? { maxRounds } : {}),
+          ...(maxMinutes !== undefined ? { maxDurationMs: Math.round(maxMinutes * 60_000) } : {}),
+          ...(maxNoProgressRounds !== undefined ? { maxNoProgressRounds } : {}),
+          ...(maxTokens !== undefined ? { maxTokens } : {}),
+          ...(maxCostUsd !== undefined ? { maxCostUsd } : {}),
+        } });
+        logAudit("iteration_start", state.id, `${state.outcomeId}: ${state.status}`, true);
+        return json({ root, state, guidance: state.currentInstruction ?? state.stopReason });
+      } catch (err) { return fail(err); }
+    },
+  );
+
+  server.registerTool(
+    "iteration_status",
+    {
+      title: "Inspect a behavior iteration",
+      description: "Replay and verify the append-only iteration ledger, exact source identity, proof rounds, usage reports, and current stop condition.",
+      inputSchema: {
+        session: z.string().min(1),
+        cwd: z.string().optional(),
+      },
+    },
+    async ({ session, cwd }) => {
+      try {
+        const root = findProjectRoot(cwd);
+        return json({ root, state: readIteration(root, session) });
+      } catch (err) { return fail(err); }
+    },
+  );
+
+  server.registerTool(
+    "iteration_next",
+    {
+      title: "Get the next evidence-bounded repair instruction",
+      description: "Return the current deterministic instruction generated from failed outcome claims. The instruction is coordination, never proof of completion.",
+      inputSchema: {
+        session: z.string().min(1),
+        cwd: z.string().optional(),
+      },
+    },
+    async ({ session, cwd }) => {
+      try {
+        const root = findProjectRoot(cwd);
+        const instruction = currentIterationInstruction(root, session);
+        if (!instruction) throw new Error(`Iteration '${session}' has no pending agent instruction.`);
+        return json({ root, session, instruction });
+      } catch (err) { return fail(err); }
+    },
+  );
+
+  server.registerTool(
+    "iteration_checkpoint",
+    {
+      title: "Checkpoint agent work and re-prove behavior",
+      description:
+        "Record one idempotent agent checkpoint with explicitly sourced usage, rerun repository-owned probes against the exact current source, and either issue the next bounded instruction or stop. Never report estimated UI text as provider usage.",
+      inputSchema: {
+        session: z.string().min(1),
+        checkpointId: z.string().min(1),
+        summary: z.string().min(1),
+        inputTokens: z.number().int().nonnegative().optional(),
+        outputTokens: z.number().int().nonnegative().optional(),
+        cachedInputTokens: z.number().int().nonnegative().optional(),
+        toolCalls: z.number().int().nonnegative().optional(),
+        costUsd: z.number().nonnegative().optional(),
+        usageSource: z.enum(["agent_reported", "provider_receipt", "unknown"]).optional(),
+        cwd: z.string().optional(),
+      },
+    },
+    async ({ session, checkpointId, summary, inputTokens, outputTokens, cachedInputTokens, toolCalls, costUsd, usageSource, cwd }) => {
+      try {
+        const root = findProjectRoot(cwd);
+        const state = await checkpointIteration({
+          root,
+          sessionId: session,
+          checkpointId,
+          summary,
+          usage: {
+            inputTokens: inputTokens ?? 0,
+            outputTokens: outputTokens ?? 0,
+            cachedInputTokens: cachedInputTokens ?? 0,
+            toolCalls: toolCalls ?? 0,
+            costUsd: costUsd ?? 0,
+          },
+          usageSource: usageSource ?? "unknown",
+        });
+        logAudit("iteration_checkpoint", state.id, `${checkpointId}: ${state.status}`, true);
+        return json({ root, state, guidance: state.currentInstruction ?? state.stopReason });
+      } catch (err) { return fail(err); }
     },
   );
 

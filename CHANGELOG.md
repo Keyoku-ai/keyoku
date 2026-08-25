@@ -20,6 +20,17 @@ Keyoku's open-source V1 is now a local, Git-native proof session between humans 
 ## Unreleased
 
 ### Added
+- **Behavior iteration: `keyoku iterate` plus four MCP tools.** A provider-neutral,
+  bounded prove → repair → re-prove protocol now turns failed repository-owned
+  claims into deterministic agent instructions and re-evaluates only at an
+  idempotent checkpoint. Each round records the exact Git/worktree identity,
+  Factfile digest, passing/failing/regressed claim indexes, declared human-review
+  state, explicitly sourced token/cost usage, and stop reason in a hash-chained
+  append-only ledger. The controller stops on success, human judgment, failed
+  human review, no source progress, or configured round/time/token/cost limits.
+  It deliberately does not run an agent, infer billing, fill human decisions,
+  accept a contribution, push, or deploy. See `docs/ITERATION.md`.
+
 - **Demo evidence: `keyoku demo <init|record|watch>`.** A generic, project-agnostic
   "record -> watch -> gate" workflow that makes a recorded product demo
   first-class Keyoku evidence (the existing `EvidencePresentationSchema`

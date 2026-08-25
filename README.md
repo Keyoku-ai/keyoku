@@ -230,6 +230,10 @@ keyoku contribution review <id>      Record a human criterion decision
 keyoku contribution accept <id>      Accept an exact passing snapshot
 keyoku gate <contribution>           Re-evaluate an existing contribution
 keyoku factfile <contribution>       Locate the full HTML report
+keyoku iterate start <outcome>       Start a bounded prove → repair → re-prove session
+keyoku iterate next <session>        Read the current evidence-bounded instruction
+keyoku iterate checkpoint <session>  Record idempotent work and re-run proof
+keyoku iterate status <session>      Inspect rounds, usage reports, and stop reason
 keyoku pulse help                    Inspect the generic event, checkpoint, planner, and renderer path
 keyoku pulse fixture generic        Emit a harness-neutral JSONL integration fixture
 keyoku pulse ingest --file F        Append strict, idempotent lifecycle events
@@ -238,6 +242,28 @@ keyoku pulse render --audience A    Render one content-bound audience projection
 ```
 
 `proof run` reuses the active contribution for the current branch and outcome so repeated iterations remain one history. Pass `--new` only when opening a genuinely separate attempt. The earlier memory and workflow-learning tools remain available for compatibility, but they are optional supporting capabilities—not the launch promise.
+
+## Behavior iteration
+
+Keyoku can govern the loop between a coding agent and an observable product behavior without becoming another agent runner:
+
+```bash
+# Evaluate the outcome and get the first evidence-bounded repair instruction.
+keyoku iterate start checkout-ready --max-rounds 5 --max-minutes 60
+
+# An MCP-connected agent can call iteration_next, do the product work, then:
+keyoku iterate checkpoint <session-id> \
+  --idempotency-key attempt-1 \
+  --summary "Fixed cart restoration and added the regression test"
+
+keyoku iterate status <session-id>
+```
+
+Every round reruns the repository-owned outcome probes and binds the result to the exact Git head plus worktree digest. The append-only event ledger is hash-chained; replayed checkpoint ids are deduplicated, conflicting replays fail closed, and a source state that turns a previously passing claim red is recorded as a regression.
+
+The controller stops on proof success, required human judgment, a failed human judgment, repeated no-change checkpoints, or configured round, time, reported-token, and reported-cost ceilings. Usage is accepted only with an explicit source label (`agent_reported`, `provider_receipt`, or `unknown`); Keyoku never infers billing from chat text. It issues instructions through CLI/MCP but does not silently execute an agent, write a human verdict, accept a contribution, push, deploy, or bypass the product's own authorization boundaries.
+
+See [Behavior iteration](docs/ITERATION.md) for the event contract, stop semantics, and adapter workflow.
 
 ## Different tools, different jobs
 
@@ -268,11 +294,11 @@ The CLI repository is the product wedge and source of truth. The engine is an op
 - GitHub proof execution is read-only and does not post privileged PR comments from untrusted code.
 - Agent identity is provenance. A human or organization remains accountable.
 
-Read the [Factfile standard](docs/FACTFILE-STANDARD.md), [Pulse contract](docs/PULSE.md), [GitHub integration guide](docs/GITHUB.md), and [security review](docs/SECURITY-REVIEW.md).
+Read the [Factfile standard](docs/FACTFILE-STANDARD.md), [behavior-iteration contract](docs/ITERATION.md), [Pulse contract](docs/PULSE.md), [GitHub integration guide](docs/GITHUB.md), and [security review](docs/SECURITY-REVIEW.md).
 
 ## Status
 
-The Factfile schema is `v1alpha1`. The local evaluator, exact Git binding, durable two-way instruction protocol, token-scoped live session, JSON/Markdown/HTML renderers, annotated visual evidence, scope boundary, outcome history, and GitHub Check workflow are implemented and tested. Schema meaning may still evolve during alpha; incompatible changes receive a new schema version.
+The Factfile and behavior-iteration schemas are `v1alpha1`. The local evaluator, exact Git binding, bounded prove/repair/re-prove controller, durable two-way instruction protocol, token-scoped live session, JSON/Markdown/HTML renderers, annotated visual evidence, scope boundary, outcome history, and GitHub Check workflow are implemented and tested. Schema meaning may still evolve during alpha; incompatible changes receive a new schema version.
 
 ## License
 
