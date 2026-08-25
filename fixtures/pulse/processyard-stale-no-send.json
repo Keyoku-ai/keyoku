@@ -1,0 +1,102 @@
+{
+  "schemaVersion": "keyoku.dev/pulse-dispatch/v1alpha1",
+  "plannedAt": "2026-08-24T16:59:00.000Z",
+  "outcome": "stale_no_send",
+  "reasonCode": "stale_activity_lease",
+  "reason": "No normal update: 1 active lease is stale; the last trusted checkpoint is frozen.",
+  "failClosed": true,
+  "checkpointIds": [
+    "processyard-m6"
+  ],
+  "frozenSnapshot": {
+    "schemaVersion": "keyoku.dev/pulse-snapshot/v1alpha1",
+    "id": "pulse-bf5358cca23ef1aa4135",
+    "projectId": "processyard",
+    "asOf": "2026-08-24T16:40:00.000Z",
+    "checkpointIds": [
+      "processyard-m6"
+    ],
+    "checkpoints": [
+      {
+        "schemaVersion": "keyoku.dev/pulse-checkpoint/v1alpha1",
+        "id": "processyard-m6",
+        "projectId": "processyard",
+        "runId": "processyard-run-20260824",
+        "leaseIds": [
+          "processyard-ci"
+        ],
+        "title": "M6 · Release boundary verified",
+        "changeSummary": "The complete M0–M6 story passed the fixture's exact-source verification.",
+        "whyItMatters": "A founder brief and developer evidence view can now share one content-bound snapshot.",
+        "publishedAt": "2026-08-24T16:40:00.000Z",
+        "source": {
+          "canonicalRoot": "repo://processyard/main",
+          "branch": "main",
+          "baseSha": "1111111111111111111111111111111111111111",
+          "headSha": "7777777777777777777777777777777777777777",
+          "worktreeDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "ancestryShas": [
+            "1111111111111111111111111111111111111111",
+            "2222222222222222222222222222222222222222",
+            "3333333333333333333333333333333333333333",
+            "4444444444444444444444444444444444444444",
+            "5555555555555555555555555555555555555555",
+            "6666666666666666666666666666666666666666"
+          ],
+          "verifiedDigest": "0506d0991fde0f8580576468ed61bbcce4795a96da704c2ecf2dcccac7f598f3"
+        },
+        "verification": {
+          "status": "verified",
+          "verifiedAt": "2026-08-24T16:40:00.000Z",
+          "methods": [
+            {
+              "kind": "command",
+              "label": "processyard-m6 acceptance check",
+              "reproduce": "./scripts/verify-checkpoint processyard-m6",
+              "result": "Passed in the integration fixture",
+              "evidenceDigest": "b835de76c3ef23734588fdab36234b11a582604e96f6158e4b7877505403879b"
+            }
+          ]
+        },
+        "evidenceBinding": {
+          "mode": "fixture",
+          "label": "processyard demonstration fixture; adapters must bind real Factfile bytes before delivery"
+        },
+        "factfiles": [
+          {
+            "id": "processyard-m6-factfile",
+            "path": ".keyoku/contributions/processyard-m6/factfile.json",
+            "digest": "b573f29e6a47e3b7c80fd589b5584a5c9f16deb9fde25a30b665792d5c7c0930",
+            "sourceDigest": "0506d0991fde0f8580576468ed61bbcce4795a96da704c2ecf2dcccac7f598f3",
+            "state": "ready_for_review"
+          }
+        ],
+        "assets": [],
+        "limitations": [
+          "No production deployment is established by this local fixture.",
+          "Gmail delivery authority and sent-message verification are not configured."
+        ],
+        "nextTask": "Request explicit channel authority before preparing any founder email delivery.",
+        "materialTrigger": "verified_checkpoint",
+        "contentDigest": "9a13906ec2d564fad7bb0c2fd1e6092d7389fac99c7d0725f67c416fd6ce3cd9"
+      }
+    ],
+    "source": {
+      "canonicalRoot": "repo://processyard/main",
+      "branch": "main",
+      "baseSha": "1111111111111111111111111111111111111111",
+      "headSha": "7777777777777777777777777777777777777777",
+      "worktreeDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "ancestryShas": [
+        "1111111111111111111111111111111111111111",
+        "2222222222222222222222222222222222222222",
+        "3333333333333333333333333333333333333333",
+        "4444444444444444444444444444444444444444",
+        "5555555555555555555555555555555555555555",
+        "6666666666666666666666666666666666666666"
+      ],
+      "verifiedDigest": "0506d0991fde0f8580576468ed61bbcce4795a96da704c2ecf2dcccac7f598f3"
+    },
+    "contentDigest": "bf5358cca23ef1aa4135b451b73c61311e5c0716b849394ef522342afe102917"
+  }
+}

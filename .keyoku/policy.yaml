@@ -1,0 +1,16 @@
+schemaVersion: keyoku.dev/policy/v1alpha1
+projectId: keyoku
+distribution:
+  license: MIT
+  publicProjects: free
+  privateProjects: free
+  selfHosted: true
+proof:
+  failClosed: true
+  exactSnapshotBinding: true
+  humanAcceptanceRequired: true
+  generatedEvidenceCommittedByDefault: false
+privacy:
+  publishRawAgentTranscripts: false
+  publishSecrets: false
+  publishEvidenceSummary: true

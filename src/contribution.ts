@@ -754,6 +754,10 @@ function summarizeHumanReview(outcome: Pick<Outcome, "humanCriteria">, reviews: 
   };
 }
 
+function reviewsForRepository(reviews: ReviewEvent[], repository: Pick<RepositorySnapshot, "headSha" | "worktreeDigest">): ReviewEvent[] {
+  return reviews.filter((review) => review.repository.headSha === repository.headSha && review.repository.worktreeDigest === repository.worktreeDigest);
+}
+
 function gateState(machineVerified: boolean, human: GateSnapshot["humanReview"]): GateSnapshot["state"] {
   if (!machineVerified) return "evidence_gaps";
   if (human.failed > 0) return "review_blocked";
@@ -865,7 +869,10 @@ export async function runGate(rootInput: string | undefined, contributionId: str
   let architecture: ArchitectureProjection | undefined;
   try { architecture = scanArchitecture(root); } catch { /* architecture is optional for adopted repositories */ }
   const generatedAt = now();
-  const reviews = readReviews(root, contribution.id);
+  // A human verdict is evidence for one exact source identity. Keep the
+  // append-only review ledger intact, but never project a verdict from an old
+  // head/worktree into a newly generated Factfile.
+  const reviews = reviewsForRepository(readReviews(root, contribution.id), repository);
   const humanReview = summarizeHumanReview(outcome, reviews);
   const reviewPlan = buildReviewPlan(outcome, repository, scope, report, reviews);
   const snapshotBase = {
@@ -939,6 +946,12 @@ export function reviewContribution(input: ReviewContributionInput): GateSnapshot
   if (input.criterionId && !snapshot.outcome.humanCriteria.some((criterion) => criterion.id === input.criterionId)) {
     throw new Error(`Unknown human criterion '${input.criterionId}'.`);
   }
+  if (snapshot.state === "accepted" && input.decision === "accepted") {
+    throw new Error("This exact Factfile is already accepted.");
+  }
+  if (snapshot.state === "accepted" && input.criterionId) {
+    throw new Error("Accepted is terminal for this exact Factfile. Create new source evidence before changing a criterion verdict.");
+  }
   if (input.decision === "accepted" && snapshot.state !== "ready_for_review") {
     throw new Error("Only a ready-for-review Factfile can be accepted. Resolve evidence gaps and run the gate again.");
   }
@@ -962,7 +975,7 @@ export function reviewContribution(input: ReviewContributionInput): GateSnapshot
   snapshot.reviews = [...(snapshot.reviews ?? []), event];
   snapshot.session = readProofSession(root, contribution.id);
   snapshot.humanReview = summarizeHumanReview(snapshot.outcome, snapshot.reviews);
-  if (input.decision === "accepted") {
+  if (input.decision === "accepted" || snapshot.state === "accepted") {
     snapshot.state = "accepted";
     contribution.status = "accepted";
   } else {
@@ -1590,7 +1603,7 @@ export function renderFactfileHtml(snapshot: GateSnapshot, options: { live?: boo
     <ul class="summary-list">${snapshot.evidence.map((item) => `<li class="${item.pass ? "pass" : "fail"}"><span class="mark">${item.pass ? "✓" : "✗"}</span>${esc(item.description)}</li>`).join("")}</ul>
   </section>`;
 
-  // Insight — pending human decisions + proposed directions, each expandable ---------------------
+  // Human decision — keep judgment distinct from optional agent coordination ----------------------
   const humanInsightItems = snapshot.outcome.humanCriteria.length
     ? snapshot.outcome.humanCriteria.map((criterion) => {
         const review = latestHuman.get(criterion.id);
@@ -1607,14 +1620,18 @@ export function renderFactfileHtml(snapshot: GateSnapshot, options: { live?: boo
   const directionActionsHtml = directionSuggestions.length
     ? `<div class="action-row"><button class="action primary" data-action="${options.live ? "send-direction" : "copy-direction"}">${options.live ? (connectedAgents.length ? "Send selected direction" : "Queue selected direction") : "Copy selected direction"}</button><button class="action" data-action="copy-direction">Copy</button></div><p class="action-result" id="direction-result" aria-live="polite"></p><details class="custom-direction"><summary>Write a custom direction <span>— when prepared paths miss your intent</span></summary><div class="custom-body"><p>State what should change, the constraint to preserve, and which evidence should look different afterward.</p><div class="instruction-box"><textarea id="custom-instruction" placeholder="Keep the current API, simplify the reviewer flow, and prove mobile behavior with an annotated screenshot."></textarea><button class="action primary" data-action="${options.live ? "send-custom" : "copy-custom"}">${options.live ? (connectedAgents.length ? "Send direction" : "Queue direction") : "Copy direction"}</button></div><p class="action-result" id="custom-result" aria-live="polite"></p></div></details>`
     : "";
-  const insightHtml = `<section class="insight" aria-label="Pending human judgment">
-    <h2>Insight</h2>
-    <div class="insight-group"><h3>Pending decisions</h3>${blockedInsightItems}${humanInsightItems}</div>
-    <div class="insight-group"><h3>Proposed directions</h3>${directionInsightItems}${directionActionsHtml}</div>
+  const humanDecisionHtml = `<section class="insight" aria-label="Human decision">
+    <h2>Human decision</h2>
+    <div class="insight-group"><h3>Required judgment</h3>${blockedInsightItems}${humanInsightItems}</div>
   </section>`;
 
+  // Evidence is the product: keep a small claim set visible, with coordination subordinate. ------
+  const evidenceFold = `<details class="fold" id="evidence"${snapshot.evidence.length <= 3 ? " open" : ""}><summary><span class="fold-title">Evidence &amp; reproduction</span><span class="fold-meta">${snapshot.summary.passed}/${snapshot.summary.total} supported · ${artifactCount} artifacts</span><span class="chevron">›</span></summary><div class="fold-body"><p style="margin:0 0 14px;color:var(--ink-muted);font-size:12.5px;line-height:1.6">Claim → observation → meaning → limits → reproduction → code.</p><div class="evidence-list">${claims}</div><div class="subhead">Review attention (deterministic signal, not a verdict)</div><div class="queue">${attentionRows}</div></div></details>`;
+  const coordinationFold = directionSuggestions.length
+    ? `<details class="fold" id="coordination"><summary><span class="fold-title">Optional agent coordination</span><span class="fold-meta">${directionSuggestions.length} proposed direction${directionSuggestions.length === 1 ? "" : "s"}</span><span class="chevron">›</span></summary><div class="fold-body"><p style="margin:0 0 14px;color:var(--ink-muted);font-size:12.5px;line-height:1.6">Suggestions are coordination aids, not evidence or verdicts.</p>${directionInsightItems}${directionActionsHtml}</div></details>`
+    : "";
+
   // Everything else — reachable, collapsed by default ------------------------------------------
-  const evidenceFold = `<details class="fold" id="evidence"><summary><span class="fold-title">Full evidence &amp; reproduction</span><span class="fold-meta">${snapshot.summary.passed}/${snapshot.summary.total} supported · ${artifactCount} artifacts</span><span class="chevron">›</span></summary><div class="fold-body"><p style="margin:0 0 14px;color:var(--ink-muted);font-size:12.5px;line-height:1.6">Claim → observation → meaning → limits → reproduction → code.</p><div class="evidence-list">${claims}</div><div class="subhead">Review attention (deterministic signal, not a verdict)</div><div class="queue">${attentionRows}</div></div></details>`;
   const workFold = `<details class="fold" id="work"><summary><span class="fold-title">Work log</span><span class="fold-meta">${session.work.length} items · ${connectedAgents.length} connected</span><span class="chevron">›</span></summary><div class="fold-body"><div class="work-grid">${workRows}</div>${agentSummary}</div></details>`;
   const sessionFold = `<details class="fold" id="session"><summary><span class="fold-title">Session &amp; proof history</span><span class="fold-meta">${history.length} snapshot${history.length === 1 ? "" : "s"} · ${session.eventCount} events</span><span class="chevron">›</span></summary><div class="fold-body">${resolvedDecisionRows ? `<div class="subhead">Resolved this session</div><div class="queue">${resolvedDecisionRows}</div>` : ""}<div class="subhead">Session instructions</div><ul class="plain-list">${instructionRows}</ul><div class="subhead">Proof history</div><div class="history-list">${historyRows}</div></div></details>`;
   const repositoryFold = `<details class="fold" id="repository"><summary><span class="fold-title">Repository, scope &amp; provenance</span><span class="fold-meta">${snapshot.repository.changedFiles.length} changed files</span><span class="chevron">›</span></summary><div class="fold-body"><div class="area-grid">${areas}</div>${architecture}<div class="audit-columns"><div><h3>Exact source identity</h3><div class="identity"><div class="identity-row"><span>Base</span><code title="${esc(snapshot.repository.baseSha)}">${esc(snapshot.repository.baseSha)}</code></div><div class="identity-row"><span>Head</span><code title="${esc(snapshot.repository.headSha)}">${esc(snapshot.repository.headSha)}</code></div><div class="identity-row"><span>Worktree digest</span><code title="${esc(snapshot.repository.worktreeDigest)}">${esc(snapshot.repository.worktreeDigest)}</code></div><div class="identity-row"><span>Generated</span><span>${renderLocalTime(snapshot.generatedAt, false)}</span></div></div><h3>Responsibility</h3><div class="people">${people}</div><h3>Human review history</h3><ul class="plain-list">${reviews}</ul></div><div><h3>Changed files (${snapshot.repository.changedFiles.length})</h3><ul class="plain-list file-list">${files}</ul><h3>Outcome constraints</h3><ul class="plain-list">${constraints}</ul><h3>Known limits</h3><ul class="plain-list">${limits}</ul></div></div></div></details>`;
@@ -1693,8 +1710,9 @@ export function renderFactfileHtml(snapshot: GateSnapshot, options: { live?: boo
     <p class="ff-objective">${esc(snapshot.outcome.objective)}</p>
     ${heroHtml}
     ${summaryBlockHtml}
-    ${insightHtml}
     ${evidenceFold}
+    ${humanDecisionHtml}
+    ${coordinationFold}
     ${workFold}
     ${sessionFold}
     ${repositoryFold}

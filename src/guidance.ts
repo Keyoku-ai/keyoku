@@ -9,8 +9,48 @@ import type {
  * The convergence protocol, served as the MCP server's instructions so any
  * connected agent knows how to drive the loop.
  */
-export const PROTOCOL = `Keyoku is a convergence harness: it turns goals with machine-checkable
-success criteria into a loop you (the agent) drive until the goal is reached.
+export const PROTOCOL = `Keyoku is the provider-neutral proof and attention layer
+for software contributions made by people and coding agents. It turns a
+repository-owned outcome into bounded evidence for the exact Git revision under
+review, then shows which decisions still belong to a human. Claude Code, Codex,
+Copilot, Cursor, OpenHands, custom agents, CI, and human-only development remain
+replaceable execution layers.
+
+When a repository contains .keyoku/project.yaml, call project_inspect before
+substantial work and outcome_list to select the relevant versioned definition of
+done. Use architecture_scan when a code tour or current system projection helps
+explain the change; architecture_propose records a semantic proposal without
+silently rewriting declared project truth.
+
+Use contribution_start to record who or what is working (agents include harness,
+model, and ownerId). During long work, use contribution_report_work for concise
+task status. Activity is coordination, never proof. If—and only if—safe progress
+requires accountable human judgment, use contribution_request_decision with the
+agent intent, concrete blocker, reason it belongs to the human, bounded options,
+recommendation, and consequence of no response. Continue independent work.
+Poll contribution_next_instruction at natural task boundaries and acknowledge
+received direction with contribution_ack_instruction.
+
+Before the final contribution_gate, use contribution_propose_directions to give
+the human 1-4 genuinely useful next moves. Reason across the whole outcome,
+changed-source scope, work history, architecture, evidence, limits, and pending
+human judgments. For each move provide the expected outcome effect, concise
+evidence-grounded basis, inspectable references, deep context, tradeoffs, and an
+executable instruction. Do not expose private chain-of-thought; summarize the
+rationale and assumptions a reviewer needs. When the outcome is supported,
+include what should happen next (acceptance, shipping, deeper validation, or a
+deliberate follow-on) rather than inventing more unfinished work.
+
+Use contribution_gate after meaningful iterations. The gate executes the repository's declared probes, emits JSON,
+Markdown, and HTML evidence, and fails closed. Passing means READY FOR HUMAN
+REVIEW for that exact snapshot—not universally correct, secure, or accepted.
+Use contribution_review to append a named human's note or acceptance. It rejects
+agent reviewers and stale Factfiles whose Git head or worktree digest changed.
+
+Not every outcome is machine-checkable. Outcomes keep deterministic criteria
+and named human criteria separate: tests establish observed behavior; people
+judge product quality, usability, risk, and acceptance. The lower-level goal
+loop uses machine-verifiable probes for the portion it can repeatedly assess.
 
 REACH FOR KEYOKU whenever a task is a multi-step goal with a verifiable end
 state — a migration, "make X production-ready", "get CI green", a deploy, a
@@ -23,8 +63,9 @@ existing knowledge + goals + workflows so you reuse what was already learned.
 The protocol:
 1. goal_create — declare a goal. Success criteria are probes (shell command,
    HTTP request, or MCP connector tool call) plus assertions over their
-   output. Criteria must be machine-checkable; if the user's goal is vague,
-   ask them to pin down how success would be verified, then encode it.
+   output. These goal-loop criteria must be machine-verifiable. Put irreducible
+   product, UX, maintainability, or risk judgment in outcome humanCriteria
+   rather than fabricating a proxy check.
 2. goal_assess — the harness runs every probe and evaluates every assertion
    deterministically. The response tells you which criteria are unmet and
    what to do next. Assessing is read-only and free; do it often.
@@ -44,6 +85,12 @@ learns nothing at all).
 Autonomy levels (set per goal): observe = never act, only report findings;
 suggest = propose actions and let the user run them; approve = ask the user
 before each action; autonomous = act without asking, within the constraints.
+
+Human attention is an interrupt budget. Request it only when a consequence is
+material, approved policy cannot resolve it, the work is blocked or time-bound,
+the options differ meaningfully, and a named person can decide. Otherwise use
+the safest reversible path, gather evidence, or include it in the next
+checkpoint. Never turn routine agent uncertainty into approval fatigue.
 
 Connectors extend the harness's reach: connector_add registers an external
 MCP server (stdio or HTTP) OR synthesizes one from an OpenAPI/Swagger spec

@@ -1,50 +1,101 @@
-import { realpathSync } from "node:fs";
+import { appendFileSync, existsSync, realpathSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 import { audit, decideApproval } from "./approvals.js";
 import { ConnectorManager } from "./connectors.js";
+import {
+  findProjectRoot,
+  initProject,
+  listOutcomes,
+  listOutcomeHistory,
+  listFactfileHistory,
+  loadContribution,
+  loadProject,
+  publishFactfile,
+  reviewContribution,
+  renderFactfileGithubMarkdown,
+  runGate,
+  startContribution,
+} from "./contribution.js";
+import { archCmd } from "./arch.js";
+import { deckCmd } from "./deck.js";
+import { demoCmd } from "./demo.js";
+import { startProofSessionServer } from "./session-server.js";
+import { customizeProof, initProof } from "./project-profile.js";
+import { runProofDemo } from "./proof-demo.js";
+import { pulseCmd } from "./pulse-cli.js";
 import { Harness } from "./engine.js";
 import { runLearning } from "./learn.js";
-import {
-  driveToConvergence,
-  installPolicies,
-  omnigentUserMessageEvent,
-} from "./omnigent-guardrails.js";
-import { compileConstraintsToPolicies } from "./policy-compiler.js";
-import { CONNECTOR_PRESETS } from "./presets.js";
-import { assertOmnigentDriveAuthorized, runGoalOnOmnigent } from "./run.js";
 import { buildServer, VERSION } from "./server.js";
 import { resolveSlmFromEnv } from "./slm.js";
 import { redactSecrets } from "./activity.js";
 import { newId, Store } from "./store.js";
-import type { ActivityEvent, ConvergenceReport, WorkflowStep, WorkflowStepTemplate, WorkflowTemplate } from "./types.js";
+import type { ActivityEvent, WorkflowStep, WorkflowStepTemplate, WorkflowTemplate } from "./types.js";
 
 export { ConnectorManager } from "./connectors.js";
+export {
+  ActorSchema,
+  ContributionManifestSchema,
+  OutcomeSchema,
+  ProjectManifestSchema,
+  ReviewEventSchema,
+  captureRepository,
+  findProjectRoot,
+  initProject,
+  listOutcomes,
+  listOutcomeHistory,
+  loadContribution,
+  loadOutcome,
+  loadProject,
+  publishFactfile,
+  reviewContribution,
+  renderFactfileHtml,
+  renderFactfileGithubMarkdown,
+  renderFactfileMarkdown,
+  runGate,
+  startContribution,
+  type Actor,
+  type ContributionManifest,
+  type GateSnapshot,
+  type FactfileHistoryItem,
+  type Outcome,
+  type ProjectManifest,
+  type ReviewEvent,
+} from "./contribution.js";
+export {
+  AgentPresenceSchema,
+  DecisionOptionSchema,
+  DecisionRequestSchema,
+  DirectionProposalSchema,
+  InstructionSchema,
+  ProofSessionEventSchema,
+  WorkItemSchema,
+  acknowledgeInstruction,
+  heartbeatAgent,
+  nextInstruction,
+  queueInstruction,
+  readProofSession,
+  reportWork,
+  proposeDirection,
+  requestDecision,
+  resolveDecision,
+  type AgentPresence,
+  type DecisionRequest,
+  type DirectionProposal,
+  type Instruction,
+  type ProofSessionState,
+  type WorkItem,
+} from "./proof-session.js";
+export { startProofSessionServer, type ProofSessionServer } from "./session-server.js";
+export { customizeProof, detectProject, initProof, renderGithubWorkflow, type ProjectKind, type ProjectProfile } from "./project-profile.js";
 export { Harness } from "./engine.js";
-export {
-  continuationMessage,
-  driveToConvergence,
-  installPolicies,
-  omnigentUserMessageEvent,
-  removePolicy,
-} from "./omnigent-guardrails.js";
-export {
-  buildConvergenceGate,
-  compileConstraintsToPolicies,
-  type OmnigentPolicySpec,
-} from "./policy-compiler.js";
-export { CONNECTOR_PRESETS } from "./presets.js";
-export { ensureOmnigentConnector, runGoalOnOmnigent } from "./run.js";
-export {
-  chooseAgentForGoal,
-  listOmnigentAgents,
-  type AgentChoice,
-  type OmnigentAgentCandidate,
-} from "./dispatch.js";
 export { buildServer, VERSION } from "./server.js";
 export { Store } from "./store.js";
+export * from "./pulse.js";
+export * from "./pulse-fixtures.js";
 
 // stdout is the MCP protocol channel in serve mode — all human output in that
 // mode MUST go to stderr.
@@ -64,20 +115,12 @@ function flagValue(argv: string[], flag: string): string | undefined {
   return value && !value.startsWith("--") ? value : undefined;
 }
 
-function parseOmnigentTarget(value: string | undefined): { agentName?: string } | undefined {
-  const match = /^omnigent(?::(.+))?$/.exec(value ?? "");
-  if (!match) return undefined;
-  const agentName = match[1]?.trim();
-  return agentName ? { agentName } : {};
-}
-
-function unmetCriteria(report: ConvergenceReport): string[] {
-  return report.criteria
-    .filter((criterion) => !criterion.pass)
-    .map((criterion) => {
-      const detail = criterion.error ? ` — ${criterion.error}` : "";
-      return `[${criterion.id}] ${criterion.description}${detail}`;
-    });
+function flagValues(argv: string[], flag: string): string[] {
+  const values: string[] = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] === flag && argv[index + 1] && !argv[index + 1]!.startsWith("--")) values.push(argv[index + 1]!);
+  }
+  return values;
 }
 
 /**
@@ -169,10 +212,23 @@ async function serve(): Promise<void> {
 async function status(): Promise<void> {
   const harness = buildHarness();
   const goals = harness.store.listGoals();
-  console.log(`keyoku v${VERSION} — home: ${harness.store.dir}\n`);
+  console.log(`keyoku v${VERSION} — continuous proof for human-owned software\n`);
+  try {
+    const root = findProjectRoot();
+    const project = loadProject(root);
+    const outcomes = listOutcomes(root);
+    console.log(`Project: ${project.name} (${project.id})\nRoot: ${root}\nOutcomes: ${outcomes.length}`);
+    for (const outcome of outcomes) {
+      console.log(`  ${outcome.id}@${outcome.revision} — ${outcome.title}`);
+    }
+  } catch {
+    console.log("Project: not initialized (run 'keyoku project init')");
+  }
+  console.log(`\nPersonal harness home: ${harness.store.dir}`);
   if (goals.length === 0) {
-    console.log("No goals yet. Connect from Claude Code and use goal_create.");
+    console.log("Goals: (none)");
   } else {
+    console.log("Goals:");
     for (const g of goals) {
       console.log(
         `  [${g.status.toUpperCase().padEnd(9)}] ${g.slug} — ${g.objective} (${g.usedIterations}/${g.maxIterations} iterations, ${g.criteria.length} criteria)`,
@@ -185,64 +241,6 @@ async function status(): Promise<void> {
   console.log(
     `Workflows learned: ${workflows.map((w) => `${w.slug} (${w.stats.convergences}x)`).join(", ") || "(none)"}`,
   );
-}
-
-async function connectCmd(rest: string[]): Promise<void> {
-  if (rest.includes("--list") || rest.includes("-l")) {
-    console.log("Available connector presets:");
-    for (const [name, preset] of Object.entries(CONNECTOR_PRESETS).sort(([a], [b]) => a.localeCompare(b))) {
-      console.log(`  ${name} (${preset.autonomy}) — ${preset.description}`);
-    }
-    return;
-  }
-
-  const name = rest.find((arg) => !arg.startsWith("-"));
-  if (!name) {
-    console.error("Usage: keyoku connect <preset>\n       keyoku connect --list");
-    process.exitCode = 2;
-    return;
-  }
-
-  const preset = CONNECTOR_PRESETS[name];
-  if (!preset) {
-    console.error(`Unknown connector preset '${name}'.\n\nRun: keyoku connect --list`);
-    process.exitCode = 2;
-    return;
-  }
-
-  const harness = buildHarness();
-  const transport = preset.buildTransport();
-  const existing = harness.connectors.get(name);
-  try {
-    const { tools } = await harness.connectors.add({
-      name,
-      description: preset.description,
-      transport,
-      autonomy: preset.autonomy,
-      addedAt: existing?.addedAt ?? new Date().toISOString(),
-    });
-    audit(harness.store, {
-      actor: "cli",
-      op: "connect",
-      target: name,
-      summary: `registered preset ${name} (${tools.length} tools)`,
-      ok: true,
-    });
-    const url = transport.type === "openapi" ? transport.baseUrl ?? transport.specUrl : name;
-    console.log(`Connected ${name} at ${url} (${tools.length} tools, autonomy ${preset.autonomy}).`);
-  } catch (err) {
-    audit(harness.store, {
-      actor: "cli",
-      op: "connect",
-      target: name,
-      summary: `failed: ${err instanceof Error ? err.message.slice(0, 120) : String(err)}`,
-      ok: false,
-    });
-    console.error(err instanceof Error ? err.message : String(err));
-    process.exitCode = 2;
-  } finally {
-    await harness.connectors.closeAll();
-  }
 }
 
 // Exit codes: 0 = converged, 1 = not converged, 2 = error (unknown goal etc.)
@@ -261,135 +259,6 @@ async function assess(ref: string | undefined): Promise<void> {
     }
     console.log(`\n${report.guidance}`);
     process.exitCode = report.converged ? 0 : 1;
-  } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
-    process.exitCode = 2;
-  } finally {
-    await harness.connectors.closeAll();
-  }
-}
-
-async function convergeCmd(rest: string[]): Promise<void> {
-  const goalRef = flagValue(rest, "--goal");
-  const session = flagValue(rest, "--session");
-  const roundsRaw = flagValue(rest, "--max-rounds");
-  const maxRounds = roundsRaw === undefined ? undefined : Number(roundsRaw);
-  if (!goalRef || !session || (maxRounds !== undefined && (!Number.isInteger(maxRounds) || maxRounds <= 0))) {
-    console.error("Usage: keyoku converge --goal <slug> --session <omnigent-session-id> [--max-rounds N]");
-    process.exitCode = 2;
-    return;
-  }
-
-  const harness = buildHarness();
-  try {
-    // Same autonomy gate as the goal_converge MCP tool — this CLI subcommand
-    // drives the identical mutating Omnigent calls (install policy, post events)
-    // over the raw connector path and must NOT bypass the trust ladder.
-    assertOmnigentDriveAuthorized(harness.connectors);
-    const goal = harness.getGoal(goalRef);
-    const result = await driveToConvergence({
-      connectors: harness.connectors,
-      sessionId: session,
-      goalSlug: goal.slug,
-      maxRounds,
-      assess: async () => {
-        const report = await harness.assess(goal.slug);
-        return { converged: report.converged, unmet: unmetCriteria(report) };
-      },
-      postMessage: async (text) => {
-        const posted = await harness.connectors.callTool("omnigent", "post_event_v1_sessions__session_id__events_post", {
-          session_id: session,
-          body: omnigentUserMessageEvent(text),
-        });
-        if (posted.isError) throw new Error(`posting Omnigent continuation failed: ${posted.text}`);
-      },
-    });
-    console.log(
-      result.converged
-        ? `Goal '${goal.slug}' converged after ${result.rounds} round(s); convergence gate removed.`
-        : `Goal '${goal.slug}' did not converge after ${result.rounds} round(s); convergence gate left installed.`,
-    );
-    process.exitCode = result.converged ? 0 : 1;
-  } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
-    process.exitCode = 2;
-  } finally {
-    await harness.connectors.closeAll();
-  }
-}
-
-async function guardrailsCmd(rest: string[]): Promise<void> {
-  const goalRef = flagValue(rest, "--goal");
-  const session = flagValue(rest, "--session");
-  if (!goalRef || !session) {
-    console.error("Usage: keyoku guardrails --goal <slug> --session <omnigent-session-id>");
-    process.exitCode = 2;
-    return;
-  }
-
-  const harness = buildHarness();
-  try {
-    assertOmnigentDriveAuthorized(harness.connectors);
-    const goal = harness.getGoal(goalRef);
-    const specs = await compileConstraintsToPolicies(goal.constraints, { slm: harness.slm });
-    const policyIds = await installPolicies(harness.connectors, session, specs);
-    if (policyIds.length === 0) {
-      console.log(`Goal '${goal.slug}' has no constraints; no Omnigent policies installed.`);
-      return;
-    }
-    console.log(`Installed ${policyIds.length} Omnigent guardrail polic${policyIds.length === 1 ? "y" : "ies"} for '${goal.slug}':`);
-    for (const id of policyIds) console.log(`  ${id}`);
-  } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
-    process.exitCode = 2;
-  } finally {
-    await harness.connectors.closeAll();
-  }
-}
-
-async function runCmd(rest: string[]): Promise<void> {
-  const goalRef = rest.find((arg) => !arg.startsWith("-"));
-  const target = parseOmnigentTarget(flagValue(rest, "--on"));
-  const roundsRaw = flagValue(rest, "--max-rounds");
-  const maxRounds = roundsRaw === undefined ? undefined : Number(roundsRaw);
-  if (!goalRef || !target || (maxRounds !== undefined && (!Number.isInteger(maxRounds) || maxRounds <= 0))) {
-    console.error("Usage: keyoku run <goalSlug> --on omnigent[:agentName] [--max-rounds N]");
-    process.exitCode = 2;
-    return;
-  }
-
-  const harness = buildHarness();
-  try {
-    const goal = harness.getGoal(goalRef);
-    console.log(
-      `Running goal '${goal.slug}' on Omnigent${target.agentName ? ` agent '${target.agentName}'` : ""}...`,
-    );
-    console.log(
-      target.agentName
-        ? "Ensuring Omnigent connector and creating a session..."
-        : "Ensuring Omnigent connector, choosing an agent, and creating a session...",
-    );
-    const result = await runGoalOnOmnigent({
-      engine: harness,
-      connectors: harness.connectors,
-      goalSlug: goal.slug,
-      ...(target.agentName ? { agentName: target.agentName } : {}),
-      ...(maxRounds !== undefined ? { maxRounds } : {}),
-      log: () => {},
-    });
-    console.log(`Omnigent session: ${result.sessionId}`);
-    if (result.dispatch) {
-      console.log(
-        `Chosen Omnigent agent: ${result.dispatch.agent}${result.dispatch.degraded ? " (degraded)" : ""}`,
-      );
-      console.log(`Dispatch rationale: ${result.dispatch.rationale}`);
-    }
-    console.log(
-      result.converged
-        ? `Goal '${goal.slug}' converged after ${result.rounds} round(s).`
-        : `Goal '${goal.slug}' did not converge after ${result.rounds} round(s).`,
-    );
-    process.exitCode = result.converged ? 0 : 1;
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     process.exitCode = 2;
@@ -1354,21 +1223,37 @@ function auditCmd(rest: string[]): void {
 }
 
 function help(): void {
-  console.log(`keyoku v${VERSION} — the harness with muscle memory
+  console.log(`keyoku v${VERSION} — continuous proof for human-owned software
 
 Usage:
   keyoku [serve]                    Run as an MCP server on stdio (default)
+  keyoku proof init                 Detect this project and install the free proof workflow
+  keyoku proof customize <outcome>  Change outcome language, checks, decisions, or scope
+  keyoku proof run <outcome>        Create an exact-snapshot Factfile locally
+  keyoku proof serve <contribution> Open a live human ↔ agent proof session
+  keyoku proof ci <outcome>         Render a native GitHub Check summary and artifact
+  keyoku demo <init|record|watch>   Recorded, agent-watched product demo as evidence
+  keyoku deck init                  Write a commented .keyoku/deck.yaml template
+  keyoku deck build [--for P]       Deterministically render one persona's HTML deck
+  keyoku deck plan "<ask>"          Agent drafts/updates deck.yaml from a natural prompt
+  keyoku arch render <spec.yaml>    Render a standalone architecture-diagram SVG [-o <out.svg>]
+  keyoku project init               Add portable .keyoku project metadata
+  keyoku proof demo [--open]        Run a real proof in a disposable repository
+  keyoku project show               Explain the current Keyoku project
+  keyoku outcome list               List repository outcome contracts
+  keyoku outcome history <id>       Show the Git history of an outcome contract
+  keyoku contribution start <outcome>
+                                     Open an accountable contribution
+  keyoku contribution show <id>     Show contribution status and actors
+  keyoku contribution review <id>   Append a human review note
+  keyoku contribution accept <id>   Accept the exact current proven snapshot
+  keyoku gate <contribution>        Verify outcome and render its Factfile
+  keyoku factfile <contribution>    Print the generated HTML report path
+  keyoku factfile publish <id>      Explicitly upload canonical JSON to keyoku-engine
+  keyoku pulse help                 Append, plan, and render trusted cross-checkpoint progress
   keyoku init                       Wire up Claude Code hook + MCP config
   keyoku status                     Show goals, connectors, learned workflows
-  keyoku connect <preset>           Add/update a built-in connector preset
-  keyoku connect --list             List available connector presets
   keyoku assess <goal>              One-shot convergence check (exit 0 = converged)
-  keyoku run <goal> --on omnigent[:agentName]
-                                     Create an Omnigent session and drive <goal> to convergence
-  keyoku converge --goal G --session S
-                                     Keep an Omnigent session working until G converges
-  keyoku guardrails --goal G --session S
-                                     Install Omnigent policies compiled from G's constraints
   keyoku watch <goal>|--all         Re-assess on an interval [--interval <seconds>]
   keyoku learn                      Mine patterns from activity (SLM or heuristic)
   keyoku record                     Record a PostToolUse hook event (reads stdin JSON)
@@ -1383,11 +1268,262 @@ Usage:
   keyoku help | version
 
 Quick start:
-  npx keyoku init          Wire into Claude Code (adds MCP + PostToolUse hook)
-  npx keyoku status        Check what's being tracked
-  npx keyoku serve         Start the MCP server manually
+  keyoku proof demo --open
+  keyoku proof init
+  keyoku proof customize review-ready-change --objective "A user can complete checkout"
+  keyoku proof run review-ready-change
 
-State lives in $KEYOKU_HOME (default ~/.keyoku).`);
+Project proof lives in .keyoku/. Personal agent memory lives in $KEYOKU_HOME (default ~/.keyoku).`);
+}
+
+async function proofCmd(rest: string[]): Promise<void> {
+  const sub = rest[0] ?? "run";
+  if (sub === "demo") {
+    const directory = flagValue(rest, "--dir");
+    await runProofDemo({
+      ...(directory ? { root: directory } : {}),
+      open: rest.includes("--open"),
+      log: (line) => console.log(line),
+    });
+    return;
+  }
+  if (sub === "init") {
+    const result = initProof({
+      outcomeId: flagValue(rest, "--outcome"),
+      title: flagValue(rest, "--title"),
+      objective: flagValue(rest, "--objective"),
+      check: flagValue(rest, "--check"),
+      forceWorkflow: rest.includes("--force-workflow"),
+    });
+    console.log(`Keyoku proof is ready for ${result.profile.label}.\nOutcome: ${resolve(result.outcomePath)}\nGitHub workflow: ${resolve(result.workflowPath)}\n\nReview the outcome language, then run:\n  keyoku proof run ${result.outcome.id}`);
+    return;
+  }
+  if (sub === "customize") {
+    const outcomeId = rest[1];
+    if (!outcomeId || outcomeId.startsWith("-")) throw new Error("Usage: keyoku proof customize <outcome> [--title <text>] [--objective <text>] [--check <command> --claim <text> --why <text>] [--decision <question> --decision-id <id> --guidance <text>] [--include <glob>] [--exclude <glob>] [--max-files <n>]");
+    const maxFilesValue = flagValue(rest, "--max-files");
+    const maxChangedFiles = maxFilesValue === undefined ? undefined : Number(maxFilesValue);
+    if (maxChangedFiles !== undefined && (!Number.isInteger(maxChangedFiles) || maxChangedFiles <= 0)) throw new Error("--max-files must be a positive integer.");
+    const include = flagValues(rest, "--include");
+    const exclude = flagValues(rest, "--exclude");
+    const hasEdits = ["--title", "--objective", "--check", "--decision", "--include", "--exclude", "--max-files"].some((flag) => rest.includes(flag));
+    if (!hasEdits) {
+      const outcome = listOutcomes(findProjectRoot()).find((candidate) => candidate.id === outcomeId);
+      if (!outcome) throw new Error(`Unknown outcome '${outcomeId}'.`);
+      console.log(`${outcome.title} · revision ${outcome.revision}\n\nOutcome\n  ${outcome.objective}\n\nAutomated claims (${outcome.criteria.length})\n${outcome.criteria.map((criterion, index) => `  ${index + 1}. ${criterion.description}`).join("\n")}\n\nHuman decisions (${outcome.humanCriteria.length})\n${outcome.humanCriteria.map((criterion, index) => `  ${index + 1}. ${criterion.description}`).join("\n") || "  None declared"}\n\nCustomize without editing YAML:\n  keyoku proof customize ${outcome.id} --objective "What must be observably true"\n  keyoku proof customize ${outcome.id} --check "npm run test:e2e" --claim "Checkout works end to end" --why "This is the user-visible outcome"\n  keyoku proof customize ${outcome.id} --decision "The flow is clear on mobile" --guidance "Inspect the attached desktop and mobile screenshots"\n  keyoku proof customize ${outcome.id} --include "src/**" --include "tests/**" --max-files 25`);
+      return;
+    }
+    const result = customizeProof({
+      root: findProjectRoot(),
+      outcomeId,
+      title: flagValue(rest, "--title"),
+      objective: flagValue(rest, "--objective"),
+      check: flagValue(rest, "--check"),
+      claim: flagValue(rest, "--claim"),
+      why: flagValue(rest, "--why"),
+      decision: flagValue(rest, "--decision"),
+      decisionId: flagValue(rest, "--decision-id"),
+      guidance: flagValue(rest, "--guidance"),
+      ...(include.length ? { include } : {}),
+      ...(exclude.length ? { exclude } : {}),
+      ...(maxChangedFiles !== undefined ? { maxChangedFiles } : {}),
+    });
+    console.log(`Updated ${result.outcome.id} to revision ${result.outcome.revision}.\nChanged: ${result.changes.join(", ")}\nContract: ${resolve(result.outcomePath)}\n\nRun the new proof:\n  keyoku proof run ${result.outcome.id}`);
+    return;
+  }
+  if (sub === "serve") {
+    const contributionId = rest[1];
+    if (!contributionId || contributionId.startsWith("-")) throw new Error("Usage: keyoku proof serve <contribution-id> [--port <number>] [--no-open]");
+    const portValue = flagValue(rest, "--port");
+    const port = portValue === undefined ? undefined : Number(portValue);
+    if (port !== undefined && (!Number.isInteger(port) || port < 0 || port > 65535)) throw new Error("--port must be an integer from 0 to 65535.");
+    const session = await startProofSessionServer({ root: findProjectRoot(), contributionId, ...(port !== undefined ? { port } : {}) });
+    console.log(`Keyoku live proof session\n${session.url}\n\nThe link is local, token-scoped, and remains valid while this process runs.`);
+    if (!rest.includes("--no-open")) {
+      try {
+        if (process.platform === "darwin") execFileSync("open", [session.url], { stdio: "ignore" });
+        else if (process.platform === "win32") execFileSync("cmd", ["/c", "start", "", session.url], { stdio: "ignore" });
+        else execFileSync("xdg-open", [session.url], { stdio: "ignore" });
+      } catch { console.error("Could not open a browser automatically; use the URL above."); }
+    }
+    await new Promise<void>((resolvePromise) => {
+      const stop = () => { void session.close().finally(resolvePromise); };
+      process.once("SIGINT", stop);
+      process.once("SIGTERM", stop);
+    });
+    return;
+  }
+  if (sub !== "run" && sub !== "ci") throw new Error("Usage: keyoku proof demo|init|customize|serve|run|ci [outcome]");
+  const outcomeId = rest[1];
+  if (!outcomeId || outcomeId.startsWith("-")) throw new Error(`Usage: keyoku proof ${sub} <outcome> [--base <git-ref>] [--summary <text>]`);
+  const root = findProjectRoot();
+  const githubActor = process.env.GITHUB_ACTOR;
+  const harness = flagValue(rest, "--harness") ?? (sub === "ci" ? "GitHub Actions" : undefined);
+  const model = flagValue(rest, "--model");
+  const actorName = flagValue(rest, "--actor") ?? (sub === "ci" ? githubActor ?? "GitHub Actions" : undefined);
+  const contribution = startContribution({
+    root,
+    outcomeId,
+    title: flagValue(rest, "--title"),
+    summary: flagValue(rest, "--summary"),
+    baseSha: flagValue(rest, "--base") ?? process.env.KEYOKU_BASE_SHA,
+    reuseActive: sub === "run" && !rest.includes("--new"),
+    ...(actorName || harness || model ? { actor: {
+      kind: harness || model ? "agent" as const : "human" as const,
+      id: flagValue(rest, "--actor-id") ?? (sub === "ci" ? `github:${githubActor ?? "actions"}:${process.env.GITHUB_RUN_ID ?? "local"}` : actorName ?? "local-agent"),
+      name: actorName ?? model ?? harness ?? "Agent",
+      role: sub === "ci" ? "proof runner" : "contributor",
+      ...(harness ? { harness } : {}),
+      ...(model ? { model } : {}),
+      ...(harness || model ? { ownerId: flagValue(rest, "--owner") ?? "repository-owner" } : {}),
+    } } : {}),
+  });
+  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `contribution_id=${contribution.id}\n`, "utf8");
+  const snapshot = await runGate(root, contribution.id);
+  const dir = resolve(root, ".keyoku", "contributions", contribution.id);
+  const githubMarkdown = renderFactfileGithubMarkdown(snapshot);
+  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, githubMarkdown, "utf8");
+  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `state=${snapshot.state}\nfactfile=${dir}/factfile.html\n`, "utf8");
+  console.log(`${snapshot.state.replaceAll("_", " ").toUpperCase()} — ${snapshot.summary.passed}/${snapshot.summary.total} automated claims; ${snapshot.humanReview.pending} human decisions pending\nContribution: ${contribution.id}\nGitHub summary: ${dir}/factfile.github.md\nFull Factfile: ${dir}/factfile.html`);
+  const machineBlocked = snapshot.state === "evidence_gaps" || snapshot.state === "review_blocked";
+  if (machineBlocked || (sub === "run" && snapshot.state !== "ready_for_review" && snapshot.state !== "accepted")) process.exitCode = 1;
+}
+
+function projectCmd(rest: string[]): void {
+  const sub = rest[0] ?? "show";
+  if (sub === "init") {
+    const manifest = initProject({
+      id: flagValue(rest, "--id"),
+      name: flagValue(rest, "--name"),
+      summary: flagValue(rest, "--summary"),
+    });
+    console.log(`Created .keyoku/project.yaml for ${manifest.name}.\n\nNext: add an outcome contract under .keyoku/outcomes/.`);
+    return;
+  }
+  if (sub === "show") {
+    const root = findProjectRoot();
+    const project = loadProject(root);
+    const outcomes = listOutcomes(root);
+    console.log(`${project.name} (${project.id})\n${project.summary}\n\nRoot: ${root}\nOutcomes: ${outcomes.length}`);
+    return;
+  }
+  throw new Error("Usage: keyoku project init|show");
+}
+
+function outcomeCmd(rest: string[]): void {
+  const sub = rest[0] ?? "list";
+  if (sub === "history") {
+    const id = rest[1];
+    if (!id) throw new Error("Usage: keyoku outcome history <id>");
+    const history = listOutcomeHistory(findProjectRoot(), id);
+    if (!history.length) {
+      console.log(`No committed history for '${id}' yet. Commit the outcome contract to make its revisions public.`);
+      return;
+    }
+    console.log(`${id} — repository-owned outcome history\n`);
+    for (const entry of history) console.log(`  ${entry.sha.slice(0, 12)}  ${entry.authoredAt}  r${entry.revision ?? "?"}  ${entry.subject} — ${entry.author}`);
+    return;
+  }
+  if (sub !== "list") throw new Error("Usage: keyoku outcome list|history <id>");
+  const outcomes = listOutcomes();
+  if (outcomes.length === 0) {
+    console.log("No outcomes yet. Add .keyoku/outcomes/<id>.yaml.");
+    return;
+  }
+  for (const outcome of outcomes) {
+    console.log(`  ${outcome.id}@${outcome.revision} — ${outcome.title} (${outcome.criteria.length} criteria)`);
+  }
+}
+
+function contributionCmd(rest: string[]): void {
+  const sub = rest[0];
+  const ref = rest[1];
+  if (sub === "start") {
+    if (!ref) throw new Error("Usage: keyoku contribution start <outcome> [--title <title>] [--harness <name>] [--model <name>]");
+    const root = findProjectRoot();
+    const actorName = flagValue(rest, "--actor");
+    const harness = flagValue(rest, "--harness");
+    const model = flagValue(rest, "--model");
+    const contribution = startContribution({
+      root,
+      outcomeId: ref,
+      title: flagValue(rest, "--title"),
+      summary: flagValue(rest, "--summary"),
+      ...(actorName || harness || model
+        ? {
+            actor: {
+              kind: harness || model ? "agent" : "human",
+              id: flagValue(rest, "--actor-id") ?? actorName ?? `${harness ?? "agent"}:${model ?? "unspecified"}`,
+              name: actorName ?? model ?? harness ?? "Agent",
+              role: harness || model ? "implementer" : "accountable owner",
+              ...(harness ? { harness } : {}),
+              ...(model ? { model } : {}),
+              ...(harness || model ? { ownerId: flagValue(rest, "--owner") ?? "local-human" } : {}),
+            },
+          }
+        : {}),
+    });
+    console.log(`Started ${contribution.id}\nOutcome: ${contribution.outcomeId}@${contribution.outcomeRevision}\nStatus: ${contribution.status}\n\nVerify with: keyoku gate ${contribution.id}`);
+    return;
+  }
+  if (sub === "show") {
+    if (!ref) throw new Error("Usage: keyoku contribution show <id>");
+    const contribution = loadContribution(findProjectRoot(), ref);
+    console.log(`${contribution.title}\n${contribution.id}\nOutcome: ${contribution.outcomeId}@${contribution.outcomeRevision}\nStatus: ${contribution.status}\nActors: ${contribution.actors.map((actor) => `${actor.name} (${actor.kind})`).join(", ")}`);
+    return;
+  }
+  if (sub === "review" || sub === "accept") {
+    if (!ref) throw new Error(`Usage: keyoku contribution ${sub} <id> --comment <text> [--reviewer <name>]`);
+    const comment = flagValue(rest, "--comment");
+    if (!comment) throw new Error("A non-empty --comment is required so the public receipt explains the human decision.");
+    const reviewerName = flagValue(rest, "--reviewer");
+    const verdictValue = flagValue(rest, "--verdict");
+    if (verdictValue && verdictValue !== "pass" && verdictValue !== "fail") throw new Error("--verdict must be pass or fail.");
+    const snapshot = reviewContribution({
+      root: findProjectRoot(),
+      contributionId: ref,
+      decision: sub === "accept" ? "accepted" : "note",
+      comment,
+      criterionId: flagValue(rest, "--criterion"),
+      verdict: verdictValue as "pass" | "fail" | undefined,
+      ...(reviewerName ? { reviewer: { kind: "human", id: flagValue(rest, "--reviewer-id") ?? reviewerName, name: reviewerName, role: "reviewer" } } : {}),
+    });
+    console.log(`${sub === "accept" ? "ACCEPTED" : "REVIEW RECORDED"} — ${snapshot.outcome.title}\nSnapshot: ${snapshot.repository.headSha.slice(0, 12)}+${snapshot.repository.worktreeDigest.slice(0, 12)}\nFactfile: ${resolve(findProjectRoot(), ".keyoku", "contributions", ref, "factfile.html")}`);
+    return;
+  }
+  throw new Error("Usage: keyoku contribution start|show|review|accept <ref>");
+}
+
+async function gateCmd(rest: string[]): Promise<void> {
+  const ref = rest.find((value) => !value.startsWith("-"));
+  if (!ref) throw new Error("Usage: keyoku gate <contribution-id>");
+  const root = findProjectRoot();
+  const snapshot = await runGate(root, ref);
+  const report = resolve(root, ".keyoku", "contributions", snapshot.contribution.id, "factfile.html");
+  console.log(`${snapshot.state.replaceAll("_", " ").toUpperCase()} — automated ${snapshot.summary.passed}/${snapshot.summary.total}; human ${snapshot.humanReview.passed}/${snapshot.humanReview.total}\nSnapshot: ${snapshot.repository.headSha.slice(0, 12)}+${snapshot.repository.worktreeDigest.slice(0, 12)}\nFactfile: ${report}`);
+  if (snapshot.state !== "ready_for_review" && snapshot.state !== "accepted") process.exitCode = 1;
+}
+
+async function factfileCmd(rest: string[]): Promise<void> {
+  if (rest[0] === "publish") {
+    const ref = rest[1];
+    if (!ref) throw new Error("Usage: keyoku factfile publish <contribution-id> [--engine <url>]");
+    const engine = flagValue(rest, "--engine") ?? process.env.KEYOKU_ENGINE_URL;
+    if (!engine) throw new Error("Set KEYOKU_ENGINE_URL or pass --engine <url>. Publishing is never automatic.");
+    const result = await publishFactfile(
+      findProjectRoot(),
+      ref,
+      engine,
+      process.env.KEYOKU_ENGINE_TOKEN ?? process.env.KEYOKU_SESSION_TOKEN,
+    );
+    console.log(`Published ${ref} to ${engine}\n${JSON.stringify(result, null, 2)}`);
+    return;
+  }
+  const ref = rest.find((value) => !value.startsWith("-"));
+  if (!ref) throw new Error("Usage: keyoku factfile <contribution-id>");
+  const path = resolve(findProjectRoot(), ".keyoku", "contributions", ref, "factfile.html");
+  if (!existsSync(path)) throw new Error(`No Factfile for '${ref}'. Run 'keyoku gate ${ref}' first.`);
+  console.log(path);
 }
 
 /** Repair hollow muscle memory: populate converged goals' empty workflows from
@@ -1584,16 +1720,28 @@ async function main(): Promise<void> {
       return serve();
     case "status":
       return status();
-    case "connect":
-      return connectCmd(rest);
+    case "project":
+      return projectCmd(rest);
+    case "proof":
+      return proofCmd(rest);
+    case "demo":
+      return demoCmd(rest);
+    case "deck":
+      return deckCmd(rest);
+    case "arch":
+      return archCmd(rest);
+    case "outcome":
+      return outcomeCmd(rest);
+    case "contribution":
+      return contributionCmd(rest);
+    case "gate":
+      return gateCmd(rest);
+    case "factfile":
+      return factfileCmd(rest);
+    case "pulse":
+      return pulseCmd(rest);
     case "assess":
       return assess(rest[0]);
-    case "run":
-      return runCmd(rest);
-    case "converge":
-      return convergeCmd(rest);
-    case "guardrails":
-      return guardrailsCmd(rest);
     case "watch":
       return watch(rest[0], rest);
     case "learn":

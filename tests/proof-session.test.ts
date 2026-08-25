@@ -104,9 +104,9 @@ describe("two-way proof sessions", () => {
       expect((await fetch(`http://127.0.0.1:${server.port}/`)).status).toBe(401);
       const html = await (await fetch(server.url)).text();
       expect(html).toContain("Live proof session");
-      expect(html).toContain("Pending decisions");
+      expect(html).toContain("Required judgment");
       expect(html).toContain("Choose the launch shape");
-      expect(html).toContain("Proposed directions");
+      expect(html).toContain("Optional agent coordination");
       expect(html).toContain("Toggle light and dark appearance");
       expect(html).toContain("Queue direction");
       const response = await fetch(`http://127.0.0.1:${server.port}/api/decisions/ship-shape?token=${server.token}`, {

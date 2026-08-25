@@ -1,0 +1,69 @@
+schemaVersion: keyoku.dev/outcome/v1alpha1
+id: review-ready-change
+revision: 1
+title: A reviewer can confidently decide this change
+objective: The proposed Keyoku change is understandable, bounded, and supported by the repository's
+  own executable checks.
+owner:
+  kind: human
+  id: repository-owner
+  name: Repository owner
+  role: accountable owner
+constraints:
+  - One contribution represents one coherent reviewer outcome; split unrelated work.
+  - Passing checks support only their declared claims and do not replace human review.
+  - Evidence must describe the exact Git revision under review.
+criteria:
+  - description: The project test suite passes
+    probe:
+      kind: command
+      run: npm run test
+      timeoutMs: 300000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: The project test suite passes at the exact revision shown in this Factfile.
+      whyItMatters: The behavior covered by the repository's tests still works at this exact revision.
+      code: []
+      artifacts: []
+  - description: Static type checks pass
+    probe:
+      kind: command
+      run: npm run typecheck
+      timeoutMs: 300000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: Static type checks pass at the exact revision shown in this Factfile.
+      whyItMatters: The change remains consistent with the project's declared type contracts.
+      code: []
+      artifacts: []
+  - description: The production build succeeds
+    probe:
+      kind: command
+      run: npm run build
+      timeoutMs: 300000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: The production build succeeds at the exact revision shown in this Factfile.
+      whyItMatters: The repository can produce its declared build artifact from this revision.
+      code: []
+      artifacts: []
+humanCriteria:
+  - id: coherent-review-unit
+    description: This contribution is one coherent outcome and the implementation is understandable
+      enough to own
+    guidance: Read the reviewer brief, inspect the changed areas and evidence, then review the diff
+      where judgment is still required.
+createdAt: 2026-08-19T02:22:31.503Z
+updatedAt: 2026-08-19T02:22:31.503Z

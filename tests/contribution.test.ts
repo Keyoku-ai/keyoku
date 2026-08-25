@@ -103,10 +103,10 @@ describe("repository-local contribution gates", () => {
     expect(existsSync(join(dir, "factfile.html"))).toBe(true);
     expect(existsSync(join(dir, "snapshots", `${snapshot.id}.html`))).toBe(true);
     const html = readFileSync(join(dir, "factfile.html"), "utf8");
-    expect(html).toContain("Insight");
-    expect(html).toContain("Pending decisions");
-    expect(html).toContain("Proposed directions");
-    expect(html).toContain("Full evidence &amp; reproduction");
+    expect(html).toContain("Human decision");
+    expect(html).toContain("Required judgment");
+    expect(html).toContain("Optional agent coordination");
+    expect(html).toContain("Evidence &amp; reproduction");
     expect(html).toContain("Work log");
     expect(html).toContain("Session &amp; proof history");
     expect(html).toContain("Repository, scope &amp; provenance");
@@ -184,6 +184,20 @@ describe("repository-local contribution gates", () => {
     expect(accepted.contribution.status).toBe("accepted");
     expect(accepted.reviews.at(-1)).toMatchObject({ decision: "accepted", reviewer: { kind: "human" } });
     expect(readFileSync(join(dir, "factfile.html"), "utf8")).toContain("A named human accepted this exact source identity.");
+    const notedAfterAcceptance = reviewContribution({
+      root,
+      contributionId: contribution.id,
+      decision: "note",
+      comment: "Follow-up context does not revoke the exact-source acceptance.",
+    });
+    expect(notedAfterAcceptance.state).toBe("accepted");
+    expect(notedAfterAcceptance.contribution.status).toBe("accepted");
+    expect(() => reviewContribution({
+      root,
+      contributionId: contribution.id,
+      decision: "accepted",
+      comment: "A duplicate acceptance must not create another terminal event.",
+    })).toThrow(/already accepted/);
 
     writeFileSync(join(root, "README.md"), "# Changed after proof\n", "utf8");
     expect(() => reviewContribution({
@@ -289,6 +303,12 @@ describe("repository-local contribution gates", () => {
     expect(snapshot.state).toBe("ready_for_review");
     expect(snapshot.humanReview).toEqual({ passed: 1, failed: 0, pending: 0, total: 1 });
     expect(snapshot.reviews[0]).toMatchObject({ criterionId: "visual-quality", verdict: "pass" });
+
+    writeFileSync(join(root, "README.md"), "# Different source after human review\n", "utf8");
+    snapshot = await runGate(root, contribution.id);
+    expect(snapshot.state).toBe("human_review_required");
+    expect(snapshot.humanReview).toEqual({ passed: 0, failed: 0, pending: 1, total: 1 });
+    expect(snapshot.reviews).toEqual([]);
   });
 
   it("redacts credential-shaped evidence before creating shareable files", async () => {

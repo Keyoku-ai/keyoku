@@ -171,8 +171,11 @@ describe("keyoku deck build", () => {
       expect(stakeholder).not.toContain(">Demo<"); // stakeholder persona excludes 'slides'
       expect(developer).toContain(">Demo<");
 
-      // video embedded
-      expect(stakeholder).toContain("data:video/webm;base64,");
+      // Video bytes remain self-contained, but are materialized through a Blob
+      // URL at runtime because large data: URIs fail in capped webviews.
+      expect(stakeholder).toContain('data-mime="video/webm"');
+      expect(stakeholder).toContain('class="video-b64"');
+      expect(stakeholder).toContain("URL.createObjectURL(new Blob(");
 
       // N frame slides only for personas that include 'slides'
       expect((developer.match(/data-section="slides"/g) ?? []).length).toBe(2);
@@ -181,6 +184,8 @@ describe("keyoku deck build", () => {
       // status: counts shown in both; reproduce commands only at depth=full
       expect(stakeholder).toContain("2/2 automated checks passed");
       expect(developer).toContain("2/2 automated checks passed");
+      expect(stakeholder).toContain("HUMAN REVIEW REQUIRED");
+      expect(stakeholder).not.toContain(">PASS<");
       expect(stakeholder).not.toContain("npm run build");
       expect(developer).toContain("npm run build");
       expect(developer).toContain("npm test");

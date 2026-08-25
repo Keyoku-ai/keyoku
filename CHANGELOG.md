@@ -1,8 +1,46 @@
 # Changelog
 
+## 3.0.0-alpha.1 — 2026-08-16
+
+Keyoku's open-source V1 is now a local, Git-native proof session between humans and coding agents.
+
+### Added
+
+- A durable provider-neutral session protocol for agent work, structured human decisions, queued instructions, acknowledgements, and leased presence.
+- A token-scoped loopback UI with **Agent work**, **Needs you**, **Review first**, and claim-by-claim **Proof** surfaces.
+- Active contribution reuse per branch and outcome, plus content binding for the exact outcome contract.
+- Annotated screenshot and timestamped video evidence in portable Factfiles.
+- `keyoku proof serve`, four MCP coordination tools, and a Marketplace-compatible composite GitHub Action.
+
+### Changed
+
+- Factfiles now present claim → observation → meaning → limits → reproduction → relevant code and artifacts; raw assertions remain audit detail.
+- The launch promise is intentionally narrow: Keyoku coordinates proof and human attention without replacing GitHub, coding harnesses, or project-management systems.
+
 ## Unreleased
 
 ### Added
+- **Demo evidence: `keyoku demo <init|record|watch>`.** A generic, project-agnostic
+  "record -> watch -> gate" workflow that makes a recorded product demo
+  first-class Keyoku evidence (the existing `EvidencePresentationSchema`
+  `artifacts` already supported `kind: "screenshot"/"video"`; this adds the
+  workflow that actually produces and validates them). `keyoku demo init`
+  writes a commented `.keyoku/demo.yaml` template (won't overwrite an
+  existing one) plus a ready-to-paste outcome criterion snippet. `keyoku demo
+  record` reads/validates that config, launches Chromium via Playwright
+  resolved from the *target* project (not a keyoku dependency — clear error
+  if `playwright` isn't installed there), walks each declared "stop"
+  (optional auth once, then goto -> actions -> settle -> screenshot), and
+  writes `.keyoku/demo/frames/*.jpeg` + `.keyoku/demo/manifest.json`. `keyoku
+  demo watch [--assert]` composes a prompt from the manifest's frames and
+  per-stop `expect` assertions, spawns `claude -p ... --permission-mode
+  acceptEdits` to review the frames and run a UI/UX audit, validates the
+  resulting `.keyoku/demo/verdict.json` against a zod contract, and with
+  `--assert` exits 0 only when `overall.verdict === "pass"` AND the verdict
+  is newer than the manifest — usable directly as an outcome criterion probe
+  (`keyoku demo record && keyoku demo watch --assert`) in any project. See
+  `docs/demo-evidence.md`.
+
 - **ADR-35: `Goal.project`/`Goal.cwd` — the keyoku side of belay's cross-project
   scoping fix.** belay's loop portfolio/proposals now scope by project to stop
   goals bleeding across unrelated repos sharing one `~/.keyoku`; that read a
@@ -83,6 +121,13 @@
     updated — the old "criteria are IMMUTABLE after goal_create... make a
     NEW goal to change them" guidance is now actively wrong and has been
     replaced with guidance to refine in place instead.
+
+### Changed
+- **Command probe `timeoutMs` cap raised from 5 minutes to 15 minutes
+  (300,000ms -> 900,000ms)** in `CommandProbeSchema`/`HttpProbeSchema`
+  (`src/types.ts`) — real frontend production builds (and the new demo
+  record/watch pipeline) routinely exceed 5 minutes, and the old cap made
+  those outcome checks structurally unable to declare an honest timeout.
 
 ## 2.18.0 — 2026-07-02
 

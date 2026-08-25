@@ -1,0 +1,189 @@
+schemaVersion: keyoku.dev/outcome/v1alpha1
+id: contribution-gate-pivot
+revision: 4
+title: A maintainer can understand and decide an agent contribution
+objective: >-
+  In one short reading, a maintainer can understand what was requested, what changed, who or what
+  did the work, which outcome claims have relevant evidence, what remains uncertain, and which
+  judgments still require an accountable human before the contribution is accepted.
+owner:
+  kind: human
+  id: taikicoleman@icloud.com
+  name: Tye
+  role: accountable product owner
+constraints:
+  - Core use is free for public and private projects and can run locally without a hosted account.
+  - GitHub is the first distribution surface, but schemas and verification remain provider-neutral.
+  - A human remains accountable; agent identity, harness, and model are supporting provenance.
+  - Verification fails closed and never describes a failed or incomplete probe as proof.
+  - A Factfile is bound to an exact Git head plus worktree digest and states the limits of its claim.
+  - Existing user changes in keyoku-engine are preserved; removal requires a dependency audit.
+criteria:
+  - description: A contribution produces portable JSON, Markdown, and HTML receipts tied to the exact source snapshot
+    probe:
+      kind: command
+      run: npx vitest run tests/contribution.test.ts -t "binds a passing Factfile to the exact repository snapshot"
+      timeoutMs: 120000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: The workflow created all three receipt formats and rejected review or publication after the source changed.
+      whyItMatters: A maintainer can share the receipt while knowing exactly which code state it describes.
+      code:
+        - path: src/contribution.ts
+          purpose: Captures the repository digest, creates the receipts, and rejects stale review or publication.
+        - path: tests/contribution.test.ts
+          purpose: Exercises receipt generation, exact-snapshot binding, publication, review, acceptance, and stale-proof rejection.
+      artifacts:
+        - kind: screenshot
+          path: docs/artifacts/factfile-human-review.png
+          label: Human-first Factfile
+          caption: The rendered receipt leads with the requested outcome and pending human decisions.
+  - description: A failed automated observation leaves the claimed outcome visibly unproven
+    probe:
+      kind: command
+      run: npx vitest run tests/contribution.test.ts -t "reports evidence gaps and never treats a failed probe as proof"
+      timeoutMs: 120000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: A deliberately failing probe produced an evidence-gaps state instead of a green contribution.
+      whyItMatters: A broken or incomplete check cannot be presented to a maintainer as successful proof.
+      code:
+        - path: src/contribution.ts
+          purpose: Converts failed automated observations into the evidence_gaps gate state.
+        - path: tests/contribution.test.ts
+          purpose: Creates a failing command and asserts that the Factfile remains unproven.
+      artifacts: []
+  - description: Required human judgments remain pending until an identified person records a decision
+    probe:
+      kind: command
+      run: npx vitest run tests/contribution.test.ts -t "keeps required human judgments separate from automated proof"
+      timeoutMs: 120000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: Passing commands left the contribution in human-review-required until a named person judged the declared question.
+      whyItMatters: Software cannot silently convert test output into a human opinion about clarity, usefulness, or readiness.
+      code:
+        - path: src/contribution.ts
+          purpose: Tracks automated state and human verdicts independently.
+        - path: tests/contribution.test.ts
+          purpose: Proves an agent cannot submit the human verdict and acceptance cannot happen early.
+      artifacts: []
+  - description: Agent provenance records the exact harness and model while a human remains accountable
+    probe:
+      kind: command
+      run: npx vitest run tests/contribution.test.ts -t "keeps required human judgments separate from automated proof"
+      timeoutMs: 120000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: The contribution records Tye as accountable owner and Codex with the exact gpt-5.6-sol model identity.
+      whyItMatters: Reviewers can distinguish who is responsible from which agent and harness performed the work.
+      code:
+        - path: src/contribution.ts
+          purpose: Defines first-class human and agent actors, including owner, harness, and model fields.
+        - path: tests/contribution.test.ts
+          purpose: Asserts that the exact harness, model, and human owner survive into the contribution.
+      artifacts: []
+  - description: Credential-shaped probe output is removed before any receipt becomes shareable
+    probe:
+      kind: command
+      run: npx vitest run tests/contribution.test.ts -t "redacts credential-shaped evidence before creating shareable files"
+      timeoutMs: 120000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: A probe containing a credential-shaped value produced only redacted JSON, Markdown, HTML, and publishable data.
+      whyItMatters: Evidence should be safe to review and share without leaking the secrets it encountered.
+      code:
+        - path: src/contribution.ts
+          purpose: Redacts credential-shaped keys and strings before evidence reaches any Factfile format.
+        - path: tests/contribution.test.ts
+          purpose: Injects a fake API key and confirms the original value appears nowhere in the published receipt.
+      artifacts: []
+  - description: Existing Keyoku behavior remains compatible with the contribution-gate change
+    probe:
+      kind: command
+      run: npm test
+      timeoutMs: 300000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: All 320 pre-existing and contribution-gate tests completed successfully after the pivot.
+      whyItMatters: The new contribution workflow does not require sacrificing the Keyoku behavior people already rely on.
+      code:
+        - path: tests/
+          purpose: Covers the existing product plus the new repository-local contribution workflow.
+        - path: package.json
+          purpose: Defines the complete build-and-test command used for this compatibility check.
+      artifacts: []
+  - description: The implementation remains internally consistent under strict type checking
+    probe:
+      kind: command
+      run: npm run typecheck
+      timeoutMs: 120000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: TypeScript accepted the full source tree without type errors under the repository's strict configuration.
+      whyItMatters: The evidence and review data structures agree across parsing, gate execution, rendering, and CLI use.
+      code:
+        - path: src/contribution.ts
+          purpose: Implements the portable outcome, contribution, evidence, review, and Factfile types and workflows.
+        - path: tsconfig.json
+          purpose: Defines the compile-time rules used by the consistency check.
+      artifacts: []
+  - description: Installed production dependencies have no known npm audit vulnerability
+    probe:
+      kind: command
+      run: npm audit --omit=dev --audit-level=high
+      timeoutMs: 120000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: npm reported no known high-severity vulnerability in the installed production dependency graph.
+      whyItMatters: The receipt should disclose dependency risk rather than imply that passing product tests cover it.
+      code:
+        - path: package.json
+          purpose: Declares the production dependency surface assessed by npm audit.
+        - path: package-lock.json
+          purpose: Pins the exact dependency versions covered by this observation.
+      artifacts: []
+humanCriteria:
+  - id: one-minute-comprehension
+    description: A maintainer can explain the request, change, evidence, uncertainty, and next decision after one short reading
+    guidance: Read only the main report first. Raw commands or repository inspection should not be necessary.
+  - id: proof-relevance
+    description: Each claim is taught through relevant artifacts and code context rather than raw assertion values
+    guidance: Expand the evidence cards. The meaning should be understandable without opening the raw audit details.
+  - id: visual-clarity
+    description: The report's hierarchy makes the decision easier without dashboard theater or unexplained metrics
+    guidance: Inspect the desktop report, then narrow the window and confirm the reading order remains clear.
+createdAt: 2026-08-09T00:06:21Z
+updatedAt: 2026-08-09T20:50:00Z

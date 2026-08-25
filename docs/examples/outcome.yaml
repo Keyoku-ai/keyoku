@@ -1,0 +1,67 @@
+schemaVersion: keyoku.dev/outcome/v1alpha1
+id: release-build
+revision: 1
+title: The release artifact builds from source
+objective: A maintainer can produce and smoke-test the release artifact from a clean checkout.
+owner:
+  kind: human
+  id: maintainer@example.com
+  name: Project maintainer
+  role: accountable owner
+constraints:
+  - The check runs locally and in CI.
+  - No production credential is required.
+scope:
+  include:
+    - src/**
+    - tests/**
+    - package.json
+    - package-lock.json
+  exclude:
+    - docs/**
+  maxChangedFiles: 30
+criteria:
+  - description: The release build completes successfully
+    probe:
+      kind: command
+      run: npm run build
+      timeoutMs: 120000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: The repository produced its release build at the exact revision shown in the Factfile.
+      whyItMatters: A release cannot ship if downstream users cannot build its declared artifact.
+      code:
+        - path: src/build.ts
+          purpose: Produces the release bundle.
+      artifacts:
+        - kind: report
+          path: dist/build-manifest.json
+          label: Build manifest
+          caption: Lists the files emitted by the verified build.
+  - description: The built CLI reports its version
+    probe:
+      kind: command
+      run: node dist/index.js --version
+      timeoutMs: 30000
+      parse: text
+    assert:
+      path: output
+      op: matches
+      value: ^[0-9]+\.[0-9]+\.[0-9]+
+    evidence:
+      summary: The built command starts and reports a semantic version.
+      whyItMatters: This smoke test observes the artifact users will actually invoke, not only its source files.
+      code:
+        - path: src/index.ts
+          purpose: Implements the command-line entry point.
+      artifacts: []
+humanCriteria:
+  - id: release-notes-quality
+    description: A maintainer confirms the release notes clearly explain user-visible changes and upgrade risk
+    guidance: Read the notes as a downstream user and record a pass or fail with a short explanation.
+createdAt: 2026-08-09T00:00:00Z
+updatedAt: 2026-08-09T00:00:00Z

@@ -1,0 +1,54 @@
+name: Keyoku Factfile
+description: Turn a repository-owned outcome into exact-revision evidence and a human-readable Factfile.
+author: Keyoku
+branding:
+  icon: check-circle
+  color: purple
+inputs:
+  outcome:
+    description: Outcome id under .keyoku/outcomes.
+    required: true
+  base:
+    description: Base Git SHA or ref for the contribution boundary.
+    required: false
+    default: HEAD^
+  keyoku-version:
+    description: Published Keyoku npm version or tag.
+    required: false
+    default: latest
+  retention-days:
+    description: Number of days GitHub retains the full Factfile artifact.
+    required: false
+    default: "14"
+outputs:
+  contribution-id:
+    description: The generated contribution id.
+    value: ${{ steps.proof.outputs.contribution_id }}
+  state:
+    description: The exact-snapshot Keyoku state.
+    value: ${{ steps.proof.outputs.state }}
+  factfile:
+    description: Path to the generated HTML Factfile.
+    value: ${{ steps.proof.outputs.factfile }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 20
+    - name: Generate exact-revision proof
+      id: proof
+      shell: bash
+      env:
+        KEYOKU_OUTCOME: ${{ inputs.outcome }}
+        KEYOKU_BASE: ${{ inputs.base }}
+        KEYOKU_VERSION: ${{ inputs.keyoku-version }}
+      run: npx --yes "keyoku@${KEYOKU_VERSION}" proof ci "${KEYOKU_OUTCOME}" --base "${KEYOKU_BASE}"
+    - name: Attach the full Factfile
+      if: always() && steps.proof.outputs.contribution_id != ''
+      uses: actions/upload-artifact@v4
+      with:
+        name: keyoku-factfile-${{ github.sha }}
+        path: .keyoku/contributions/${{ steps.proof.outputs.contribution_id }}/factfile.*
+        if-no-files-found: error
+        retention-days: ${{ inputs.retention-days }}

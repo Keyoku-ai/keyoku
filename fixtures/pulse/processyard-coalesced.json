@@ -1,0 +1,173 @@
+{
+  "schemaVersion": "keyoku.dev/pulse-dispatch/v1alpha1",
+  "plannedAt": "2026-08-24T16:42:00.000Z",
+  "outcome": "coalesce",
+  "reasonCode": "compatible_checkpoints",
+  "reason": "2 compatible verified checkpoints are bound into one dispatch snapshot.",
+  "failClosed": false,
+  "checkpointIds": [
+    "processyard-m5",
+    "processyard-m6"
+  ],
+  "snapshot": {
+    "schemaVersion": "keyoku.dev/pulse-snapshot/v1alpha1",
+    "id": "pulse-f17fd9bf523f01e582cc",
+    "projectId": "processyard",
+    "asOf": "2026-08-24T16:40:00.000Z",
+    "checkpointIds": [
+      "processyard-m5",
+      "processyard-m6"
+    ],
+    "checkpoints": [
+      {
+        "schemaVersion": "keyoku.dev/pulse-checkpoint/v1alpha1",
+        "id": "processyard-m5",
+        "projectId": "processyard",
+        "runId": "processyard-run-20260824",
+        "leaseIds": [
+          "processyard-evidence"
+        ],
+        "title": "M5 · Evidence story captured",
+        "changeSummary": "A poster and replay link were attached to the verified product checkpoint.",
+        "whyItMatters": "Review starts with the visible product and can drill into the Factfile only when needed.",
+        "publishedAt": "2026-08-24T16:35:00.000Z",
+        "source": {
+          "canonicalRoot": "repo://processyard/main",
+          "branch": "main",
+          "baseSha": "1111111111111111111111111111111111111111",
+          "headSha": "6666666666666666666666666666666666666666",
+          "worktreeDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "ancestryShas": [
+            "1111111111111111111111111111111111111111",
+            "2222222222222222222222222222222222222222",
+            "3333333333333333333333333333333333333333",
+            "4444444444444444444444444444444444444444",
+            "5555555555555555555555555555555555555555"
+          ],
+          "verifiedDigest": "96ce6096523207ba3f550a5ae5ba392d44d423c618a6901b4c014a9aa51264f6"
+        },
+        "verification": {
+          "status": "verified",
+          "verifiedAt": "2026-08-24T16:35:00.000Z",
+          "methods": [
+            {
+              "kind": "command",
+              "label": "processyard-m5 acceptance check",
+              "reproduce": "./scripts/verify-checkpoint processyard-m5",
+              "result": "Passed in the integration fixture",
+              "evidenceDigest": "906f1a5d2beed676fa4010ce3450c7b5e9ba50829a4b8648296fd08600764b97"
+            }
+          ]
+        },
+        "evidenceBinding": {
+          "mode": "fixture",
+          "label": "processyard demonstration fixture; adapters must bind real Factfile bytes before delivery"
+        },
+        "factfiles": [
+          {
+            "id": "processyard-m5-factfile",
+            "path": ".keyoku/contributions/processyard-m5/factfile.json",
+            "digest": "264d1e497735c4ae9c79e980af89c5f1bcb6cdb538969c58affeffe4407511a0",
+            "sourceDigest": "96ce6096523207ba3f550a5ae5ba392d44d423c618a6901b4c014a9aa51264f6",
+            "state": "ready_for_review"
+          }
+        ],
+        "assets": [
+          {
+            "kind": "video",
+            "path": "evidence/economy-theatre-demo.mp4",
+            "label": "Economy Theatre product demonstration",
+            "caption": "Expected Processyard poster and replay binding; no matching media bytes were found in the checked workspace, so a live integration must resolve and digest them before dispatch.",
+            "posterPath": "evidence/economy-theatre-poster.png"
+          }
+        ],
+        "limitations": [
+          "Later Processyard milestones remain outside this checkpoint."
+        ],
+        "nextTask": "Verify M6 without changing the established source boundary.",
+        "materialTrigger": "verified_checkpoint",
+        "contentDigest": "2e0094f870054316720df5056e85636dd6bcb6c4d318be9ab67b5a5fc7b87ff9"
+      },
+      {
+        "schemaVersion": "keyoku.dev/pulse-checkpoint/v1alpha1",
+        "id": "processyard-m6",
+        "projectId": "processyard",
+        "runId": "processyard-run-20260824",
+        "leaseIds": [
+          "processyard-ci"
+        ],
+        "title": "M6 · Release boundary verified",
+        "changeSummary": "The complete M0–M6 story passed the fixture's exact-source verification.",
+        "whyItMatters": "A founder brief and developer evidence view can now share one content-bound snapshot.",
+        "publishedAt": "2026-08-24T16:40:00.000Z",
+        "source": {
+          "canonicalRoot": "repo://processyard/main",
+          "branch": "main",
+          "baseSha": "1111111111111111111111111111111111111111",
+          "headSha": "7777777777777777777777777777777777777777",
+          "worktreeDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "ancestryShas": [
+            "1111111111111111111111111111111111111111",
+            "2222222222222222222222222222222222222222",
+            "3333333333333333333333333333333333333333",
+            "4444444444444444444444444444444444444444",
+            "5555555555555555555555555555555555555555",
+            "6666666666666666666666666666666666666666"
+          ],
+          "verifiedDigest": "0506d0991fde0f8580576468ed61bbcce4795a96da704c2ecf2dcccac7f598f3"
+        },
+        "verification": {
+          "status": "verified",
+          "verifiedAt": "2026-08-24T16:40:00.000Z",
+          "methods": [
+            {
+              "kind": "command",
+              "label": "processyard-m6 acceptance check",
+              "reproduce": "./scripts/verify-checkpoint processyard-m6",
+              "result": "Passed in the integration fixture",
+              "evidenceDigest": "b835de76c3ef23734588fdab36234b11a582604e96f6158e4b7877505403879b"
+            }
+          ]
+        },
+        "evidenceBinding": {
+          "mode": "fixture",
+          "label": "processyard demonstration fixture; adapters must bind real Factfile bytes before delivery"
+        },
+        "factfiles": [
+          {
+            "id": "processyard-m6-factfile",
+            "path": ".keyoku/contributions/processyard-m6/factfile.json",
+            "digest": "b573f29e6a47e3b7c80fd589b5584a5c9f16deb9fde25a30b665792d5c7c0930",
+            "sourceDigest": "0506d0991fde0f8580576468ed61bbcce4795a96da704c2ecf2dcccac7f598f3",
+            "state": "ready_for_review"
+          }
+        ],
+        "assets": [],
+        "limitations": [
+          "No production deployment is established by this local fixture.",
+          "Gmail delivery authority and sent-message verification are not configured."
+        ],
+        "nextTask": "Request explicit channel authority before preparing any founder email delivery.",
+        "materialTrigger": "verified_checkpoint",
+        "contentDigest": "9a13906ec2d564fad7bb0c2fd1e6092d7389fac99c7d0725f67c416fd6ce3cd9"
+      }
+    ],
+    "source": {
+      "canonicalRoot": "repo://processyard/main",
+      "branch": "main",
+      "baseSha": "1111111111111111111111111111111111111111",
+      "headSha": "7777777777777777777777777777777777777777",
+      "worktreeDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "ancestryShas": [
+        "1111111111111111111111111111111111111111",
+        "2222222222222222222222222222222222222222",
+        "3333333333333333333333333333333333333333",
+        "4444444444444444444444444444444444444444",
+        "5555555555555555555555555555555555555555",
+        "6666666666666666666666666666666666666666"
+      ],
+      "verifiedDigest": "0506d0991fde0f8580576468ed61bbcce4795a96da704c2ecf2dcccac7f598f3"
+    },
+    "contentDigest": "f17fd9bf523f01e582ccec00df05857117d252b5aded3f5ad6d6b2529f44d01f"
+  }
+}

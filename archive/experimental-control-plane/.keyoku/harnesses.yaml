@@ -1,0 +1,9 @@
+schemaVersion: keyoku.dev/harnesses/v1alpha1
+adapters:
+  - id: codex-headless
+    label: Codex headless
+    kind: codex-exec
+    enabled: true
+    model: gpt-5.6-sol
+    sandbox: workspace-write
+    description: Dispatch one scoped goal to a non-interactive Codex worker.

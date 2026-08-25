@@ -1,0 +1,69 @@
+schemaVersion: keyoku.dev/outcome/v1alpha1
+id: archive-abandoned-surfaces
+revision: 1
+title: Abandoned product surfaces leave the active build
+objective: >-
+  Code and positioning that only support the abandoned Omnigent fleet-runner and regulated Outcome
+  Engine directions are recoverably archived, while shared verification, connector, security,
+  learning, and provenance primitives remain active and tested.
+owner:
+  kind: human
+  id: taikicoleman@icloud.com
+  name: Tye
+  role: accountable product owner
+constraints:
+  - Archive rather than permanently delete historical implementation and tests.
+  - Remove archived code from compilation, packaging, CLI, MCP, and active product promises.
+  - Preserve provider-neutral connectors and autonomy approvals.
+  - Preserve all deterministic goal, probe, assertion, evidence, and workflow-learning behavior.
+criteria:
+  - description: The active TypeScript source and tests contain no Omnigent-specific runtime dependency
+    probe:
+      kind: command
+      run: >-
+        sh -c "! grep -R -i -l omnigent src tests --include='*.ts' | grep -q ."
+      timeoutMs: 30000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+  - description: Legacy source, dedicated tests, and positioning are present with recovery documentation
+    probe:
+      kind: command
+      run: >-
+        sh -c "test -f archive/legacy-omnigent/README.md &&
+        test $(find archive/legacy-omnigent/src -name '*.ts' | wc -l) -eq 5 &&
+        test $(find archive/legacy-omnigent/tests -name '*.ts' | wc -l) -eq 5 &&
+        test -f archive/legacy-positioning/OUTCOME-ENGINE.md &&
+        test -f archive/legacy-positioning/README.md"
+      timeoutMs: 30000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+  - description: CLI and MCP no longer advertise archived fleet-runner commands or tools
+    probe:
+      kind: command
+      run: >-
+        sh -c "npm run build >/dev/null &&
+        ! node dist/index.js help | grep -E 'omnigent|keyoku (run|converge|guardrails|connect)'"
+      timeoutMs: 120000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+  - description: The complete active Keyoku suite passes after archival
+    probe:
+      kind: command
+      run: npm test
+      timeoutMs: 300000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+createdAt: 2026-08-09T00:28:00Z
+updatedAt: 2026-08-09T00:28:00Z

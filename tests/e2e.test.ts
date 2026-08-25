@@ -58,6 +58,8 @@ describe("keyoku-harness over MCP stdio", () => {
         "approval_approve",
         "approval_deny",
         "approval_list",
+        "architecture_propose",
+        "architecture_scan",
         "audit_list",
         "connector_add",
         "connector_call",
@@ -65,19 +67,25 @@ describe("keyoku-harness over MCP stdio", () => {
         "connector_remove",
         "connector_set_autonomy",
         "connector_tools",
+        "contribution_gate",
+        "contribution_get",
+        "contribution_ack_instruction",
+        "contribution_next_instruction",
+        "contribution_propose_directions",
+        "contribution_report_work",
+        "contribution_request_decision",
+        "contribution_review",
+        "contribution_start",
         "execution_cancel",
         "execution_complete",
         "execution_list",
         "goal_assess",
-        "goal_converge",
         "goal_create",
         "goal_delete",
         "goal_focus",
         "goal_get",
-        "goal_guardrails",
         "goal_list",
         "goal_record",
-        "goal_run",
         "goal_unfocus",
         "goal_update",
         "harness_learn",
@@ -85,7 +93,14 @@ describe("keyoku-harness over MCP stdio", () => {
         "knowledge_query",
         "knowledge_submit",
         "observation_list",
+        "outcome_list",
         "pattern_list",
+        "project_inspect",
+        "pulse_checkpoint_publish",
+        "pulse_dispatch_plan",
+        "pulse_event_ingest",
+        "pulse_projection_render",
+        "pulse_status",
         "workflow_approve",
         "workflow_capture",
         "workflow_execute",
@@ -96,8 +111,16 @@ describe("keyoku-harness over MCP stdio", () => {
         "workflow_update",
       ].sort(),
     );
-    expect(client.getInstructions()).toContain("convergence harness");
+    expect(client.getInstructions()).toContain("proof and attention layer");
     expect(client.getInstructions()).toContain("approval_approve");
+  });
+
+  it("orients a cold agent from repository-owned outcome contracts", async () => {
+    const inspected = await call("project_inspect", { cwd: process.cwd() });
+    expect(inspected._isError).toBe(false);
+    expect(inspected.project.id).toBe("keyoku");
+    expect(inspected.outcomes.length).toBeGreaterThanOrEqual(2);
+    expect(inspected.outcomes.some((outcome: { id: string }) => outcome.id === "contribution-gate-pivot")).toBe(true);
   });
 
   it("walks a full convergence loop: create → assess → act → record → assess", async () => {

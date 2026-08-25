@@ -1,0 +1,220 @@
+schemaVersion: keyoku.dev/outcome/v1alpha1
+id: github-proof-v1
+revision: 8
+title: Keyoku turns agent work into a live, reviewable proof session
+objective: >-
+  A maintainer can add free Keyoku to a Git project, see what connected agents are doing, resolve
+  genuine blockers through durable instructions, review meaningful exact-revision evidence, and
+  share a Factfile that explains the outcome without replacing human acceptance.
+owner:
+  kind: human
+  id: taikicoleman@icloud.com
+  name: Tye
+  role: accountable product owner
+constraints:
+  - Local and GitHub proof works for public and private repositories without a hosted account.
+  - One contribution represents one coherent reviewer outcome; unrelated work should be split or stacked.
+  - GitHub proof execution remains read-only and never gives untrusted pull-request code a write token.
+  - Outcome revisions and definitions remain repository-owned Git history.
+  - Passing claims are bounded to declared observations and never presented as universal correctness or security.
+  - Archived control-plane research remains recoverable but outside the active build, MCP tools, tests, and launch promise.
+criteria:
+  - description: One command detects representative project types and installs a safe proof workflow
+    probe:
+      kind: command
+      run: npx vitest run tests/project-profile.test.ts -t "cross-project proof setup"
+      timeoutMs: 120000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: >-
+        The initializer recognized Node.js, Python, Rust, Go, and generic Git fixtures and generated
+        repository-owned outcomes plus a read-only GitHub workflow.
+      whyItMatters: Adoption starts with a useful first Factfile in minutes, not a new hosted platform or agent migration.
+      code:
+        - path: src/project-profile.ts
+          purpose: Detects project conventions and generates starter checks and GitHub setup.
+        - path: tests/project-profile.test.ts
+          purpose: Exercises every supported project profile and the one-command installation contract.
+      artifacts: []
+  - description: Pull-request proof covers committed base-to-head changes and fails closed on scope drift
+    probe:
+      kind: command
+      run: npx vitest run tests/project-profile.test.ts -t "Git-native contribution history"
+      timeoutMs: 120000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: >-
+        Tests create real Git histories, bind contributions to the pull-request base, include committed
+        changes, and reject paths outside a declared review boundary.
+      whyItMatters: A clean CI worktree must not produce an empty or misleading change scope.
+      code:
+        - path: src/contribution.ts
+          purpose: Captures committed and uncommitted source, exact digests, scope boundaries, and stale-proof rules.
+        - path: tests/project-profile.test.ts
+          purpose: Verifies real base-to-head Git behavior and scope failure semantics.
+      artifacts: []
+  - description: The Factfile separates blockers from contextual next directions and proof
+    probe:
+      kind: command
+      run: >-
+        node -e "const fs=require('fs');const s=fs.readFileSync('src/contribution.ts','utf8');process.exit(['What this Factfile establishes','Agent work','Needs you','Choose what happens next','How the outcome changes','Toggle light and dark appearance','Review first','Proof ledger','Reproduce this observation'].every(x=>s.includes(x))?0:1)"
+      timeoutMs: 30000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: The reviewer sees genuine blockers separately from evidence-grounded next directions, their outcome effects, deeper context, proof, and ordered review path.
+      whyItMatters: Developers need to orient in seconds and then answer every deeper question without trusting an agent summary or a green badge.
+      code:
+        - path: src/contribution.ts
+          purpose: Renders compact GitHub Markdown and the complete human-readable HTML Factfile from one canonical snapshot.
+      artifacts:
+        - kind: screenshot
+          path: docs/artifacts/keyoku-factfile-current.png
+          label: Live proof session at a glance
+          caption: Desktop capture showing an outcome-complete Factfile with agent-prepared next directions and their evidence-bounded consequences.
+          annotations:
+            - label: Completion becomes a choice, not an empty prompt
+              detail: The agent recommends a bounded next move while preserving alternative and custom directions.
+              x: 24
+              y: 29
+            - label: Consequences are visible before steering
+              detail: Each path states how the outcome changes; evidence basis and tradeoffs remain one disclosure away.
+              x: 63
+              y: 55
+        - kind: video
+          path: docs/artifacts/keyoku-live-decision.webm
+          label: Human decision reaches an agent
+          caption: Short real-browser recording of a recommended choice becoming a durable queued instruction.
+          annotations:
+            - label: Review the decision context
+              detail: The human sees intent, blocker, ownership reason, and no-response consequence.
+              atMs: 0
+            - label: Send the bounded choice
+              detail: The live session appends a decision and an instruction; it does not rewrite prior proof.
+              atMs: 3000
+  - description: The two-way protocol is durable, provider-neutral, and token-scoped
+    probe:
+      kind: command
+      run: npx vitest run tests/proof-session.test.ts
+      timeoutMs: 120000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: Real integration tests report agent work, propose context-rich next directions, request and resolve a human decision, deliver and acknowledge instructions, reuse one active contribution, and reject an untokened live-session request.
+      whyItMatters: The interface must change agent behavior through a durable protocol, not merely display a dashboard that drifts from execution.
+      code:
+        - path: src/proof-session.ts
+          purpose: Defines the append-only provider-neutral work, direction, decision, instruction, acknowledgement, and presence protocol.
+        - path: src/session-server.ts
+          purpose: Serves the loopback-only token-scoped interactive Factfile and converts human actions into protocol events.
+        - path: src/server.ts
+          purpose: Exposes the protocol to Codex, Claude Code, OpenHands, custom agents, and other MCP clients.
+        - path: tests/proof-session.test.ts
+          purpose: Proves the end-to-end human choice to agent instruction path and session security boundary.
+      artifacts: []
+  - description: Outcome definitions have inspectable repository-owned version history
+    probe:
+      kind: command
+      run: npx vitest run tests/project-profile.test.ts -t "binds committed PR changes"
+      timeoutMs: 120000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: A committed outcome revision is recovered through Git and shown with its commit, author, time, subject, and revision number.
+      whyItMatters: Teams can audit how definition of done evolved without trusting a second Keyoku database.
+      code:
+        - path: src/contribution.ts
+          purpose: Reads the canonical outcome history directly from Git.
+        - path: src/index.ts
+          purpose: Exposes keyoku outcome history as a human-readable command.
+      artifacts: []
+  - description: Abandoned control-plane surfaces are outside the active product while reusable proof primitives remain
+    probe:
+      kind: command
+      run: >-
+        sh -c "test -f archive/experimental-control-plane/README.md &&
+        test ! -f src/project-state.ts && test ! -f src/presentation.ts &&
+        ! grep -R -E 'project_orient|intervention_create|agent_session_heartbeat|view_publish' src --include='*.ts'"
+      timeoutMs: 30000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: The live control-plane prototype is recoverably archived and no longer compiled, registered over MCP, tested, or promised as V1.
+      whyItMatters: A narrow product earns adoption faster and avoids duplicating coding harnesses and GitHub.
+      code:
+        - path: archive/experimental-control-plane/README.md
+          purpose: Records the archived scope, reason, and rule for selective recovery.
+        - path: src/server.ts
+          purpose: Keeps the active MCP surface focused on outcomes, evidence, review, and architecture.
+      artifacts: []
+  - description: The complete active Keyoku suite passes after the pivot
+    probe:
+      kind: command
+      run: npm test
+      timeoutMs: 300000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: All active build, CLI, MCP, proof, security, and compatibility tests pass together.
+      whyItMatters: The launch wedge is implemented without silently breaking retained Keyoku behavior.
+      code:
+        - path: tests/
+          purpose: Active unit, integration, security, CLI, Git, rendering, and protocol coverage.
+        - path: package.json
+          purpose: Defines the complete reproducible build-and-test command.
+      artifacts: []
+  - description: The active TypeScript implementation remains internally consistent
+    probe:
+      kind: command
+      run: npm run typecheck
+      timeoutMs: 120000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: Strict TypeScript checking accepts the project-profile, Git history, scope, renderer, CLI, and gate contracts together.
+      whyItMatters: The generated workflow and canonical Factfile shapes must agree across the public API and CLI.
+      code:
+        - path: tsconfig.json
+          purpose: Defines the strict static consistency rules.
+      artifacts: []
+humanCriteria:
+  - id: five-minute-value
+    description: A developer can reach a useful first Factfile in under five minutes and knows what to customize
+    guidance: Start from the README in a representative repository and note every point requiring prior Keyoku knowledge.
+  - id: github-review-clarity
+    description: The first Factfile screen makes the next decision, supported claims, unknowns, and review path understandable in under ten seconds
+    guidance: Look only at the first viewport, then explain what is established, what is not established, and what action belongs to the reviewer.
+  - id: complete-drill-down
+    description: A developer can drill from any supported claim to useful artifacts, relevant code, a reproduction instruction, and exact verifier details
+    guidance: Open one claim without reading the outcome YAML and reproduce its observation; confirm missing evidence is labeled rather than implied.
+  - id: focused-launch
+    description: The public product reads as a focused proof layer rather than a generic agent control plane, memory system, or certification claim
+    guidance: Inspect the README, CLI help, package description, MCP instructions, and archived surfaces for conflicting promises.
+createdAt: 2026-08-15T18:30:00Z
+updatedAt: 2026-08-17T02:41:00Z

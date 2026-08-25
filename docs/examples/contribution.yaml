@@ -1,0 +1,21 @@
+schemaVersion: keyoku.dev/contribution/v1alpha1
+id: release-build-2026-08-09-a1b2c3d4
+title: Make the release build reproducible
+outcomeId: release-build
+outcomeRevision: 1
+baseSha: 0123456789abcdef0123456789abcdef01234567
+actors:
+  - kind: human
+    id: maintainer@example.com
+    name: Project maintainer
+    role: accountable owner
+  - kind: agent
+    id: codex:gpt-5.6-sol
+    name: Codex
+    role: implementation agent
+    ownerId: maintainer@example.com
+    harness: Codex
+    model: gpt-5.6-sol
+status: draft
+createdAt: 2026-08-09T00:00:00Z
+updatedAt: 2026-08-09T00:00:00Z

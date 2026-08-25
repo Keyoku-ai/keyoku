@@ -3,180 +3,276 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.svg">
     <source media="(prefers-color-scheme: light)" srcset="assets/banner-light.svg">
-    <img alt="keyoku" src="assets/banner-light.svg" width="800">
+    <img alt="Keyoku" src="assets/banner-light.svg" width="800">
   </picture>
 
-  <p>
-    <strong>The harness with muscle memory.</strong><br>
-    <sub>Keyoku watches what you do in Claude Code, Cursor, or Codex, learns your patterns, and turns them into one-command workflows — automatically.</sub>
-  </p>
+  <p><strong>Proof your coding agent's work—not its confidence.</strong><br>
+  <sub>One repository-owned outcome. Exact-revision evidence. A clear human decision.</sub></p>
 
-  <p>
-    <a href="#get-started">Get Started</a> &bull;
-    <a href="#how-it-works">How It Works</a> &bull;
-    <a href="#mcp-tools">MCP Tools</a> &bull;
-    <a href="#architecture">Architecture</a> &bull;
-    <a href="#keyoku-engine">keyoku-engine</a>
-  </p>
-
-  [![npm](https://img.shields.io/npm/v/keyoku?label=keyoku&style=flat-square&color=6366f1)](https://www.npmjs.com/package/keyoku)
+  [![npm](https://img.shields.io/npm/v/keyoku?label=keyoku&style=flat-square&color=3159d9)](https://www.npmjs.com/package/keyoku)
   [![CI](https://img.shields.io/github/actions/workflow/status/Keyoku-ai/keyoku/ci.yml?style=flat-square&label=CI)](https://github.com/Keyoku-ai/keyoku/actions/workflows/ci.yml)
-  [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-  [![License: MIT](https://img.shields.io/badge/License-MIT-22c55e?style=flat-square)](LICENSE)
+  [![License: MIT](https://img.shields.io/badge/License-MIT-166a4a?style=flat-square)](LICENSE)
 
 </div>
 
-<br>
+Keyoku is a free, local-first proof session between humans and coding agents. It turns a repository-owned definition of done into a live working view and a shareable **Factfile**: meaningful evidence, agent provenance, explicit limits, and an exact Git scope.
 
-## Get Started
+**Factfile proves one checkpoint. Keyoku Pulse carries trusted progress across checkpoints.** Pulse accepts typed events from any agent harness, reports only exact-source verified checkpoints, and renders founder, developer, timeline, email-safe, text, and JSON views from one digest. It never silently sends a message.
 
-Install it once, then wire it up:
+It works with Codex, Claude Code, Copilot, Cursor, OpenHands, custom agents, CI, or no agent at all. Keyoku does not run your agent and does not ask you to move source code off GitHub.
 
-```bash
-npm install -g keyoku
-keyoku init
-```
+> GitHub shows the diff. Keyoku shows whether the intended outcome is supported—and where a human still has to decide.
 
-> A global install keeps keyoku on a durable path. Running `npx keyoku init`
-> from the throwaway npx cache is refused — npm can evict that directory and
-> break the hooks — so install globally first.
-
-The init command wires everything automatically:
-
-1. **Registers the MCP server** — via `claude mcp add --scope user`, so Claude Code connects on next launch
-2. **Installs the hooks** — activity recording (every Bash/Edit/Write/Read/MCP call), a session-start brief, and prompt-time practice injection
-3. **Wires Codex too** — when `~/.codex` exists, the MCP server lands in `config.toml` automatically (same tools, same workflows)
-4. **Stays local** — no cloud, no telemetry; state lives in `~/.keyoku` with the same file permissions as `~/.aws`. `keyoku pause` stops everything instantly.
-
-Restart Claude Code and keyoku is live. Then skip the cold start entirely:
+## Try the v3 source alpha
 
 ```bash
-keyoku import   # backfill months of history from your Claude Code transcripts
+git clone https://github.com/Keyoku-ai/keyoku.git
+cd keyoku
+npm ci
+npm link
+
+# Run the complete evidence-gap → human-review → stale-proof demo
+keyoku proof demo --open
+
+cd /path/to/your-project
+keyoku proof init
 ```
 
-Now ask your agent to run `workflow_suggest` — keyoku mines your real history immediately instead of waiting days for new activity. Approved workflows appear as native slash commands (MCP prompts), and `keyoku export <slug>` bakes one into your repo as a Claude Code skill your whole team inherits.
+`keyoku proof demo` creates a disposable Git repository and uses the real Keyoku
+pipeline. It first records a failing evidence state, fixes the sample defect,
+produces an exact-revision Factfile, and proves that review is rejected after
+the source changes. It needs no account, model key, hosted service, or prepared
+video. Pass `--dir <empty-directory>` if you want a predictable location to
+inspect afterward.
 
-## How It Works
+The npm `latest` tag still points to the v2 muscle-memory product during this
+alpha cutover. The repository and generated GitHub workflow pin the public
+`proof-alpha.1` source tag until a separately verified v3 npm release exists.
 
-**Without Keyoku:** you describe the same multi-step process to your agent every session.
+Customize the outcome without learning the full YAML schema:
 
-**With Keyoku:** you approve a workflow once, then run it with one command. The agent never has to rediscover it.
+```bash
+keyoku proof customize review-ready-change \
+  --objective "A user can complete checkout without losing their cart"
 
-### 1. Activity tracing — automatic
-
-Every tool call your agent makes is recorded as a lightweight `ActivityEvent` — tool name, summary, extracted entities. Purely local.
-
-### 2. Pattern detection — heuristics for recall, a model for precision
-
-`workflow_suggest` mines recurring sequences from your recent activity (non-overlapping counting, noise suppression, longest-chain collapsing — no model required). If an SLM key is configured (`GEMINI_API_KEY` or `ANTHROPIC_API_KEY`), the model then refines the drafts: filters coincidences, names workflows properly, and parameterizes run-specific values with `{{placeholders}}`.
-
-### 2b. Muscle memory — converged goals become reusable workflows
-
-A goal that converges (`goal_assess` reports all criteria met) promotes its action trace into a learned workflow. Next time you start a *similar* goal, keyoku surfaces what worked before — so the agent never rediscovers it.
-
-- **Capture happens three ways:** explicit `goal_record`, live `goal_focus` (real actions stream into the goal's trace as you work), or **activity backfill** (if you just did the work without recording, keyoku lifts the steps from the activity log). Already have hollow workflows from older runs? `keyoku backfill` repopulates them.
-- **Reuse needs no API key.** keyoku is driven by a frontier coding agent, so *the agent is the judge of relevance.* `goal_assess` returns `candidateWorkflows` and the agent picks the ones that genuinely apply — which matches verbose, differently-worded goals that token-overlap never could. A lite model is an optional accelerator for headless runs (`keyoku watch`/cron), not a requirement.
-- **It self-prunes.** Suggestions rank by `similarity × precision`, where precision is learned from whether a workflow's steps actually recur — so word-matching-but-never-useful workflows sink.
-- **Negative memory too.** Approaches that *failed* on the way to convergence are captured as pitfalls and surfaced as "avoid (failed before): …" on similar goals.
-- **Refine raw into clean.** `keyoku refine <slug>` turns noisy captured steps into a tight, `{{parameterized}}` template ready to run.
-
-### 3. Approval — you are the trust boundary
-
-```
-workflow_approve { slug: "deploy-staging", name: "Deploy staging", steps: [...] }
+keyoku proof customize review-ready-change \
+  --check "npm run test:checkout" \
+  --claim "Checkout completes end to end" \
+  --why "This is the behavior being shipped"
 ```
 
-Review the draft like you'd review a shell script, then approve. Templates live in `~/.keyoku/templates.json`.
+Run `keyoku proof customize review-ready-change` with no edit flags to see the current claims, human decisions, and copyable customization recipes. Outcome YAML remains portable and Git-owned; each meaningful customization increments its revision.
 
-### 4. Execution — bash runs, judgment pauses
+Keyoku detects Node.js, Python, Rust, Go, or a generic Git repository and creates:
 
+```text
+.keyoku/
+├── project.yaml
+└── outcomes/
+    └── review-ready-change.yaml   # repository-owned definition of done
+.github/workflows/
+└── keyoku-proof.yml               # read-only PR proof check
 ```
-workflow_execute { slug: "deploy-staging" }
+
+Review the generated outcome contract, replace starter checks with behavior that matters to your project, and run it locally:
+
+```bash
+keyoku proof run review-ready-change
 ```
 
-- **bash** steps run directly (per-step `cwd`, timeouts, output captured)
-- **agent_prompt** steps pause and hand the step to your coding agent, which resumes with `execution_complete`
-- **human_review** steps wait for your explicit sign-off
+The command prints a contribution id. Open its live session while an agent works:
 
-Every execution persists step-by-step — crash-safe, fully inspectable via `execution_list`.
+```bash
+keyoku proof serve <contribution-id>
+```
 
-## MCP Tools
+The token-scoped loopback link opens automatically. It keeps four surfaces deliberately separate:
 
-| Tool | What it does |
+- **Agent work** — reported task status; useful for coordination, never treated as proof.
+- **Needs you** — only decisions that genuinely block safe progress, with options, recommendation, and the cost of no response.
+- **Direct** — optional, context-aware next directions with their expected outcome effect, deeper context, tradeoffs, and a custom path.
+- **Review first** — deterministic risk and attention signals, not another model verdict.
+- **Proof** — claim → observation → meaning → limits → reproduction → relevant code and content-bound artifacts.
+
+A choice in **Needs you** or **Direct** writes a durable instruction. Any MCP-connected agent can receive and acknowledge it; if no agent is online, it stays queued. “Copy instruction” remains the universal fallback for any harness. The portable artifact is dark-first with a local light/dark toggle; the chosen appearance never changes canonical proof.
+
+On a pull request, GitHub gets a reviewer-first Check summary and a downloadable Factfile artifact. The job executes with `contents: read`; untrusted PR code never receives a write token merely so Keyoku can post a comment.
+
+The repository also contains a Marketplace-compatible composite action for the
+future stable `v3` tag. During alpha, use `proof init`; its generated workflow
+pins the source alpha and detects each project's dependencies safely. No `v3`
+action tag is claimed until that release exists.
+
+## What a reviewer sees
+
+The Factfile answers these questions in order:
+
+1. What are agents doing, and which are currently connected?
+2. Does anything genuinely need my decision?
+3. Where should I review first?
+4. Which declared claims are supported by evidence?
+5. Which files and code areas changed?
+6. Which person, agent, harness, and model contributed?
+7. Which exact base, head, worktree, and Factfile digests does this cover?
+
+Raw observations are collapsed audit detail. An exit code is never presented as the explanation. Visible behavior can attach screenshots; runtime claims can attach tests or traces; security claims can attach scanner output; architecture claims can attach code tours and the generated SVG projection.
+
+“Review this first” is deterministic—not another model verdict. Failed claims, declared scope violations, security/data/workflow/dependency-sensitive paths, broad changes, and pending human decisions are ordered with their reasons and source paths.
+
+## One outcome is one review unit
+
+Keyoku does not encourage one enormous PR. A contribution may contain several commits, but it should deliver one coherent reviewer outcome. Unrelated outcomes should become separate or stacked PRs.
+
+An optional path boundary can fail closed when a contribution strays outside its declared scope:
+
+```yaml
+scope:
+  include:
+    - src/auth/**
+    - tests/auth/**
+  exclude:
+    - docs/**
+  maxChangedFiles: 30
+```
+
+Path checks cannot prove semantic coherence, so the generated contract also keeps that question as an explicit human judgment.
+
+Graphite and GitHub can own PR stacking. Keyoku owns the outcome and its proof.
+
+## Outcome history belongs in Git
+
+Outcome contracts are normal versioned repository files. Change the meaning or acceptance criteria, increment `revision`, and commit the file. Anyone can inspect its canonical history without a Keyoku account:
+
+```bash
+keyoku outcome history review-ready-change
+git log -- .keyoku/outcomes/review-ready-change.yaml
+```
+
+Each contribution also keeps append-only coordination events and Factfile snapshots:
+
+```text
+.keyoku/contributions/<id>/
+├── manifest.yaml
+├── events.jsonl           # work, decisions, instructions, acknowledgements, presence
+├── reviews.jsonl          # human judgments and exact-snapshot acceptance
+├── snapshots/<factfile-id>.json
+├── factfile.json          # canonical machine record
+├── factfile.github.md     # concise GitHub reviewer surface
+├── factfile.md            # portable detailed Markdown
+└── factfile.html          # human-readable evidence and code tour
+```
+
+Projects can keep snapshots local, upload them as CI artifacts, or commit accepted receipts. Generating a receipt does not change its own source digest.
+
+## The state model tells the truth
+
+| State | Meaning |
 |---|---|
-| `activity_record` / `activity_list` | Log and browse the observation stream |
-| `workflow_suggest` | Mine patterns → model-refined draft workflows |
-| `workflow_capture` | "Save what I just did" — last N session actions become a draft |
-| `workflow_approve` / `workflow_update` | Save or edit templates (slash commands stay current) |
-| `workflow_template_list` / `workflow_template_delete` | Manage the catalog |
-| `workflow_execute` | Run a template (`params` fill `{{placeholders}}`) |
-| `execution_complete` / `execution_cancel` / `execution_list` | Resume, stop, browse runs |
-| `knowledge_submit` / `knowledge_query` | The context layer — research, conventions, practice |
-| `goal_create` / `goal_assess` / … | Goals with machine-checkable success criteria |
-| `goal_focus` / `goal_unfocus` | Live capture — record real actions into a goal's trace as you work |
-| `connector_add` / `connector_call` / … | Plug in external MCP servers (GitHub, GCP, …) with autonomy gating |
+| `evidence_gaps` | A declared machine claim failed, timed out, or could not be observed |
+| `human_review_required` | Machine evidence passed; a named human question remains |
+| `review_blocked` | A required human judgment failed |
+| `ready_for_review` | Declared automated and required human criteria passed |
+| `accepted` | An identified human accepted that exact snapshot |
+
+“Passing” means only that the repository's declared checks passed for the shown revision. It never means universally secure, correct, maintainable, or fit for purpose. Any source change makes the Factfile stale and requires re-evaluation.
+
+## Example outcome
+
+```yaml
+schemaVersion: keyoku.dev/outcome/v1alpha1
+id: working-release
+revision: 1
+title: The release can be reviewed and shipped
+objective: A maintainer can build the release and confirm its visible behavior.
+owner:
+  kind: human
+  id: maintainer@example.com
+  name: Project maintainer
+constraints:
+  - One contribution represents one coherent outcome.
+criteria:
+  - description: The release build succeeds
+    probe:
+      kind: command
+      run: npm run build
+      timeoutMs: 120000
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: The production build completed for this exact revision.
+      whyItMatters: A broken build cannot produce a releasable artifact.
+      code:
+        - path: src/build.ts
+          purpose: Produces the release bundle.
+      artifacts: []
+humanCriteria:
+  - id: visible-behavior
+    description: The maintainer confirms the user-facing result matches the request
+    guidance: Open the preview and inspect the attached screenshots before accepting.
+createdAt: 2026-08-15T00:00:00Z
+updatedAt: 2026-08-15T00:00:00Z
+```
 
 ## CLI
 
-```
-keyoku [serve]          Start the MCP server on stdio (Claude Code does this automatically)
-keyoku init             Wire up the hook + MCP registration
-keyoku import           Backfill activity from Claude Code + Codex transcripts (kills the cold start)
-keyoku export <slug>    Bake a workflow into ./.claude/skills — or AGENTS.md with --agents-md
-keyoku pause | resume   Privacy switch: stop/start all recording and injection
-keyoku doctor           Verify hooks, MCP registrations, engine, and activity health
-keyoku inspect          Show exactly what's stored in ~/.keyoku (--secrets scans for leaks)
-keyoku status           Show goals, templates, connectors
-keyoku learn            Mine patterns from the activity log
-keyoku backfill         Repopulate hollow learned workflows from the activity log (--dry-run)
-keyoku refine <slug>    Turn a workflow's raw steps into a clean, parameterized template (--apply)
-keyoku focus <goal>     Live-capture actions into a goal's trace (--clear to stop; no arg to show)
-keyoku assess <goal>    One-shot convergence check
-keyoku watch <goal>     Re-assess on an interval
-keyoku approvals        Approve/deny gated connector calls
-keyoku audit [n]        Show the audit trail
-```
-
-## Architecture
-
-```
-Your machine
-├── Claude Code (or Cursor, Codex)
-│   ├── PostToolUse hook → keyoku record   (activity logging)
-│   └── MCP connection  → keyoku serve     (tool calls)
-│
-└── ~/.keyoku/
-    ├── activity.jsonl    (event stream, capped)
-    ├── templates.json    (approved workflows)
-    ├── executions.json   (run history)
-    ├── goals.json        (convergence targets)
-    └── connectors.json   (external MCP services)
+```text
+keyoku proof init                    Detect project and install proof workflow
+keyoku proof customize <outcome>     Edit common proof fields without schema knowledge
+keyoku proof run <outcome>           Generate a local Factfile
+keyoku proof serve <contribution>    Open the live human ↔ agent proof session
+keyoku proof ci <outcome>            Generate a GitHub Check summary + artifact
+keyoku outcome list                  List outcome contracts
+keyoku outcome history <outcome>     Show repository-owned revision history
+keyoku contribution start <outcome>  Open a contribution manually
+keyoku contribution review <id>      Record a human criterion decision
+keyoku contribution accept <id>      Accept an exact passing snapshot
+keyoku gate <contribution>           Re-evaluate an existing contribution
+keyoku factfile <contribution>       Locate the full HTML report
+keyoku pulse help                    Inspect the generic event, checkpoint, planner, and renderer path
+keyoku pulse fixture generic        Emit a harness-neutral JSONL integration fixture
+keyoku pulse ingest --file F        Append strict, idempotent lifecycle events
+keyoku pulse plan --json            Decide send/defer/dedupe/suppress/coalesce/stale_no_send
+keyoku pulse render --audience A    Render one content-bound audience projection
 ```
 
-The division of labor: **heuristics** generate candidates for free, the **small model** refines them cheaply, and your **coding agent** does the heavy lifting on the subscription you already pay for. Keyoku orchestrates; it never burns frontier tokens.
+`proof run` reuses the active contribution for the current branch and outcome so repeated iterations remain one history. Pass `--new` only when opening a genuinely separate attempt. The earlier memory and workflow-learning tools remain available for compatibility, but they are optional supporting capabilities—not the launch promise.
 
-## Configuration
+## Different tools, different jobs
 
-| Env var | Default | Purpose |
+| Product | Primary job | Keyoku's boundary |
 |---|---|---|
-| `KEYOKU_HOME` | `~/.keyoku` | State directory |
-| `GEMINI_API_KEY` / `ANTHROPIC_API_KEY` | — | Enable model-refined suggestions |
-| `KEYOKU_SLM_PROVIDER` | auto | `gemini`, `anthropic`, `openai-compat`, or `none` |
-| `KEYOKU_SLM_BASE_URL` / `KEYOKU_SLM_MODEL` | — | Any OpenAI-compatible endpoint (Ollama, LM Studio, LiteLLM, Groq, …) |
-| `KEYOKU_ENGINE_URL` | — | Connect a running [keyoku-engine](https://github.com/Keyoku-ai/keyoku-engine): knowledge mirrors into it and queries upgrade to semantic search |
-| `KEYOKU_WF_MIN_SIMILARITY` | `0.2` | Jaccard floor for suggesting a learned workflow on a new goal |
-| `KEYOKU_WF_SUGGEST_LIMIT` | `2` | Max learned workflows surfaced per assessment |
-| `KEYOKU_BACKFILL_LOOKBACK_MIN` | `45` | Minutes before a goal's creation to scan for build-then-verify work |
-| `KEYOKU_BACKFILL_HEAD_STEPS` | `8` | Setup steps kept from the front when a backfilled workflow is capped |
-| `KEYOKU_DEBUG` | — | Full error stacks |
+| GitHub Copilot agents | Run and track GitHub agent sessions | Keyoku remains harness-neutral and evaluates a repository-owned outcome |
+| Entire | Capture prompts, transcripts, and session checkpoints in Git | Keyoku records bounded result evidence; raw transcripts are optional |
+| Graphite | Split and navigate stacked pull requests | Keyoku evaluates each coherent outcome in the stack |
+| CodeRabbit | AI review and defect suggestions | Keyoku reports the project's own deterministic proof and human decisions |
+| CI/test tools | Execute specialized checks | Keyoku explains their relevance and binds results into one portable receipt |
 
-## Security
+Keyoku should complement these tools, not recreate them.
 
-Approved templates execute shell commands with your privileges — the approval step is the trust boundary. Read [SECURITY.md](SECURITY.md) before installing.
+## Two repositories, one product
 
-## keyoku-engine
+| Repository | Free responsibility |
+|---|---|
+| [`keyoku`](https://github.com/Keyoku-ai/keyoku) | CLI, open Factfile and Pulse schemas, local verifier/ledger/planner/renderers, GitHub workflow, harness adapters |
+| [`keyoku-engine`](https://github.com/Keyoku-ai/keyoku-engine) | Optional durable multi-run Factfile/Pulse registry and dispatcher service plus the retained embedded-memory library |
 
-The Go backend for teams: knowledge graph, semantic search, memory decay, and cross-device sync. Available at [github.com/Keyoku-ai/keyoku-engine](https://github.com/Keyoku-ai/keyoku-engine).
+The CLI repository is the product wedge and source of truth. The engine is an optional registry—not a required memory backend and not a duplicate control plane. Managed team views, retention policy, RBAC, and cross-repository search are possible hosted extensions; they are not presented as finished open-source features. Both repositories remain usable for public or private repositories.
+
+## Trust and privacy
+
+- Project proof lives in `.keyoku/`; ephemeral evaluator state lives in `.keyoku/runtime/`.
+- Credential-shaped observations are redacted before JSON, Markdown, HTML, or publication.
+- Factfile publication is explicit and accepts HTTPS or loopback HTTP only.
+- GitHub proof execution is read-only and does not post privileged PR comments from untrusted code.
+- Agent identity is provenance. A human or organization remains accountable.
+
+Read the [Factfile standard](docs/FACTFILE-STANDARD.md), [Pulse contract](docs/PULSE.md), [GitHub integration guide](docs/GITHUB.md), and [security review](docs/SECURITY-REVIEW.md).
+
+## Status
+
+The Factfile schema is `v1alpha1`. The local evaluator, exact Git binding, durable two-way instruction protocol, token-scoped live session, JSON/Markdown/HTML renderers, annotated visual evidence, scope boundary, outcome history, and GitHub Check workflow are implemented and tested. Schema meaning may still evolve during alpha; incompatible changes receive a new schema version.
 
 ## License
 

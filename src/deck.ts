@@ -529,9 +529,15 @@ function renderStatusSlides(
   persona: DeckPersona,
 ): RenderedSlide[] {
   const { summary, humanReview, outcome, evidence, reviews, session } = factfile;
-  const overallPass = summary.failed === 0 && summary.total > 0;
-  const verdictLabel = overallPass ? "PASS" : "FAIL";
   const stateLabel = factfile.state.replace(/_/g, " ");
+  const statePresentation: Record<string, { label: string; tone: "pass" | "fail" | "wait" }> = {
+    evidence_gaps: { label: "EVIDENCE GAPS", tone: "fail" },
+    human_review_required: { label: "HUMAN REVIEW REQUIRED", tone: "wait" },
+    review_blocked: { label: "REVIEW BLOCKED", tone: "fail" },
+    ready_for_review: { label: "READY FOR REVIEW", tone: "pass" },
+    accepted: { label: "ACCEPTED", tone: "pass" },
+  };
+  const presentation = statePresentation[factfile.state] ?? { label: factfile.state.toUpperCase().replace(/_/g, " "), tone: "wait" as const };
   const work = session.work ?? [];
   const directions = session.directions ?? [];
   const pendingHuman = outcome.humanCriteria.filter(
@@ -542,7 +548,7 @@ function renderStatusSlides(
     ? `<p class="concept-note">"Verdict" means every automated check that defines this outcome's "done" actually ran and passed against this exact revision — not a claim, a re-run.</p>`
     : "";
 
-  const verdictBlock = `<div class="verdict"><span class="badge badge-${overallPass ? "pass" : "fail"}">${verdictLabel}</span><span class="counts">${summary.passed}/${summary.total} automated checks passed · ${humanReview.pending}/${humanReview.total} human decisions pending</span></div>
+  const verdictBlock = `<div class="verdict"><span class="badge badge-${presentation.tone}">${esc(presentation.label)}</span><span class="counts">${summary.passed}/${summary.total} automated checks passed · ${humanReview.pending}/${humanReview.total} human decisions pending</span></div>
 <p class="state-line">${esc(stateLabel)}</p>`;
 
   const pendingBlock = `<div class="pending"><h3>Pending human decisions (${pendingHuman.length})</h3>${
@@ -702,6 +708,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,Bl
 .badge{font-size:12px;font-weight:800;letter-spacing:.08em;padding:4px 10px;border-radius:5px}
 .badge-pass{background:var(--chipd);color:#eafff1}
 .badge-fail{background:var(--chipb);color:#ffecec}
+.badge-wait{background:var(--chipw);color:#fff8e3}
 .counts{font-size:14px;color:var(--muted)}
 .state-line{font-size:12px;color:var(--muted);text-transform:capitalize;margin:4px 0 0}
 .concept-note{font-size:13px;color:var(--muted);border-left:2px solid var(--line);padding-left:10px;margin:12px 0}

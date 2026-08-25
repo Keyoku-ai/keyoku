@@ -112,6 +112,19 @@ describe("MCP protocol e2e — muscle memory", () => {
     expect(JSON.stringify(g)).not.toContain("sk-live-shouldnotleak");
   });
 
+  it("exposes the harness-neutral Pulse primitives without a delivery side effect", async () => {
+    const listed = await client.rpc("tools/list", {});
+    const names = listed.result.tools.map((tool: { name: string }) => tool.name);
+    expect(names).toEqual(expect.arrayContaining([
+      "pulse_event_ingest",
+      "pulse_checkpoint_publish",
+      "pulse_status",
+      "pulse_dispatch_plan",
+      "pulse_projection_render",
+    ]));
+    expect(names).not.toContain("pulse_send");
+  });
+
   it("iterative run: captures step + pitfall, then reuses both on a similar goal", async () => {
     await client.tool("goal_create", {
       objective: "fix the flaky auth test",

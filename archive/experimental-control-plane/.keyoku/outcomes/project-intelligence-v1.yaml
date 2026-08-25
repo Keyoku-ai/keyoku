@@ -1,0 +1,128 @@
+schemaVersion: keyoku.dev/outcome/v1alpha1
+id: project-intelligence-v1
+revision: 1
+title: A Project Steward keeps code, agents, and proof synchronized
+objective: >-
+  A developer can open Keyoku and understand the current architecture, active goals, worker
+  agents, important changes, evidence, and decisions from a live project model that updates
+  without manually rewriting dashboard copy.
+owner:
+  kind: human
+  id: taikicoleman@icloud.com
+  name: Tye
+  role: accountable product owner
+constraints:
+  - The Steward maintains project intelligence and context but does not replace worker-agent harnesses.
+  - Deterministic observations remain distinct from agent-inferred semantic structure.
+  - The UI is template-driven and accepts typed, attributed data patches rather than arbitrary agent-authored scripts.
+  - Multiple goals may be active; one may be focused per project view without deleting or hiding the others.
+criteria:
+  - description: The project intelligence architecture defines the Steward, context graph ontology, worker plane, evidence artifacts, deployment modes, and adoption wedge
+    probe:
+      kind: command
+      run: >-
+        node -e "const fs=require('fs');const s=fs.readFileSync('docs/KEYOKU-PROJECT-INTELLIGENCE.md','utf8');process.exit(['Project Steward','Core ontology','Context compiler','Worker plane','Projection and artifact plane','Deployment modes','Adoption wedge'].every(x=>s.includes(x))?0:1)"
+      timeoutMs: 30000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: The system design assigns deterministic observation, semantic stewardship, worker execution, and human accountability to separate bounded planes.
+      whyItMatters: Contributors can implement intelligence without turning Keyoku into another opaque autonomous coding harness.
+      code:
+        - path: docs/KEYOKU-PROJECT-INTELLIGENCE.md
+          purpose: Canonical Project Steward, context graph, synchronization, artifact, and deployment architecture.
+      artifacts: []
+  - description: The architecture contract produces a current projection and portable SVG export
+    probe:
+      kind: command
+      run: >-
+        npx tsx -e "import {scanArchitecture,renderArchitectureSvg} from './src/architecture.ts';const a=scanArchitecture(process.cwd());const s=renderArchitectureSvg(a);process.exit(a.components.length>=8&&a.relations.length>=8&&s.includes('<svg')&&s.includes('data-component')?0:1)"
+      timeoutMs: 120000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: Declared semantic components are reconciled with live filesystem and Git observations, then exported as accessible SVG.
+      whyItMatters: The architecture view remains inspectable and portable instead of becoming a model-generated picture detached from the repository.
+      code:
+        - path: .keyoku/architecture.yaml
+          purpose: Declared semantic architecture and stable visual placement.
+        - path: src/architecture.ts
+          purpose: Deterministic architecture projection, drift scan, proposals, and SVG rendering.
+      artifacts: []
+  - description: Multiple project goals and a focused goal are represented independently of agent sessions
+    probe:
+      kind: command
+      run: >-
+        node -e "const fs=require('fs');const files=fs.readdirSync('.keyoku/outcomes').filter(x=>x.endsWith('.yaml'));process.exit(files.length>=2?0:1)"
+      timeoutMs: 30000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: Project goals are separate versioned outcome contracts, allowing parallel goals while the interface focuses attention on one.
+      whyItMatters: Multi-agent projects cannot be accurately represented by a single mutable objective.
+      code:
+        - path: .keyoku/outcomes
+          purpose: Versioned collection of independently owned project outcomes.
+      artifacts: []
+  - description: The live interface preserves a canonical selectable record of snapshots, evidence, context, architecture, and Git state
+    probe:
+      kind: command
+      run: >-
+        node -e "const fs=require('fs');const server=fs.readFileSync('scripts/serve-project-brief.mjs','utf8');const ui=fs.readFileSync('docs/KEYOKU-PROJECT-STATE.html','utf8');process.exit(['briefTokenPath','projectRecord(','/api/record','/api/snapshots/current','/artifacts/snapshots/'].every(x=>server.includes(x))&&['recordView','recordSnapshotList','recordSetCurrent','loadRecord','recordArchitecture','recordEvidence','recordContext','recordGit'].every(x=>ui.includes(x))&&fs.existsSync('src/presentation.ts')?0:1)"
+      timeoutMs: 30000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: One goal-scoped record combines the live worktree with immutable Factfile revisions and lets a human choose the review baseline without mutating Git.
+      whyItMatters: A developer can move through causal project history and see exactly which source, proof, decisions, and architecture belong together.
+      code:
+        - path: scripts/serve-project-brief.mjs
+          purpose: Persistent local session credential, canonical record API, review-baseline events, historical artifacts, and live state.
+        - path: src/presentation.ts
+          purpose: Safe MCP-facing presentation manifest and attributed publication protocol.
+        - path: .keyoku/view.yaml
+          purpose: Repository-owned allowlist of agent-editable human-facing fields.
+      artifacts: []
+  - description: The full TypeScript and protocol suite remains consistent
+    probe:
+      kind: command
+      run: npm test
+      timeoutMs: 180000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: Architecture, project-state, MCP, CLI, evidence, and legacy compatibility tests pass together.
+      whyItMatters: The new intelligence layer stays additive and testable.
+      code:
+        - path: tests/architecture.test.ts
+          purpose: Architecture projection and proposal behavior.
+        - path: tests/project-state.test.ts
+          purpose: Interventions, receipts, presence, and multi-agent coordination.
+      artifacts: []
+humanCriteria:
+  - id: architecture-comprehension
+    description: A developer can explain the system boundaries and current movement from the architecture view without reading source files
+    guidance: Select several components, inspect their ownership and changes, and export the SVG.
+  - id: multi-goal-clarity
+    description: A developer can distinguish the focused goal from other active goals and understand which agents contribute to each
+    guidance: Switch focus without changing goal status or losing parallel work.
+  - id: steward-trust
+    description: The Steward feels helpful and current without appearing to invent approved project truth
+    guidance: Review the provenance language for declared, observed, inferred, and approved content.
+createdAt: 2026-08-12T02:00:00Z
+updatedAt: 2026-08-12T02:00:00Z
