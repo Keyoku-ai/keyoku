@@ -8,11 +8,14 @@
   },
   "main": "dist/index.js",
   "exports": {
-    ".": "./dist/index.js"
+    ".": "./dist/index.js",
+    "./fixtures/conformance/*": "./fixtures/conformance/*"
   },
   "files": [
     "dist/*.js",
+    "fixtures/conformance",
     "fixtures/pulse",
+    "scripts/render-conformance-fixtures.mjs",
     "scripts/render-pulse-fixtures.mjs",
     "README.md",
     "LICENSE"
@@ -24,6 +27,7 @@
     "test:watch": "vitest",
     "eval": "tsx evals/muscle-memory.eval.ts",
     "fixtures:pulse": "node scripts/render-pulse-fixtures.mjs",
+    "fixtures:conformance": "npm run build && node scripts/render-conformance-fixtures.mjs",
     "typecheck": "tsc --noEmit",
     "prepare": "npm run build",
     "preflight": "npm run build && node scripts/preflight.mjs",

@@ -1,7 +1,9 @@
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { z } from "zod";
+
+import { bytesDigest, canonicalJson, canonicalJsonDigest } from "./canonical-json.js";
+import { readVerifiedFactfile } from "./contribution.js";
 
 const PULSE_DIR = join(".keyoku", "pulse");
 const PULSE_EVENTS_FILE = "events.jsonl";
@@ -12,23 +14,15 @@ const IdSchema = z.string().min(1).max(240).regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*
 
 /** JSON with recursively sorted object keys is Keyoku Pulse's digest input. */
 export function stablePulseJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stablePulseJson).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .filter(([, item]) => item !== undefined)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => `${JSON.stringify(key)}:${stablePulseJson(item)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
+  return canonicalJson(value);
 }
 
 export function pulseDigest(value: unknown): string {
-  return createHash("sha256").update(stablePulseJson(value)).digest("hex");
+  return canonicalJsonDigest(value);
 }
 
 export function pulseBytesDigest(value: Uint8Array): string {
-  return createHash("sha256").update(value).digest("hex");
+  return bytesDigest(value);
 }
 
 function withoutKey<T extends Record<string, unknown>>(value: T, key: string): Record<string, unknown> {
@@ -234,26 +228,17 @@ export function verifyAndSealLocalCheckpoint(rootInput: string, input: LocalChec
     if (relativePath.startsWith("..") || isAbsolute(relativePath)) throw new Error(`Factfile path is outside the verified root: ${pathInput}`);
     if (!existsSync(absolute)) throw new Error(`Factfile does not exist: ${relativePath}`);
     const bytes = readFileSync(absolute);
-    let value: Record<string, unknown>;
-    try { value = JSON.parse(bytes.toString("utf8")) as Record<string, unknown>; }
-    catch (error) { throw new Error(`Factfile is not valid JSON: ${relativePath}: ${error instanceof Error ? error.message : String(error)}`); }
-    if (value.schemaVersion !== "keyoku.dev/factfile/v1alpha1") throw new Error(`Unsupported Factfile schema at ${relativePath}.`);
-    const digest = typeof value.digest === "string" ? value.digest : "";
-    const expectedDigest = pulseDigest(withoutKey(value, "digest"));
-    if (digest !== expectedDigest) throw new Error(`Factfile digest mismatch at ${relativePath}.`);
-    const repository = value.repository as Record<string, unknown> | undefined;
-    if (!repository || typeof repository.repositoryRoot !== "string" || resolve(repository.repositoryRoot) !== root || repository.headSha !== input.source.headSha || repository.worktreeDigest !== input.source.worktreeDigest) {
+    const factfile = readVerifiedFactfile(absolute);
+    if (resolve(factfile.repository.repositoryRoot) !== root || factfile.repository.headSha !== input.source.headSha || factfile.repository.worktreeDigest !== input.source.worktreeDigest) {
       throw new Error(`Factfile source does not match checkpoint source at ${relativePath}.`);
     }
-    const id = typeof value.id === "string" ? value.id : "";
-    const state = typeof value.state === "string" ? value.state : "";
     return PulseFactfileReferenceSchema.parse({
-      id,
+      id: factfile.id,
       path: relativePath,
-      digest,
+      digest: factfile.digest,
       sourceDigest: input.source.verifiedDigest,
       bytesDigest: pulseBytesDigest(bytes),
-      state,
+      state: factfile.state,
     });
   });
   const assets = input.assets.map((asset) => {

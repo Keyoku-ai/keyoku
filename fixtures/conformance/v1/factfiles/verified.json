@@ -1,0 +1,123 @@
+{
+  "schemaVersion": "keyoku.dev/factfile/v1alpha1",
+  "id": "fact_conformance_v1",
+  "project": {
+    "id": "conformance-project",
+    "name": "Conformance Project",
+    "summary": "Stable cross-language trust vectors."
+  },
+  "outcome": {
+    "id": "conformance-outcome",
+    "revision": 1,
+    "title": "The conformance record is portable",
+    "objective": "Bind exact source, verification, and presentation bytes across implementations.",
+    "constraints": [
+      "Treat these bytes as fixtures, never live evidence."
+    ],
+    "owner": {
+      "kind": "human",
+      "id": "owner@example.com",
+      "name": "Fixture Owner"
+    },
+    "humanCriteria": []
+  },
+  "contribution": {
+    "schemaVersion": "keyoku.dev/contribution/v1alpha1",
+    "id": "conformance-contribution",
+    "title": "Portable conformance record",
+    "summary": "One complete deterministic Factfile.",
+    "knownLimits": [
+      "Fixture-only evidence."
+    ],
+    "outcomeId": "conformance-outcome",
+    "outcomeRevision": 1,
+    "baseSha": "1111111111111111111111111111111111111111",
+    "actors": [
+      {
+        "kind": "human",
+        "id": "owner@example.com",
+        "name": "Fixture Owner"
+      }
+    ],
+    "status": "ready_for_review",
+    "createdAt": "2026-08-25T12:00:00.000Z",
+    "updatedAt": "2026-08-25T12:00:00.000Z"
+  },
+  "repository": {
+    "repositoryRoot": "/conformance/keyoku",
+    "branch": "main",
+    "ahead": 0,
+    "behind": 0,
+    "lastCommit": "Conformance fixture",
+    "baseSha": "1111111111111111111111111111111111111111",
+    "headSha": "2222222222222222222222222222222222222222",
+    "worktreeDigest": "3333333333333333333333333333333333333333333333333333333333333333",
+    "dirty": false,
+    "changedFiles": []
+  },
+  "scope": {
+    "declared": false,
+    "passed": true,
+    "includedPaths": [],
+    "unexpectedPaths": [],
+    "excludedPaths": [],
+    "topLevelAreas": [],
+    "note": "No repository path scope was declared for this fixture."
+  },
+  "reviewPlan": [],
+  "session": {
+    "work": [],
+    "decisions": [],
+    "instructions": [],
+    "agents": [],
+    "directions": [],
+    "eventCount": 0
+  },
+  "state": "ready_for_review",
+  "generatedAt": "2026-08-25T12:00:00.000Z",
+  "reviews": [],
+  "evidence": [
+    {
+      "id": "criterion-0",
+      "description": "The structured fixture observation matches.",
+      "pass": true,
+      "actual": {
+        "😀": 6,
+        "ä": 4,
+        "a": 2,
+        "あ": 5,
+        "Á": 3,
+        "Z": 1
+      },
+      "expected": {
+        "op": "eq",
+        "value": 2,
+        "path": "output.a"
+      },
+      "durationMs": 1,
+      "verification": {
+        "kind": "command",
+        "label": "Fixture observation",
+        "reproduce": "keyoku conformance verify",
+        "assertion": {
+          "op": "eq",
+          "value": 2,
+          "path": "output.a"
+        }
+      }
+    }
+  ],
+  "summary": {
+    "passed": 1,
+    "failed": 0,
+    "total": 1,
+    "verified": true
+  },
+  "humanReview": {
+    "passed": 0,
+    "failed": 0,
+    "pending": 0,
+    "total": 0
+  },
+  "digest": "a6056e7e78f91d0a53459c62e1c66a4557bd459f423648ce63d8ce8625675404"
+}

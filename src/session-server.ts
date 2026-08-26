@@ -1,9 +1,9 @@
 import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-import { findProjectRoot, listFactfileHistory, loadContribution, renderFactfileHtml, runGate, type GateSnapshot } from "./contribution.js";
+import { findProjectRoot, listFactfileHistory, loadContribution, readVerifiedFactfile, renderFactfileHtml, runGate } from "./contribution.js";
 import { queueInstruction, readProofSession, resolveDecision } from "./proof-session.js";
 
 export interface ProofSessionServer {
@@ -52,7 +52,7 @@ export async function startProofSessionServer(input: { root?: string; contributi
     response.setHeader("referrer-policy", "no-referrer");
     if (!authorize(request, url)) return json(response, 401, { error: "This Keyoku briefing link is missing or has an expired session token." });
     if (request.method === "GET" && url.pathname === "/") {
-      const snapshot = JSON.parse(readFileSync(factfilePath, "utf8")) as GateSnapshot;
+      const snapshot = readVerifiedFactfile(factfilePath, { contributionId: contribution.id });
       snapshot.session = readProofSession(root, contribution.id);
       response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
       response.end(renderFactfileHtml(snapshot, { live: true, sessionToken: token, history: listFactfileHistory(root, contribution.id) }));
@@ -62,7 +62,7 @@ export async function startProofSessionServer(input: { root?: string; contributi
     if (historicalMatch) {
       const path = join(dir, "snapshots", `${historicalMatch[1]}.json`);
       if (!existsSync(path)) return json(response, 404, { error: "Unknown Factfile snapshot." });
-      const snapshot = JSON.parse(readFileSync(path, "utf8")) as GateSnapshot;
+      const snapshot = readVerifiedFactfile(path, { contributionId: contribution.id, snapshotId: historicalMatch[1] });
       response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
       response.end(renderFactfileHtml(snapshot, { historical: true, sessionToken: token, history: listFactfileHistory(root, contribution.id) }));
       return;

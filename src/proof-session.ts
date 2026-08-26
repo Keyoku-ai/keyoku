@@ -13,7 +13,7 @@ export const WorkItemSchema = z.object({
   status: z.enum(["queued", "working", "blocked", "done"]),
   actorId: z.string().min(1),
   updatedAt: TimestampSchema,
-});
+}).strict();
 
 export const DecisionOptionSchema = z.object({
   id: SlugSchema,
@@ -23,7 +23,7 @@ export const DecisionOptionSchema = z.object({
   outcomeEffect: z.string().min(1).optional(),
   deepDive: z.string().min(1).optional(),
   tradeoffs: z.array(z.string().min(1)).optional(),
-});
+}).strict();
 
 export const DecisionRequestSchema = z.object({
   id: SlugSchema,
@@ -41,7 +41,7 @@ export const DecisionRequestSchema = z.object({
   resolvedBy: z.string().optional(),
   selectedOptionId: SlugSchema.optional(),
   resolutionNote: z.string().optional(),
-}).superRefine((request, context) => {
+}).strict().superRefine((request, context) => {
   if (request.recommendedOptionId && !request.options.some((option) => option.id === request.recommendedOptionId)) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["recommendedOptionId"], message: "must identify one of the decision options" });
   }
@@ -60,7 +60,7 @@ export const InstructionSchema = z.object({
   createdAt: TimestampSchema,
   acknowledgedAt: TimestampSchema.optional(),
   acknowledgedBy: z.string().optional(),
-});
+}).strict();
 
 export const AgentPresenceSchema = z.object({
   actorId: z.string().min(1),
@@ -70,7 +70,7 @@ export const AgentPresenceSchema = z.object({
   status: z.enum(["working", "waiting", "idle"]),
   currentWorkId: SlugSchema.optional(),
   lastSeenAt: TimestampSchema,
-});
+}).strict();
 
 export const DirectionProposalSchema = z.object({
   id: SlugSchema,
@@ -85,7 +85,7 @@ export const DirectionProposalSchema = z.object({
   instruction: z.string().min(1),
   proposedBy: z.string().min(1),
   createdAt: TimestampSchema,
-});
+}).strict();
 
 const WorkEventSchema = z.object({ type: z.literal("work.reported"), at: TimestampSchema, item: WorkItemSchema });
 const DecisionRequestedEventSchema = z.object({ type: z.literal("decision.requested"), at: TimestampSchema, request: DecisionRequestSchema });
@@ -118,15 +118,17 @@ export type AgentPresence = z.infer<typeof AgentPresenceSchema>;
 export type DirectionProposal = z.infer<typeof DirectionProposalSchema>;
 export type ProofSessionEvent = z.infer<typeof ProofSessionEventSchema>;
 
-export interface ProofSessionState {
-  work: WorkItem[];
-  decisions: DecisionRequest[];
-  instructions: Instruction[];
-  agents: Array<AgentPresence & { connected: boolean }>;
-  directions: DirectionProposal[];
-  eventCount: number;
-  updatedAt?: string;
-}
+export const ProofSessionStateSchema = z.object({
+  work: z.array(WorkItemSchema),
+  decisions: z.array(DecisionRequestSchema),
+  instructions: z.array(InstructionSchema),
+  agents: z.array(AgentPresenceSchema.extend({ connected: z.boolean() })),
+  directions: z.array(DirectionProposalSchema),
+  eventCount: z.number().int().nonnegative(),
+  updatedAt: TimestampSchema.optional(),
+}).strict();
+
+export type ProofSessionState = z.infer<typeof ProofSessionStateSchema>;
 
 function now(): string { return new Date().toISOString(); }
 function slug(value: string): string {

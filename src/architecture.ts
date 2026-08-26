@@ -4,6 +4,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statS
 import { dirname, join, relative } from "node:path";
 
 import { parse } from "yaml";
+import { z } from "zod";
 
 export type ArchitectureLayer = "source" | "experience" | "control" | "intelligence" | "execution" | "proof" | "state";
 
@@ -39,6 +40,32 @@ export interface ArchitectureProjection {
   relations: ArchitectureRelation[];
   unownedChanges: string[];
 }
+
+const ArchitectureComponentSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  summary: z.string().min(1),
+  layer: z.enum(["source", "experience", "control", "intelligence", "execution", "proof", "state"]),
+  icon: z.string().min(1),
+  owns: z.array(z.string()).optional(),
+  external: z.boolean().optional(),
+  view: z.object({ x: z.number(), y: z.number() }).strict().optional(),
+  observedFiles: z.number().int().nonnegative(),
+  changedFiles: z.array(z.string()),
+  state: z.enum(["external", "stable", "changing", "missing"]),
+}).strict();
+
+export const ArchitectureProjectionSchema = z.object({
+  schemaVersion: z.literal("keyoku.dev/architecture-projection/v1alpha1"),
+  projectId: z.string().min(1),
+  title: z.string().min(1),
+  generatedAt: z.string().datetime(),
+  snapshotRef: z.string().min(1),
+  source: z.object({ kind: z.literal("declared+observed"), path: z.string().min(1) }).strict(),
+  components: z.array(ArchitectureComponentSchema),
+  relations: z.array(z.object({ from: z.string().min(1), to: z.string().min(1), kind: z.string().min(1) }).strict()),
+  unownedChanges: z.array(z.string()),
+}).strict();
 
 export interface ArchitectureProposal {
   schemaVersion: "keyoku.dev/architecture-proposal/v1alpha1";

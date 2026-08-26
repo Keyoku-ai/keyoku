@@ -209,6 +209,13 @@ describe("repository-local contribution gates", () => {
     });
     expect(notedAfterAcceptance.state).toBe("accepted");
     expect(notedAfterAcceptance.contribution.status).toBe("accepted");
+    const acceptedRerun = await runGate(root, contribution.id);
+    expect(acceptedRerun).toMatchObject({
+      id: notedAfterAcceptance.id,
+      digest: notedAfterAcceptance.digest,
+      state: "accepted",
+      contribution: { status: "accepted" },
+    });
     expect(() => reviewContribution({
       root,
       contributionId: contribution.id,

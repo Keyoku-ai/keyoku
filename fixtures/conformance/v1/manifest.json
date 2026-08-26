@@ -1,0 +1,232 @@
+{
+  "schemaVersion": "keyoku.dev/pulse-conformance/v1alpha1",
+  "canonicalJson": [
+    {
+      "id": "mixed-case-unicode",
+      "input": {
+        "😀": 6,
+        "ä": 4,
+        "a": 2,
+        "あ": 5,
+        "Á": 3,
+        "Z": 1
+      },
+      "canonical": "{\"Z\":1,\"a\":2,\"Á\":3,\"ä\":4,\"あ\":5,\"😀\":6}",
+      "digest": "0f1fe24d4557ef543b80ef7d10e460dbcecdc0e4dac7955287950337bc4f0853"
+    }
+  ],
+  "bytes": {
+    "factfile": {
+      "path": "factfiles/verified.json",
+      "bytesDigest": "81bc49d9246fa69a07e43be7599e95dc1cea6e6a91542496ca6e32f498253d94",
+      "byteLength": 3142,
+      "factfileDigest": "a6056e7e78f91d0a53459c62e1c66a4557bd459f423648ce63d8ce8625675404"
+    },
+    "asset": {
+      "kind": "video",
+      "path": "assets/demo-bytes.bin",
+      "label": "Deterministic conformance asset bytes",
+      "caption": "Digest fixture only; these bytes are intentionally not playable media or live evidence.",
+      "digest": "d15e52289df855aecec2dbbe52a784c51a4b3c31959c1be72993192dcea69a8e",
+      "byteLength": 40,
+      "posterPath": "assets/poster.svg",
+      "posterDigest": "93c68dcdcb3949e0c0bb86377b0ea3bcb2b7a0729a1544f5e0d2d03c3a84bd4c"
+    },
+    "poster": {
+      "path": "assets/poster.svg",
+      "posterDigest": "93c68dcdcb3949e0c0bb86377b0ea3bcb2b7a0729a1544f5e0d2d03c3a84bd4c",
+      "byteLength": 863
+    }
+  },
+  "eventSets": {
+    "generic": "events/generic.jsonl",
+    "generic-through-verification": "events/generic-through-verification.jsonl",
+    "generic-through-checkpoint": "events/generic-through-checkpoint.jsonl",
+    "generic-reversed": "events/generic-reversed.jsonl",
+    "generic-same-time-ambiguous": "events/generic-same-time-ambiguous.jsonl",
+    "processyard": "events/processyard.jsonl",
+    "source-conflict": "events/source-conflict.jsonl"
+  },
+  "ordering": [
+    {
+      "id": "canonical-order",
+      "eventSet": "generic",
+      "expectedEventIds": [
+        "generic-started",
+        "generic-verifying",
+        "generic-checkpoint",
+        "generic-completed"
+      ],
+      "expectedCheckpointIds": [
+        "cart-recovery-verified"
+      ]
+    },
+    {
+      "id": "reversed-input-same-replay",
+      "eventSet": "generic-reversed",
+      "expectedEventIds": [
+        "generic-started",
+        "generic-verifying",
+        "generic-checkpoint",
+        "generic-completed"
+      ],
+      "expectedCheckpointIds": [
+        "cart-recovery-verified"
+      ]
+    },
+    {
+      "id": "same-time-rank-ambiguity",
+      "eventSet": "generic-same-time-ambiguous",
+      "expectedErrorIncludes": "ambiguous ordering"
+    }
+  ],
+  "sourceConflict": {
+    "eventSet": "source-conflict",
+    "dispatchVector": "suppress-source-conflict"
+  },
+  "dispatch": [
+    {
+      "id": "send-material-checkpoint",
+      "eventSet": "generic",
+      "plan": {
+        "now": "2026-08-24T16:05:00.000Z",
+        "staleAfterMs": 300000,
+        "debounceMs": 0,
+        "deliveredContentDigests": []
+      },
+      "expected": {
+        "outcome": "send",
+        "reasonCode": "material_checkpoint",
+        "failClosed": false,
+        "checkpointIds": [
+          "cart-recovery-verified"
+        ],
+        "snapshotContentDigest": "7150fa41eae8bc325f199f33b44231075e4091c97812cec7b31c17064ab4bd2c"
+      }
+    },
+    {
+      "id": "defer-uncheckpointed-work",
+      "eventSet": "generic-through-verification",
+      "plan": {
+        "now": "2026-08-24T16:02:10.000Z",
+        "staleAfterMs": 300000,
+        "debounceMs": 0,
+        "deliveredContentDigests": []
+      },
+      "expected": {
+        "outcome": "defer",
+        "reasonCode": "fresh_uncheckpointed_work",
+        "failClosed": false,
+        "checkpointIds": []
+      }
+    },
+    {
+      "id": "defer-fresh-agent-with-candidate",
+      "eventSet": "generic-through-checkpoint",
+      "plan": {
+        "now": "2026-08-24T16:03:10.000Z",
+        "staleAfterMs": 300000,
+        "debounceMs": 0,
+        "deliveredContentDigests": []
+      },
+      "expected": {
+        "outcome": "defer",
+        "reasonCode": "fresh_agents_working",
+        "failClosed": false,
+        "checkpointIds": [
+          "cart-recovery-verified"
+        ]
+      }
+    },
+    {
+      "id": "coalesce-compatible-checkpoints",
+      "eventSet": "processyard",
+      "plan": {
+        "now": "2026-08-24T16:42:00.000Z",
+        "staleAfterMs": 3600000,
+        "debounceMs": 0,
+        "deliveredContentDigests": [
+          "615c821368b4f39a3787a086c832e9349f6cd49f3d65f09c34de358280a2650a",
+          "53ecb847286238775027bf016788b94d727aca3afda77d266a1c8b33c7a144e9",
+          "7d675cd721595bd6151a1c6f6dbd3d353aa750822208d3b1b34eaace58166326",
+          "0e03b7739bef9d391f76bbedcdcc8eb5879164ae51edb3a8334a1d5f00a72e9a",
+          "50e90f35cbd7c46eb54d504a86b123a206851b680de82130eacdf6e4f51e49a9"
+        ]
+      },
+      "expected": {
+        "outcome": "coalesce",
+        "reasonCode": "compatible_checkpoints",
+        "failClosed": false,
+        "checkpointIds": [
+          "processyard-m5",
+          "processyard-m6"
+        ],
+        "snapshotContentDigest": "f17fd9bf523f01e582ccec00df05857117d252b5aded3f5ad6d6b2529f44d01f"
+      }
+    },
+    {
+      "id": "stale-no-send",
+      "eventSet": "processyard",
+      "plan": {
+        "now": "2026-08-24T16:59:00.000Z",
+        "staleAfterMs": 300000,
+        "debounceMs": 0,
+        "deliveredContentDigests": [
+          "615c821368b4f39a3787a086c832e9349f6cd49f3d65f09c34de358280a2650a",
+          "53ecb847286238775027bf016788b94d727aca3afda77d266a1c8b33c7a144e9",
+          "7d675cd721595bd6151a1c6f6dbd3d353aa750822208d3b1b34eaace58166326",
+          "0e03b7739bef9d391f76bbedcdcc8eb5879164ae51edb3a8334a1d5f00a72e9a",
+          "50e90f35cbd7c46eb54d504a86b123a206851b680de82130eacdf6e4f51e49a9"
+        ]
+      },
+      "expected": {
+        "outcome": "stale_no_send",
+        "reasonCode": "stale_activity_lease",
+        "failClosed": true,
+        "checkpointIds": [
+          "processyard-m6"
+        ],
+        "frozenSnapshotContentDigest": "bf5358cca23ef1aa4135b451b73c61311e5c0716b849394ef522342afe102917"
+      }
+    },
+    {
+      "id": "deduplicate-delivered-snapshot",
+      "eventSet": "generic",
+      "plan": {
+        "now": "2026-08-24T16:05:00.000Z",
+        "staleAfterMs": 300000,
+        "debounceMs": 0,
+        "deliveredContentDigests": [
+          "7150fa41eae8bc325f199f33b44231075e4091c97812cec7b31c17064ab4bd2c"
+        ]
+      },
+      "expected": {
+        "outcome": "deduplicate",
+        "reasonCode": "already_delivered",
+        "failClosed": false,
+        "checkpointIds": [
+          "cart-recovery-verified"
+        ]
+      }
+    },
+    {
+      "id": "suppress-source-conflict",
+      "eventSet": "source-conflict",
+      "plan": {
+        "now": "2026-08-25T16:03:00.000Z",
+        "staleAfterMs": 300000,
+        "debounceMs": 0,
+        "deliveredContentDigests": []
+      },
+      "expected": {
+        "outcome": "suppress",
+        "reasonCode": "source_conflict",
+        "failClosed": true,
+        "checkpointIds": [
+          "conflict-left-checkpoint",
+          "conflict-right-checkpoint"
+        ]
+      }
+    }
+  ]
+}

@@ -1,9 +1,12 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { stringify } from "yaml";
 
 import { buildGenericPulseFixture, buildProcessyardPulseFixture } from "../src/pulse-fixtures.js";
+import { initProject, runGate, startContribution } from "../src/contribution.js";
 import {
   PulseEventSchema,
   VerifiedCheckpointSchema,
@@ -112,19 +115,41 @@ describe("Keyoku Pulse", () => {
     expect(decision.snapshot).toBeUndefined();
   });
 
-  it("recomputes local Factfile bytes and source identity before checkpoint promotion", () => {
+  it("recomputes local Factfile bytes and source identity before checkpoint promotion", async () => {
     const root = mkdtempSync(join(tmpdir(), "keyoku-pulse-local-factfile-"));
-    const source = sealPulseSource({ canonicalRoot: root, headSha: "a".repeat(40), worktreeDigest: "b".repeat(64), ancestryShas: [] });
-    const unsignedFactfile = {
-      schemaVersion: "keyoku.dev/factfile/v1alpha1",
-      id: "fact-local",
-      state: "ready_for_review",
-      repository: { repositoryRoot: root, headSha: source.headSha, worktreeDigest: source.worktreeDigest },
-      evidence: [{ pass: true }],
-    };
-    const factfile = { ...unsignedFactfile, digest: pulseDigest(unsignedFactfile) };
-    mkdirSync(join(root, ".keyoku", "contributions", "local"), { recursive: true });
-    writeFileSync(join(root, ".keyoku", "contributions", "local", "factfile.json"), `${JSON.stringify(factfile)}\n`, "utf8");
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    execFileSync("git", ["config", "user.email", "owner@example.com"], { cwd: root });
+    execFileSync("git", ["config", "user.name", "Owner"], { cwd: root });
+    writeFileSync(join(root, "README.md"), "# Local proof\n", "utf8");
+    execFileSync("git", ["add", "README.md"], { cwd: root });
+    execFileSync("git", ["commit", "-qm", "initial"], { cwd: root });
+    initProject({ root, name: "Local proof" });
+    const timestamp = "2026-08-24T16:00:00.000Z";
+    writeFileSync(join(root, ".keyoku", "outcomes", "local-proof.yaml"), stringify({
+      schemaVersion: "keyoku.dev/outcome/v1alpha1",
+      id: "local-proof",
+      revision: 1,
+      title: "Local proof is verified",
+      objective: "Produce a complete source-bound Factfile.",
+      owner: { kind: "human", id: "owner@example.com", name: "Owner" },
+      constraints: [],
+      criteria: [{
+        description: "The command passes",
+        probe: { kind: "command", run: "node -e \"console.log('ok')\"", parse: "text" },
+        assert: { path: "exitCode", op: "eq", value: 0 },
+      }],
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }), "utf8");
+    const contribution = startContribution({ root, outcomeId: "local-proof" });
+    const factfile = await runGate(root, contribution.id);
+    const factfilePath = `.keyoku/contributions/${contribution.id}/factfile.json`;
+    const source = sealPulseSource({
+      canonicalRoot: root,
+      headSha: factfile.repository.headSha,
+      worktreeDigest: factfile.repository.worktreeDigest,
+      ancestryShas: [],
+    });
     const checkpoint = verifyAndSealLocalCheckpoint(root, {
       schemaVersion: "keyoku.dev/pulse-checkpoint/v1alpha1",
       id: "local-checkpoint",
@@ -137,17 +162,17 @@ describe("Keyoku Pulse", () => {
       publishedAt: "2026-08-24T16:01:00.000Z",
       source,
       verification: { status: "verified", verifiedAt: "2026-08-24T16:01:00.000Z", methods: [{ kind: "command", label: "test", reproduce: "npm test", result: "passed" }] },
-      factfiles: [{ path: ".keyoku/contributions/local/factfile.json" }],
+      factfiles: [{ path: factfilePath }],
       assets: [],
       limitations: ["No deployment claim."],
       materialTrigger: "verified_checkpoint",
     });
     expect(checkpoint.evidenceBinding).toMatchObject({ mode: "local_factfiles", verifiedRoot: root });
     expect(checkpoint.factfiles[0]?.bytesDigest).toMatch(/^[a-f0-9]{64}$/);
-    writeFileSync(join(root, ".keyoku", "contributions", "local", "factfile.json"), `${JSON.stringify({ ...factfile, evidence: [] })}\n`, "utf8");
+    writeFileSync(join(root, factfilePath), `${JSON.stringify({ ...factfile, project: { ...factfile.project, summary: "tampered" } })}\n`, "utf8");
     expect(() => verifyAndSealLocalCheckpoint(root, {
       ...checkpoint,
-      factfiles: [{ path: ".keyoku/contributions/local/factfile.json" }],
+      factfiles: [{ path: factfilePath }],
     })).toThrow(/digest mismatch/);
   });
 

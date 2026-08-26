@@ -1,8 +1,10 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { z } from "zod";
+
+import { canonicalJson, canonicalJsonDigest } from "./canonical-json.js";
 
 import {
   ActorSchema,
@@ -165,19 +167,8 @@ export interface CheckpointIterationInput {
   usageSource?: "agent_reported" | "provider_receipt" | "unknown";
 }
 
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
-function digest(value: unknown): string {
-  return createHash("sha256").update(typeof value === "string" ? value : stableJson(value)).digest("hex");
+export function iterationDigest(value: unknown): string {
+  return canonicalJsonDigest(value);
 }
 
 function slug(value: string): string {
@@ -204,7 +195,7 @@ function parsePayload(event: IterationEvent): unknown {
 }
 
 function sealEvent(input: Omit<IterationEvent, "digest">): IterationEvent {
-  return IterationEventSchema.parse({ ...input, digest: digest(input) });
+  return IterationEventSchema.parse({ ...input, digest: iterationDigest(input) });
 }
 
 function appendEvent(root: string, sessionId: string, type: IterationEvent["type"], payload: unknown): IterationEvent {
@@ -238,7 +229,7 @@ export function readIterationEvents(rootInput: string | undefined, sessionId: st
     if (parsed.sessionId !== sessionId || parsed.sequence !== index) throw new Error(`Iteration ledger sequence mismatch at event ${index}.`);
     parsePayload(parsed);
     const { digest: claimed, ...unsigned } = parsed;
-    if (digest(unsigned) !== claimed) throw new Error(`Iteration ledger digest mismatch at event ${index}.`);
+    if (iterationDigest(unsigned) !== claimed) throw new Error(`Iteration ledger digest mismatch at event ${index}.`);
     return parsed;
   });
   for (let index = 0; index < events.length; index += 1) {
@@ -423,7 +414,7 @@ export async function checkpointIteration(input: CheckpointIterationInput): Prom
   });
   const duplicate = state.checkpoints.find((checkpoint) => checkpoint.checkpointId === input.checkpointId);
   if (duplicate) {
-    if (stableJson(duplicate) !== stableJson(checkpoint)) throw new Error(`Checkpoint idempotency conflict for '${input.checkpointId}'.`);
+    if (canonicalJson(duplicate) !== canonicalJson(checkpoint)) throw new Error(`Checkpoint idempotency conflict for '${input.checkpointId}'.`);
     return state;
   }
   if (state.status !== "awaiting_agent") throw new Error(`Iteration '${state.id}' is ${state.status}; it is not accepting another agent checkpoint.`);

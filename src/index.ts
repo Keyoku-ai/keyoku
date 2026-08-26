@@ -40,6 +40,7 @@ export { ConnectorManager } from "./connectors.js";
 export {
   ActorSchema,
   ContributionManifestSchema,
+  GateSnapshotSchema,
   OutcomeSchema,
   ProjectManifestSchema,
   ReviewEventSchema,
@@ -51,6 +52,7 @@ export {
   loadContribution,
   loadOutcome,
   loadProject,
+  readVerifiedFactfile,
   publishFactfile,
   reviewContribution,
   renderFactfileHtml,
@@ -65,6 +67,7 @@ export {
   type Outcome,
   type ProjectManifest,
   type ReviewEvent,
+  type VerifiedFactfileExpectations,
 } from "./contribution.js";
 export {
   AgentPresenceSchema,
@@ -95,8 +98,10 @@ export { customizeProof, detectProject, initProof, renderGithubWorkflow, type Pr
 export { Harness } from "./engine.js";
 export { buildServer, VERSION } from "./server.js";
 export { Store } from "./store.js";
+export * from "./canonical-json.js";
 export * from "./pulse.js";
 export * from "./pulse-fixtures.js";
+export * from "./pulse-conformance.js";
 export * from "./iteration.js";
 
 // stdout is the MCP protocol channel in serve mode — all human output in that

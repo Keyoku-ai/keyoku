@@ -13,12 +13,14 @@ import { parse, stringify } from "yaml";
 import { z } from "zod";
 
 import { redactSecrets } from "./activity.js";
-import { renderArchitectureSvg, scanArchitecture, type ArchitectureProjection } from "./architecture.js";
+import { ArchitectureProjectionSchema, renderArchitectureSvg, scanArchitecture, type ArchitectureProjection } from "./architecture.js";
+import { canonicalJson, canonicalJsonDigest, parseJsonRejectDuplicateKeys } from "./canonical-json.js";
 import { ConnectorManager } from "./connectors.js";
 import { Harness } from "./engine.js";
 import { Store } from "./store.js";
-import { readProofSession, type ProofSessionState } from "./proof-session.js";
+import { ProofSessionStateSchema, readProofSession, type ProofSessionState } from "./proof-session.js";
 import {
+  AssertOpSchema,
   CriterionInputSchema,
   type ConvergenceReport,
   type CriterionInput,
@@ -31,6 +33,7 @@ const SlugSchema = z
   .string()
   .min(1)
   .regex(/^[a-z0-9][a-z0-9._-]*$/, "must be lowercase letters, numbers, dots, dashes, or underscores");
+const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/, "must be a sha256 digest");
 
 export const ActorSchema = z.object({
   kind: z.enum(["human", "agent", "organization"]),
@@ -40,7 +43,7 @@ export const ActorSchema = z.object({
   ownerId: z.string().optional(),
   harness: z.string().optional(),
   model: z.string().optional(),
-});
+}).strict();
 
 export const ProjectManifestSchema = z.object({
   schemaVersion: z.literal("keyoku.dev/project/v1alpha1"),
@@ -51,7 +54,7 @@ export const ProjectManifestSchema = z.object({
   defaultBranch: z.string().optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
-});
+}).strict();
 
 const EvidencePresentationSchema = z.object({
   summary: z.string().min(1),
@@ -59,7 +62,7 @@ const EvidencePresentationSchema = z.object({
   code: z.array(z.object({
     path: z.string().min(1),
     purpose: z.string().min(1),
-  })).default([]),
+  }).strict()).default([]),
   artifacts: z.array(z.object({
     kind: z.enum(["screenshot", "video", "trace", "report", "log", "code"]),
     path: z.string().min(1),
@@ -73,9 +76,9 @@ const EvidencePresentationSchema = z.object({
       width: z.number().positive().max(100).optional(),
       height: z.number().positive().max(100).optional(),
       atMs: z.number().int().nonnegative().optional(),
-    })).default([]),
-  })).default([]),
-});
+    }).strict()).default([]),
+  }).strict()).default([]),
+}).strict();
 
 const OutcomeCriterionSchema = CriterionInputSchema.extend({
   evidence: EvidencePresentationSchema.optional(),
@@ -93,16 +96,16 @@ export const OutcomeSchema = z.object({
     include: z.array(z.string().min(1)).default([]),
     exclude: z.array(z.string().min(1)).default([]),
     maxChangedFiles: z.number().int().positive().optional(),
-  }).optional(),
+  }).strict().optional(),
   criteria: z.array(OutcomeCriterionSchema).min(1),
   humanCriteria: z.array(z.object({
     id: SlugSchema,
     description: z.string().min(1),
     guidance: z.string().optional(),
-  })).default([]),
+  }).strict()).default([]),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
-});
+}).strict();
 
 export const ContributionManifestSchema = z.object({
   schemaVersion: z.literal("keyoku.dev/contribution/v1alpha1"),
@@ -118,7 +121,7 @@ export const ContributionManifestSchema = z.object({
   status: z.enum(["draft", "evaluating", "evidence_gaps", "human_review_required", "review_blocked", "ready_for_review", "accepted"]),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
-});
+}).strict();
 
 export const ReviewEventSchema = z.object({
   id: SlugSchema,
@@ -133,8 +136,8 @@ export const ReviewEventSchema = z.object({
   repository: z.object({
     headSha: z.string().min(1),
     worktreeDigest: z.string().regex(/^[a-f0-9]{64}$/),
-  }),
-}).refine((event) => Boolean(event.criterionId) === Boolean(event.verdict), {
+  }).strict(),
+}).strict().refine((event) => Boolean(event.criterionId) === Boolean(event.verdict), {
   message: "criterionId and verdict must be supplied together",
 });
 
@@ -235,6 +238,172 @@ export interface GateSnapshot {
   };
   digest: string;
 }
+
+const RepositorySnapshotSchema = z.object({
+  repositoryRoot: z.string().min(1),
+  branch: z.string().min(1),
+  upstream: z.string().optional(),
+  ahead: z.number().int().nonnegative(),
+  behind: z.number().int().nonnegative(),
+  remote: z.string().optional(),
+  lastCommit: z.string(),
+  baseSha: z.string().min(1),
+  headSha: z.string().min(1),
+  worktreeDigest: DigestSchema,
+  dirty: z.boolean(),
+  changedFiles: z.array(z.string()),
+}).strict();
+
+const ScopeAssessmentSchema = z.object({
+  declared: z.boolean(),
+  passed: z.boolean(),
+  includedPaths: z.array(z.string()),
+  unexpectedPaths: z.array(z.string()),
+  excludedPaths: z.array(z.string()),
+  maxChangedFiles: z.number().int().positive().optional(),
+  topLevelAreas: z.array(z.object({ name: z.string().min(1), files: z.number().int().nonnegative() }).strict()),
+  note: z.string().min(1),
+}).strict();
+
+const ResolvedPresentationSchema = z.object({
+  summary: z.string().min(1),
+  whyItMatters: z.string().min(1),
+  code: z.array(z.object({ path: z.string().min(1), purpose: z.string().min(1) }).strict()),
+  artifacts: z.array(z.object({
+    kind: z.enum(["screenshot", "video", "trace", "report", "log", "code"]),
+    path: z.string().min(1),
+    label: z.string().min(1),
+    caption: z.string().min(1),
+    annotations: z.array(z.object({
+      label: z.string().min(1),
+      detail: z.string().optional(),
+      x: z.number().min(0).max(100).optional(),
+      y: z.number().min(0).max(100).optional(),
+      width: z.number().positive().max(100).optional(),
+      height: z.number().positive().max(100).optional(),
+      atMs: z.number().int().nonnegative().optional(),
+    }).strict()),
+    digest: DigestSchema.optional(),
+    mediaType: z.string().min(1).optional(),
+    dataUrl: z.string().min(1).optional(),
+    unavailable: z.string().min(1).optional(),
+  }).strict()),
+}).strict();
+
+const ExpectedObservationSchema = z.object({
+  op: AssertOpSchema,
+  value: z.unknown().optional(),
+  path: z.string(),
+}).strict();
+
+const FactfileEvidenceSchema = z.object({
+  id: z.string().min(1),
+  description: z.string().min(1),
+  pass: z.boolean(),
+  actual: z.unknown(),
+  expected: ExpectedObservationSchema,
+  error: z.string().optional(),
+  note: z.string().optional(),
+  durationMs: z.number().nonnegative(),
+  presentation: ResolvedPresentationSchema.optional(),
+  verification: z.object({
+    kind: z.enum(["command", "http", "mcp"]),
+    label: z.string().min(1),
+    reproduce: z.string().min(1),
+    assertion: ExpectedObservationSchema,
+  }).strict(),
+}).strict().superRefine((evidence, context) => {
+  if (!Object.prototype.hasOwnProperty.call(evidence, "actual")) context.addIssue({ code: z.ZodIssueCode.custom, path: ["actual"], message: "is required" });
+});
+
+export const GateSnapshotSchema = z.object({
+  schemaVersion: z.literal("keyoku.dev/factfile/v1alpha1"),
+  id: SlugSchema,
+  project: ProjectManifestSchema.pick({ id: true, name: true, summary: true }).strict(),
+  outcome: z.object({
+    id: SlugSchema,
+    revision: z.number().int().positive(),
+    title: z.string().min(1),
+    objective: z.string().min(1),
+    constraints: z.array(z.string()),
+    scope: z.object({
+      include: z.array(z.string().min(1)),
+      exclude: z.array(z.string().min(1)),
+      maxChangedFiles: z.number().int().positive().optional(),
+    }).strict().optional(),
+    owner: ActorSchema,
+    humanCriteria: z.array(z.object({ id: SlugSchema, description: z.string().min(1), guidance: z.string().optional() }).strict()),
+  }).strict(),
+  contribution: ContributionManifestSchema,
+  repository: RepositorySnapshotSchema,
+  scope: ScopeAssessmentSchema,
+  reviewPlan: z.array(z.object({
+    priority: z.enum(["critical", "high", "normal"]),
+    title: z.string().min(1),
+    why: z.string().min(1),
+    paths: z.array(z.string()),
+    basis: z.enum(["deterministic", "declared"]),
+  }).strict()),
+  session: ProofSessionStateSchema,
+  architecture: ArchitectureProjectionSchema.optional(),
+  state: z.enum(["evidence_gaps", "human_review_required", "review_blocked", "ready_for_review", "accepted"]),
+  generatedAt: z.string().datetime(),
+  reviews: z.array(ReviewEventSchema),
+  evidence: z.array(FactfileEvidenceSchema),
+  summary: z.object({
+    passed: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+    total: z.number().int().nonnegative(),
+    verified: z.boolean(),
+  }).strict(),
+  humanReview: z.object({
+    passed: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+    pending: z.number().int().nonnegative(),
+    total: z.number().int().nonnegative(),
+  }).strict(),
+  digest: DigestSchema,
+}).strict().superRefine((snapshot, context) => {
+  const issue = (path: Array<string | number>, message: string) => context.addIssue({ code: z.ZodIssueCode.custom, path, message });
+  if (snapshot.contribution.outcomeId !== snapshot.outcome.id || snapshot.contribution.outcomeRevision !== snapshot.outcome.revision) {
+    issue(["contribution", "outcomeId"], "must match the embedded outcome identity");
+  }
+  if (snapshot.contribution.status !== snapshot.state) issue(["contribution", "status"], "must match the Factfile state");
+  if (snapshot.summary.total !== snapshot.evidence.length) issue(["summary", "total"], "must equal evidence length");
+  if (snapshot.summary.passed !== snapshot.evidence.filter((item) => item.pass).length) issue(["summary", "passed"], "must equal passing evidence count");
+  if (snapshot.summary.failed !== snapshot.evidence.filter((item) => !item.pass).length) issue(["summary", "failed"], "must equal failed evidence count");
+  if (snapshot.summary.passed + snapshot.summary.failed !== snapshot.summary.total) issue(["summary"], "passed plus failed must equal total");
+  const expectedVerified = snapshot.summary.failed === 0 && snapshot.summary.total > 0 && snapshot.scope.passed;
+  if (snapshot.summary.verified !== expectedVerified) issue(["summary", "verified"], "must equal passing evidence plus scope status");
+  snapshot.evidence.forEach((evidence, index) => {
+    if (canonicalJson(evidence.expected) !== canonicalJson(evidence.verification.assertion)) {
+      issue(["evidence", index, "verification", "assertion"], "must match the recorded expected observation");
+    }
+  });
+  if (snapshot.humanReview.total !== snapshot.outcome.humanCriteria.length) issue(["humanReview", "total"], "must equal declared human criteria");
+  if (snapshot.humanReview.passed + snapshot.humanReview.failed + snapshot.humanReview.pending !== snapshot.humanReview.total) issue(["humanReview"], "passed, failed, and pending must equal total");
+  const humanCriterionIds = new Set(snapshot.outcome.humanCriteria.map((criterion) => criterion.id));
+  const verdicts = new Map<string, "pass" | "fail">();
+  snapshot.reviews.forEach((review, index) => {
+    if (review.reviewer.kind !== "human") issue(["reviews", index, "reviewer", "kind"], "must be human");
+    if (review.repository.headSha !== snapshot.repository.headSha || review.repository.worktreeDigest !== snapshot.repository.worktreeDigest) issue(["reviews", index, "repository"], "must match the Factfile source");
+    if (review.criterionId) {
+      if (!humanCriterionIds.has(review.criterionId)) issue(["reviews", index, "criterionId"], "must identify a declared human criterion");
+      if (review.verdict) verdicts.set(review.criterionId, review.verdict);
+    }
+  });
+  const humanPassed = [...verdicts.values()].filter((verdict) => verdict === "pass").length;
+  const humanFailed = [...verdicts.values()].filter((verdict) => verdict === "fail").length;
+  if (snapshot.humanReview.passed !== humanPassed) issue(["humanReview", "passed"], "must equal the latest passing human verdict count");
+  if (snapshot.humanReview.failed !== humanFailed) issue(["humanReview", "failed"], "must equal the latest failed human verdict count");
+  if (snapshot.humanReview.pending !== snapshot.humanReview.total - humanPassed - humanFailed) issue(["humanReview", "pending"], "must equal the remaining human criteria");
+  if (snapshot.state === "evidence_gaps" && snapshot.summary.verified) issue(["state"], "evidence_gaps cannot be verified");
+  if (snapshot.state !== "evidence_gaps" && !snapshot.summary.verified) issue(["state"], "a reviewable state requires verified automated evidence");
+  if (snapshot.state === "human_review_required" && snapshot.humanReview.pending === 0) issue(["state"], "requires a pending human criterion");
+  if (snapshot.state === "review_blocked" && snapshot.humanReview.failed === 0) issue(["state"], "requires a failed human criterion");
+  if (["ready_for_review", "accepted"].includes(snapshot.state) && (snapshot.humanReview.pending > 0 || snapshot.humanReview.failed > 0)) issue(["state"], "requires all human criteria to pass");
+  if (snapshot.state === "accepted" && !snapshot.reviews.some((review) => review.decision === "accepted")) issue(["state"], "accepted requires a human acceptance event");
+});
 
 export interface FactfileHistoryItem {
   id: string;
@@ -361,7 +530,7 @@ function readReviews(root: string, contributionId: string): ReviewEvent[] {
     .filter(Boolean)
     .map((line, index) => {
       let value: unknown;
-      try { value = JSON.parse(line); } catch (error) {
+      try { value = parseJsonRejectDuplicateKeys(line, `Invalid ${relative(root, path)} line ${index + 1}`); } catch (error) {
         throw new Error(`Invalid ${relative(root, path)} line ${index + 1}: ${error instanceof Error ? error.message : String(error)}`);
       }
       const result = ReviewEventSchema.safeParse(value);
@@ -370,28 +539,62 @@ function readReviews(root: string, contributionId: string): ReviewEvent[] {
     });
 }
 
+export interface VerifiedFactfileExpectations {
+  contributionId?: string;
+  snapshotId?: string;
+}
+
+/**
+ * The sole trust boundary for persisted Factfiles. Parsing, the complete
+ * schema, semantic counters/bindings, and the canonical content digest are
+ * checked before any caller may use snapshot fields.
+ */
+export function readVerifiedFactfile(path: string, expected: VerifiedFactfileExpectations = {}): GateSnapshot {
+  let raw: unknown;
+  try {
+    raw = parseJsonRejectDuplicateKeys(readFileSync(path, "utf8"), `Invalid Factfile ${path}`);
+  } catch (error) {
+    throw new Error(error instanceof Error ? error.message : String(error));
+  }
+  const result = GateSnapshotSchema.safeParse(raw);
+  if (!result.success) {
+    throw new Error(`Invalid Factfile ${path}: ${result.error.issues.map((issue) => `${issue.path.join(".") || "root"}: ${issue.message}`).join("; ")}`);
+  }
+  const rawObject = raw as Record<string, unknown>;
+  const { digest: claimedDigest, ...unsigned } = rawObject;
+  const computedDigest = canonicalJsonDigest(unsigned);
+  if (claimedDigest !== computedDigest) {
+    throw new Error(`Invalid Factfile ${path}: digest mismatch (claimed ${String(claimedDigest)}, computed ${computedDigest}).`);
+  }
+  if (expected.contributionId && result.data.contribution.id !== slug(expected.contributionId)) {
+    throw new Error(`Invalid Factfile ${path}: contribution '${result.data.contribution.id}' does not match '${slug(expected.contributionId)}'.`);
+  }
+  if (expected.snapshotId && result.data.id !== expected.snapshotId) {
+    throw new Error(`Invalid Factfile ${path}: snapshot '${result.data.id}' does not match '${expected.snapshotId}'.`);
+  }
+  return result.data as GateSnapshot;
+}
+
 export function listFactfileHistory(rootInput: string, contributionId: string): FactfileHistoryItem[] {
   const root = findProjectRoot(rootInput);
   const dir = join(contributionDir(root, contributionId), "snapshots");
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
     .filter((name) => name.endsWith(".json"))
-    .flatMap((name) => {
-      try {
-        const item = JSON.parse(readFileSync(join(dir, name), "utf8")) as GateSnapshot;
-        return [{
-          id: item.id,
-          generatedAt: item.generatedAt,
-          state: item.state,
-          digest: item.digest,
-          headSha: item.repository.headSha,
-          worktreeDigest: item.repository.worktreeDigest,
-          passed: item.summary.passed,
-          total: item.summary.total,
-          humanPassed: item.humanReview.passed,
-          humanTotal: item.humanReview.total,
-        } satisfies FactfileHistoryItem];
-      } catch { return []; }
+    .map((name) => {
+      const item = readVerifiedFactfile(join(dir, name), { contributionId, snapshotId: name.slice(0, -5) });
+      return {
+        id: item.id,
+        generatedAt: item.generatedAt,
+        state: item.state,
+        digest: item.digest,
+        headSha: item.repository.headSha,
+        worktreeDigest: item.repository.worktreeDigest,
+        passed: item.summary.passed,
+        total: item.summary.total,
+        humanPassed: item.humanReview.passed,
+        humanTotal: item.humanReview.total,
+      } satisfies FactfileHistoryItem;
     })
     .sort((a, b) => b.generatedAt.localeCompare(a.generatedAt));
 }
@@ -399,7 +602,7 @@ export function listFactfileHistory(rootInput: string, contributionId: string): 
 function persistSnapshot(root: string, contribution: ContributionManifest, snapshot: GateSnapshot): void {
   const dir = contributionDir(root, contribution.id);
   const { digest: _previousDigest, ...unsignedSnapshot } = snapshot;
-  snapshot.digest = hash(stableJson(unsignedSnapshot));
+  snapshot.digest = canonicalJsonDigest(unsignedSnapshot);
   writeYaml(join(dir, "manifest.yaml"), contribution);
   writeJson(join(dir, "snapshots", `${snapshot.id}.json`), snapshot);
   const history = listFactfileHistory(root, contribution.id);
@@ -505,7 +708,7 @@ export function getActiveContribution(rootInput: string | undefined, outcomeId: 
   try {
     const contribution = loadContribution(root, id);
     const outcome = loadOutcome(root, outcomeId);
-    const digest = hash(stableJson(outcome));
+    const digest = canonicalJsonDigest(outcome);
     return contribution.outcomeRevision === outcome.revision && (!contribution.outcomeDigest || contribution.outcomeDigest === digest) && contribution.status !== "accepted" ? contribution : undefined;
   } catch { return undefined; }
 }
@@ -541,7 +744,7 @@ export function startContribution(input: StartContributionInput): ContributionMa
     ...(input.knownLimits?.length ? { knownLimits: input.knownLimits } : {}),
     outcomeId: outcome.id,
     outcomeRevision: outcome.revision,
-    outcomeDigest: hash(stableJson(outcome)),
+    outcomeDigest: canonicalJsonDigest(outcome),
     baseSha: git(root, ["rev-parse", input.baseSha ?? "HEAD"]),
     actors,
     status: "draft",
@@ -726,17 +929,6 @@ function resolveCriteria(root: string, criteria: CriterionInput[]): CriterionInp
   });
 }
 
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
 function summarizeHumanReview(outcome: Pick<Outcome, "humanCriteria">, reviews: ReviewEvent[]): GateSnapshot["humanReview"] {
   const latest = new Map<string, "pass" | "fail">();
   for (const review of reviews) {
@@ -839,16 +1031,28 @@ export async function runGate(rootInput: string | undefined, contributionId: str
       `Contribution ${contribution.id} targets outcome revision ${contribution.outcomeRevision}, but revision ${outcome.revision} is current. Start a new contribution or restore the referenced outcome.`,
     );
   }
-  const currentOutcomeDigest = hash(stableJson(outcome));
+  const currentOutcomeDigest = canonicalJsonDigest(outcome);
   if (contribution.outcomeDigest && contribution.outcomeDigest !== currentOutcomeDigest) {
     throw new Error(`Outcome '${outcome.id}' changed without a revision increment. Increment its revision and start a new contribution so the proof contract is explicit.`);
+  }
+
+  // Acceptance is terminal for the exact source snapshot. An explicit gate
+  // rerun on unchanged source returns the same accepted Factfile rather than
+  // silently downgrading the contribution to evaluating/ready-for-review.
+  if (contribution.status === "accepted") {
+    const acceptedPath = join(contributionDir(root, contribution.id), "factfile.json");
+    if (!existsSync(acceptedPath)) throw new Error(`Accepted contribution '${contribution.id}' is missing its Factfile.`);
+    const accepted = readVerifiedFactfile(acceptedPath, { contributionId: contribution.id });
+    if (accepted.state !== "accepted") throw new Error(`Accepted contribution '${contribution.id}' does not contain an accepted Factfile.`);
+    const current = captureRepository(root, contribution.baseSha);
+    if (accepted.repository.headSha === current.headSha && accepted.repository.worktreeDigest === current.worktreeDigest) return accepted;
   }
 
   const runtime = join(root, KEYOKU_DIR, "runtime");
   const store = new Store(runtime);
   const harness = new Harness(store, new ConnectorManager(store));
   const criteria = resolveCriteria(root, outcome.criteria);
-  const definitionDigest = hash(stableJson({ objective: outcome.objective, criteria, humanCriteria: outcome.humanCriteria, constraints: outcome.constraints })).slice(0, 12);
+  const definitionDigest = canonicalJsonDigest({ objective: outcome.objective, criteria, humanCriteria: outcome.humanCriteria, constraints: outcome.constraints }).slice(0, 12);
   const goalSlug = slug(`gate-${outcome.id}-r${outcome.revision}-${definitionDigest}`);
   let goal = store.listGoals().find((candidate) => candidate.slug === goalSlug);
   if (!goal) {
@@ -917,7 +1121,7 @@ export async function runGate(rootInput: string | undefined, contributionId: str
     },
     humanReview,
   };
-  const snapshot: GateSnapshot = { ...snapshotBase, digest: hash(stableJson(snapshotBase)) };
+  const snapshot: GateSnapshot = { ...snapshotBase, digest: canonicalJsonDigest(snapshotBase) };
   contribution.status = snapshot.state;
   contribution.updatedAt = generatedAt;
   snapshot.contribution.status = contribution.status;
@@ -931,7 +1135,7 @@ export function reviewContribution(input: ReviewContributionInput): GateSnapshot
   const contribution = loadContribution(root, input.contributionId);
   const path = join(contributionDir(root, contribution.id), "factfile.json");
   if (!existsSync(path)) throw new Error(`No Factfile for '${contribution.id}'. Run 'keyoku gate ${contribution.id}' first.`);
-  const snapshot = JSON.parse(readFileSync(path, "utf8")) as GateSnapshot;
+  const snapshot = readVerifiedFactfile(path, { contributionId: contribution.id });
   const current = captureRepository(root, contribution.baseSha);
   if (snapshot.repository.headSha !== current.headSha || snapshot.repository.worktreeDigest !== current.worktreeDigest) {
     throw new Error("The repository changed after this Factfile was generated. Run the gate again before reviewing or accepting it.");
@@ -1008,7 +1212,7 @@ export async function publishFactfile(
   }
   const path = join(contributionDir(root, contributionId), "factfile.json");
   if (!existsSync(path)) throw new Error(`No Factfile for '${contributionId}'. Run 'keyoku gate ${contributionId}' first.`);
-  const snapshot = JSON.parse(readFileSync(path, "utf8")) as GateSnapshot;
+  const snapshot = readVerifiedFactfile(path, { contributionId });
   const current = captureRepository(root, snapshot.repository.baseSha);
   if (snapshot.repository.headSha !== current.headSha || snapshot.repository.worktreeDigest !== current.worktreeDigest) {
     throw new Error("The repository changed after this Factfile was generated. Run the gate again before publishing it.");
