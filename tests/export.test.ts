@@ -10,7 +10,7 @@ import { parse as parseYaml } from "yaml";
 
 import { Store } from "../src/store.js";
 
-const ENTRY = join(__dirname, "..", "dist", "index.js");
+const ENTRY = join(__dirname, "..", "dist", "legacy-cli.js");
 
 const home = mkdtempSync(join(tmpdir(), "keyoku-export-home-"));
 const repo = mkdtempSync(join(tmpdir(), "keyoku-export-repo-"));

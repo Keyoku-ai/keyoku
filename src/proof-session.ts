@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { z } from "zod";
+
+import { readLocalLedger, resolvePrivateDirectory, updateLocalLedger } from "./local-ledger.js";
 
 const SlugSchema = z.string().min(1).regex(/^[a-z0-9][a-z0-9._-]*$/);
 const TimestampSchema = z.string().datetime();
@@ -134,28 +135,42 @@ function now(): string { return new Date().toISOString(); }
 function slug(value: string): string {
   return value.toLowerCase().trim().replace(/[^a-z0-9._-]+/g, "-").replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "") || "item";
 }
-function eventsPath(root: string, contributionId: string): string {
-  return join(root, ".keyoku", "contributions", slug(contributionId), "events.jsonl");
-}
-function appendEvent(root: string, contributionId: string, event: ProofSessionEvent): ProofSessionEvent {
-  const parsed = ProofSessionEventSchema.parse(event);
-  const path = eventsPath(root, contributionId);
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(parsed)}\n`, { encoding: "utf8", flag: "a", mode: 0o600 });
-  return parsed;
+function eventsPath(root: string, contributionId: string, create = true): string {
+  return join(resolvePrivateDirectory(root, [".keyoku", "contributions", slug(contributionId)], create), "events.jsonl");
 }
 
-export function readProofSessionEvents(root: string, contributionId: string): ProofSessionEvent[] {
-  const path = eventsPath(root, contributionId);
-  if (!existsSync(path)) return [];
-  return readFileSync(path, "utf8").split("\n").filter(Boolean).map((line, index) => {
+function parseEvents(bytes: Buffer): ProofSessionEvent[] {
+  return bytes.toString("utf8").split("\n").filter(Boolean).map((line, index) => {
     try { return ProofSessionEventSchema.parse(JSON.parse(line)); }
     catch (error) { throw new Error(`Invalid proof session event at line ${index + 1}: ${error instanceof Error ? error.message : String(error)}`); }
   });
 }
 
-export function readProofSession(root: string, contributionId: string, at = Date.now()): ProofSessionState {
-  const events = readProofSessionEvents(root, contributionId);
+function updateEvents(
+  root: string,
+  contributionId: string,
+  mutation: (events: ProofSessionEvent[]) => ProofSessionEvent[],
+): { events: ProofSessionEvent[]; appended: ProofSessionEvent[] } {
+  let result: { events: ProofSessionEvent[]; appended: ProofSessionEvent[] } | undefined;
+  updateLocalLedger(eventsPath(root, contributionId), (current) => {
+    const events = parseEvents(current);
+    const appended = mutation(events).map((event) => ProofSessionEventSchema.parse(event));
+    result = { events: [...events, ...appended], appended };
+    if (appended.length === 0) return current;
+    return Buffer.concat([current, Buffer.from(appended.map((event) => `${JSON.stringify(event)}\n`).join(""), "utf8")]);
+  });
+  return result!;
+}
+
+function appendEvent(root: string, contributionId: string, event: ProofSessionEvent): ProofSessionEvent {
+  return updateEvents(root, contributionId, () => [event]).appended[0]!;
+}
+
+export function readProofSessionEvents(root: string, contributionId: string): ProofSessionEvent[] {
+  return parseEvents(readLocalLedger(eventsPath(root, contributionId, false)));
+}
+
+function projectProofSession(events: ProofSessionEvent[], at = Date.now()): ProofSessionState {
   const work = new Map<string, WorkItem>();
   const decisions = new Map<string, DecisionRequest>();
   const instructions = new Map<string, Instruction>();
@@ -188,6 +203,10 @@ export function readProofSession(root: string, contributionId: string, at = Date
   };
 }
 
+export function readProofSession(root: string, contributionId: string, at = Date.now()): ProofSessionState {
+  return projectProofSession(readProofSessionEvents(root, contributionId), at);
+}
+
 export function reportWork(root: string, contributionId: string, input: Omit<WorkItem, "updatedAt">): WorkItem {
   const item = WorkItemSchema.parse({ ...input, id: slug(input.id), updatedAt: now() });
   appendEvent(root, contributionId, { type: "work.reported", at: item.updatedAt, item });
@@ -197,31 +216,49 @@ export function reportWork(root: string, contributionId: string, input: Omit<Wor
 export function requestDecision(root: string, contributionId: string, input: Omit<DecisionRequest, "id" | "status" | "createdAt"> & { id?: string }): DecisionRequest {
   const createdAt = now();
   const request = DecisionRequestSchema.parse({ ...input, id: slug(input.id ?? `decision-${randomUUID().slice(0, 8)}`), status: "pending", createdAt });
-  appendEvent(root, contributionId, { type: "decision.requested", at: createdAt, request });
+  updateEvents(root, contributionId, (events) => {
+    if (projectProofSession(events).decisions.some((decision) => decision.id === request.id)) throw new Error(`Decision '${request.id}' already exists.`);
+    return [{ type: "decision.requested", at: createdAt, request }];
+  });
   return request;
 }
 
 export function queueInstruction(root: string, contributionId: string, input: Omit<Instruction, "id" | "status" | "createdAt"> & { id?: string }): Instruction {
   const createdAt = now();
   const instruction = InstructionSchema.parse({ ...input, id: slug(input.id ?? `instruction-${randomUUID().slice(0, 8)}`), status: "queued", createdAt });
-  appendEvent(root, contributionId, { type: "instruction.queued", at: createdAt, instruction });
+  updateEvents(root, contributionId, (events) => {
+    if (projectProofSession(events).instructions.some((candidate) => candidate.id === instruction.id)) throw new Error(`Instruction '${instruction.id}' already exists.`);
+    return [{ type: "instruction.queued", at: createdAt, instruction }];
+  });
   return instruction;
 }
 
 export function resolveDecision(root: string, contributionId: string, input: { decisionId: string; selectedOptionId?: string; note?: string; resolvedBy: string }): { decision: DecisionRequest; instruction: Instruction } {
-  const current = readProofSession(root, contributionId).decisions.find((decision) => decision.id === input.decisionId);
-  if (!current) throw new Error(`Unknown decision '${input.decisionId}'.`);
-  if (current.status === "resolved") throw new Error(`Decision '${input.decisionId}' is already resolved.`);
-  const option = input.selectedOptionId ? current.options.find((candidate) => candidate.id === input.selectedOptionId) : undefined;
-  if (input.selectedOptionId && !option) throw new Error(`Unknown option '${input.selectedOptionId}' for decision '${input.decisionId}'.`);
-  const note = input.note?.trim();
-  if (!option && !note) throw new Error("Choose a decision option or provide a change request.");
   const at = now();
-  appendEvent(root, contributionId, { type: "decision.resolved", at, decisionId: current.id, ...(option ? { selectedOptionId: option.id } : {}), ...(note ? { note } : {}), resolvedBy: input.resolvedBy });
-  const instruction = queueInstruction(root, contributionId, {
-    text: option?.instruction ?? note!, sourceDecisionId: current.id, createdBy: input.resolvedBy,
+  let instruction!: Instruction;
+  const updated = updateEvents(root, contributionId, (events) => {
+    const current = projectProofSession(events).decisions.find((decision) => decision.id === input.decisionId);
+    if (!current) throw new Error(`Unknown decision '${input.decisionId}'.`);
+    if (current.status === "resolved") throw new Error(`Decision '${input.decisionId}' is already resolved.`);
+    const option = input.selectedOptionId ? current.options.find((candidate) => candidate.id === input.selectedOptionId) : undefined;
+    if (input.selectedOptionId && !option) throw new Error(`Unknown option '${input.selectedOptionId}' for decision '${input.decisionId}'.`);
+    const note = input.note?.trim();
+    if (!option && !note) throw new Error("Choose a decision option or provide a change request.");
+    instruction = InstructionSchema.parse({
+      id: slug(`instruction-${randomUUID().slice(0, 8)}`),
+      text: option?.instruction ?? note!,
+      sourceDecisionId: current.id,
+      status: "queued",
+      createdBy: input.resolvedBy,
+      createdAt: at,
+    });
+    return [
+      { type: "decision.resolved", at, decisionId: current.id, ...(option ? { selectedOptionId: option.id } : {}), ...(note ? { note } : {}), resolvedBy: input.resolvedBy },
+      { type: "instruction.queued", at, instruction },
+    ];
   });
-  return { decision: readProofSession(root, contributionId).decisions.find((decision) => decision.id === current.id)!, instruction };
+  const decision = projectProofSession(updated.events).decisions.find((candidate) => candidate.id === input.decisionId)!;
+  return { decision, instruction };
 }
 
 export function nextInstruction(root: string, contributionId: string, actorId?: string): Instruction | undefined {
@@ -231,11 +268,13 @@ export function nextInstruction(root: string, contributionId: string, actorId?: 
 }
 
 export function acknowledgeInstruction(root: string, contributionId: string, instructionId: string, acknowledgedBy: string): Instruction {
-  const instruction = readProofSession(root, contributionId).instructions.find((candidate) => candidate.id === instructionId);
-  if (!instruction) throw new Error(`Unknown instruction '${instructionId}'.`);
-  if (instruction.status === "acknowledged") return instruction;
-  appendEvent(root, contributionId, { type: "instruction.acknowledged", at: now(), instructionId, acknowledgedBy });
-  return readProofSession(root, contributionId).instructions.find((candidate) => candidate.id === instructionId)!;
+  const updated = updateEvents(root, contributionId, (events) => {
+    const instruction = projectProofSession(events).instructions.find((candidate) => candidate.id === instructionId);
+    if (!instruction) throw new Error(`Unknown instruction '${instructionId}'.`);
+    if (instruction.status === "acknowledged") return [];
+    return [{ type: "instruction.acknowledged", at: now(), instructionId, acknowledgedBy }];
+  });
+  return projectProofSession(updated.events).instructions.find((candidate) => candidate.id === instructionId)!;
 }
 
 export function heartbeatAgent(root: string, contributionId: string, input: Omit<AgentPresence, "lastSeenAt">): AgentPresence {

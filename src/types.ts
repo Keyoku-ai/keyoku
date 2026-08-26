@@ -39,7 +39,7 @@ export const McpProbeSchema = z.object({
   kind: z.literal("mcp"),
   connector: z
     .string()
-    .describe("Name of a registered connector (see connector_add)."),
+    .describe("Compatibility connector name. The bounded v3 entrypoint does not register connector management."),
   tool: z.string().describe("Tool to call on the connector's MCP server."),
   args: z.record(z.unknown()).optional(),
   parse: ParseModeSchema.optional(),

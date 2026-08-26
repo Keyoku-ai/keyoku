@@ -8,6 +8,16 @@ A Factfile is a portable, human-readable receipt for a software contribution. It
 
 A Factfile proves one bounded checkpoint. [Keyoku Pulse](PULSE.md) is the separate temporal layer that carries trusted progress across multiple Factfile-bound checkpoints and agent harnesses. Pulse activity never changes what a Factfile establishes.
 
+For command-backed claims, Keyoku captures the complete Git-visible source tree
+(tracked plus non-ignored untracked bytes, paths, symlinks, and executable
+modes) into one SHA-256 content-addressed capsule. Each command runs
+sequentially in a fresh disposable checkout. A write, add, delete, mode change,
+mutate-restore, original-tree race, or unsupported source entry rejects the
+proof. The capsule isolates evidence bytes; it does not sandbox arbitrary code
+from the caller's operating-system, network, or external-file authority. A probe
+that deliberately daemonizes or escapes its process group is outside the trusted
+repository-command support boundary.
+
 It is not an AI-generated claim that a project is “good.” The canonical JSON records bounded facts. HTML and Markdown explain those facts at the level of detail a recipient needs.
 
 ## The standard method
@@ -80,7 +90,7 @@ Projects normally commit the project, policy, and outcome files. A project decid
 
 Editing meaning, constraints, or criteria requires a new revision. A contribution never silently moves to a newer revision.
 
-The outcome file is repository-owned. Its canonical revision history is the Git history of `.keyoku/outcomes/<id>.yaml`; `keyoku outcome history <id>` presents that history without creating a second source of truth.
+The outcome file is repository-owned. Its canonical revision history is the Git history of `.keyoku/outcomes/<id>.yaml`; inspect it directly with `git log -- .keyoku/outcomes/<id>.yaml` without creating a second source of truth.
 
 An outcome may declare a deterministic path boundary with `scope.include`, `scope.exclude`, and `scope.maxChangedFiles`. Paths outside that boundary fail the gate. This catches mechanical scope drift but does not claim that a change is semantically coherent; projects should keep coherence as a human criterion.
 
@@ -150,9 +160,13 @@ The proof scope includes:
 - Current Git head SHA
 - Whether source is dirty
 - Changed paths
-- SHA-256 digest covering tracked diffs and untracked source bytes
+- SHA-256 worktree digest over the complete Git-visible source capsule:
+  sorted tracked and non-ignored untracked paths, exact bytes, executable modes,
+  and internal relative symlink targets
 
-Generated Factfiles and evaluator runtime are excluded from the worktree digest so producing a receipt cannot invalidate itself.
+Generated Factfiles, Pulse ledgers, and evaluator runtime are excluded from the
+worktree digest so proof bookkeeping cannot invalidate its own source identity.
+Project, policy, outcome, and architecture contracts remain included.
 
 ## States
 
@@ -166,7 +180,7 @@ Generated Factfiles and evaluator runtime are excluded from the worktree digest 
 | `ready_for_review` | Automated and required human criteria passed; the snapshot is ready for acceptance |
 | `accepted` | An accountable human or organization accepted that snapshot |
 
-Review events append to `reviews.jsonl` and every rendered Factfile includes the resulting timeline. `keyoku contribution review` records a human note; `keyoku contribution accept` records acceptance only when the current source still exactly matches a passing Factfile. A source change after `ready_for_review` or `accepted` requires re-evaluation.
+Review events append to `reviews.jsonl` and every rendered Factfile includes the resulting timeline. `keyoku proof review` records an identified human note; `keyoku proof accept` records acceptance only when the current source still exactly matches a passing Factfile. A source change after `ready_for_review` or `accepted` requires re-evaluation.
 
 ## Claim language
 

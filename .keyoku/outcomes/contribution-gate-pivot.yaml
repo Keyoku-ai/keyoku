@@ -8,7 +8,7 @@ objective: >-
   judgments still require an accountable human before the contribution is accepted.
 owner:
   kind: human
-  id: taikicoleman@icloud.com
+  id: keyoku-owner
   name: Tye
   role: accountable product owner
 constraints:

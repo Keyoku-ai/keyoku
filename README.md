@@ -17,7 +17,9 @@
 
 Keyoku is a free, local-first proof session between humans and coding agents. It turns a repository-owned definition of done into a live working view and a shareable **Factfile**: meaningful evidence, agent provenance, explicit limits, and an exact Git scope.
 
-**Factfile proves one checkpoint. Keyoku Pulse carries trusted progress across checkpoints.** Pulse accepts typed events from any agent harness, reports only exact-source verified checkpoints, and renders founder, developer, timeline, email-safe, text, and JSON views from one digest. It never silently sends a message.
+**Factfile proves one checkpoint. Keyoku Pulse carries trusted progress across checkpoints.** Command claims run from one exact, content-addressed source capsule in fresh disposable checkouts; any source write rejects the proof. Pulse accepts typed events from any agent harness, reports only exact-source verified checkpoints, and renders founder, developer, timeline, email-safe, text, and JSON views from one digest. It never silently sends a message.
+
+**Keyoku is an optional assurance adapter, not an agent protocol or control plane.** A caller may submit a neutral, content-digested evidence envelope and receive a deterministic accepted, rejected, stale, or human-review-required result. The caller chooses whether to use no assurance, basic assurance, or Keyoku high assurance; the neutral work contract does not require Keyoku. See the [adapter contract](docs/ASSURANCE-ADAPTER.md).
 
 It works with Codex, Claude Code, Copilot, Cursor, OpenHands, custom agents, CI, or no agent at all. Keyoku does not run your agent and does not ask you to move source code off GitHub.
 
@@ -46,8 +48,9 @@ video. Pass `--dir <empty-directory>` if you want a predictable location to
 inspect afterward.
 
 The npm `latest` tag still points to the v2 muscle-memory product during this
-alpha cutover. The repository and generated GitHub workflow pin the public
-`proof-alpha.1` source tag until a separately verified v3 npm release exists.
+alpha cutover. The generated GitHub workflow pins `keyoku@3.0.0-alpha.1` and is
+staged—not runnable from npm—until that exact candidate is separately approved
+and published to the `next` dist-tag. Local source evaluation works now.
 
 Customize the outcome without learning the full YAML schema:
 
@@ -144,7 +147,6 @@ Graphite and GitHub can own PR stacking. Keyoku owns the outcome and its proof.
 Outcome contracts are normal versioned repository files. Change the meaning or acceptance criteria, increment `revision`, and commit the file. Anyone can inspect its canonical history without a Keyoku account:
 
 ```bash
-keyoku outcome history review-ready-change
 git log -- .keyoku/outcomes/review-ready-change.yaml
 ```
 
@@ -218,52 +220,30 @@ updatedAt: 2026-08-15T00:00:00Z
 ## CLI
 
 ```text
-keyoku proof init                    Detect project and install proof workflow
+keyoku proof demo                    Run the real fail → repair → stale-proof scenario
+keyoku proof init                    Detect the project and install a proof workflow
 keyoku proof customize <outcome>     Edit common proof fields without schema knowledge
-keyoku proof run <outcome>           Generate a local Factfile
-keyoku proof serve <contribution>    Open the live human ↔ agent proof session
-keyoku proof ci <outcome>            Generate a GitHub Check summary + artifact
-keyoku outcome list                  List outcome contracts
-keyoku outcome history <outcome>     Show repository-owned revision history
-keyoku contribution start <outcome>  Open a contribution manually
-keyoku contribution review <id>      Record a human criterion decision
-keyoku contribution accept <id>      Accept an exact passing snapshot
-keyoku gate <contribution>           Re-evaluate an existing contribution
-keyoku factfile <contribution>       Locate the full HTML report
-keyoku iterate start <outcome>       Start a bounded prove → repair → re-prove session
-keyoku iterate next <session>        Read the current evidence-bounded instruction
-keyoku iterate checkpoint <session>  Record idempotent work and re-run proof
-keyoku iterate status <session>      Inspect rounds, usage reports, and stop reason
-keyoku pulse help                    Inspect the generic event, checkpoint, planner, and renderer path
+keyoku proof run <outcome>           Evaluate the outcome and generate a local Factfile
+keyoku proof serve <contribution>    Open the token-scoped human ↔ agent session
+keyoku proof review <contribution>   Record an identified human criterion decision
+keyoku proof accept <contribution>   Accept one exact passing snapshot as a human
+keyoku factfile inspect <id>         Validate and explain a content-bound Factfile
+keyoku factfile verify <id>          Also require the current source to match it
+keyoku factfile publish <id>         Explicitly publish to an optional Engine
+keyoku pulse help                    Inspect the event, checkpoint, planner, and renderer path
 keyoku pulse fixture generic        Emit a harness-neutral JSONL integration fixture
 keyoku pulse ingest --file F        Append strict, idempotent lifecycle events
 keyoku pulse plan --json            Decide send/defer/dedupe/suppress/coalesce/stale_no_send
 keyoku pulse render --audience A    Render one content-bound audience projection
+keyoku serve                         Serve the bounded MCP surface over stdio
+keyoku doctor --json                 Inspect install, project, and authority boundaries
 ```
 
-`proof run` reuses the active contribution for the current branch and outcome so repeated iterations remain one history. Pass `--new` only when opening a genuinely separate attempt. The earlier memory and workflow-learning tools remain available for compatibility, but they are optional supporting capabilities—not the launch promise.
-
-## Behavior iteration
-
-Keyoku can govern the loop between a coding agent and an observable product behavior without becoming another agent runner:
-
-```bash
-# Evaluate the outcome and get the first evidence-bounded repair instruction.
-keyoku iterate start checkout-ready --max-rounds 5 --max-minutes 60
-
-# An MCP-connected agent can call iteration_next, do the product work, then:
-keyoku iterate checkpoint <session-id> \
-  --idempotency-key attempt-1 \
-  --summary "Fixed cart restoration and added the regression test"
-
-keyoku iterate status <session-id>
-```
-
-Every round reruns the repository-owned outcome probes and binds the result to the exact Git head plus worktree digest. The append-only event ledger is hash-chained; replayed checkpoint ids are deduplicated, conflicting replays fail closed, and a source state that turns a previously passing claim red is recorded as a regression.
-
-The controller stops on proof success, required human judgment, a failed human judgment, repeated no-change checkpoints, or configured round, time, reported-token, and reported-cost ceilings. Usage is accepted only with an explicit source label (`agent_reported`, `provider_receipt`, or `unknown`); Keyoku never infers billing from chat text. It issues instructions through CLI/MCP but does not silently execute an agent, write a human verdict, accept a contribution, push, deploy, or bypass the product's own authorization boundaries.
-
-See [Behavior iteration](docs/ITERATION.md) for the event contract, stop semantics, and adapter workflow.
+`proof run` reuses the active contribution for the current branch and outcome,
+so fail, repair, and re-proof checkpoints remain one inspectable history. Pass
+`--new` only for a genuinely separate attempt. The v2 goals, workflows,
+connectors, activity recorder, memory, and execution commands are not v3 public
+entrypoints. See the checked [v3 public surface](docs/PUBLIC-SURFACE.md).
 
 ## Different tools, different jobs
 
@@ -294,11 +274,11 @@ The CLI repository is the product wedge and source of truth. The engine is an op
 - GitHub proof execution is read-only and does not post privileged PR comments from untrusted code.
 - Agent identity is provenance. A human or organization remains accountable.
 
-Read the [Factfile standard](docs/FACTFILE-STANDARD.md), [behavior-iteration contract](docs/ITERATION.md), [Pulse contract](docs/PULSE.md), [GitHub integration guide](docs/GITHUB.md), and [security review](docs/SECURITY-REVIEW.md).
+Read the [Factfile standard](docs/FACTFILE-STANDARD.md), [v3 public surface](docs/PUBLIC-SURFACE.md), [Pulse contract](docs/PULSE.md), [GitHub integration guide](docs/GITHUB.md), and [security review](docs/SECURITY-REVIEW.md).
 
 ## Status
 
-The Factfile and behavior-iteration schemas are `v1alpha1`. The local evaluator, exact Git binding, bounded prove/repair/re-prove controller, durable two-way instruction protocol, token-scoped live session, JSON/Markdown/HTML renderers, annotated visual evidence, scope boundary, outcome history, and GitHub Check workflow are implemented and tested. Schema meaning may still evolve during alpha; incompatible changes receive a new schema version.
+The Factfile and Pulse schemas are `v1alpha1`. The local evaluator, exact Git binding, repeated proof history, durable two-way instruction protocol, token-scoped live session, JSON/Markdown/HTML renderers, annotated visual evidence, scope boundary, outcome history, GitHub Check workflow, deterministic Pulse planner, and audience renderers are implemented and tested. Keyoku does not run an agent or deliver a Pulse update. Schema meaning may still evolve during alpha; incompatible changes receive a new schema version.
 
 ## License
 

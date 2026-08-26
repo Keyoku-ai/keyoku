@@ -7,12 +7,13 @@ import { createInterface } from "node:readline";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-// Protocol-level regression lock: drives the BUILT server (dist/index.js) over real
+// Protocol-level regression lock for the compatibility server. Public v3 MCP
+// inventory is locked separately in public-surface.test.ts.
 // stdio JSON-RPC, exercising the build-then-verify → reuse → pitfalls loop end to end.
 // `npm test` runs `tsup` first, so dist is fresh. Unit tests cover the engine; this
 // covers the wire protocol an actual MCP client (Claude Code / Cursor / Codex) speaks.
 
-const dist = fileURLToPath(new URL("../dist/index.js", import.meta.url));
+const dist = fileURLToPath(new URL("../dist/legacy-cli.js", import.meta.url));
 
 function makeClient(home: string) {
   const child = spawn(process.execPath, [dist], {
@@ -88,8 +89,8 @@ describe("MCP protocol e2e — muscle memory", () => {
 
   it("redacts secrets in activity_record and goal_record before they hit the store", async () => {
     await client.tool("activity_record", {
-      summary: "export GITHUB_TOKEN=ghp_supersecretvalue123 && deploy",
-      detail: "curl -H 'Authorization: Bearer eyJsecretjwtpayload.aaa.bbb' https://api",
+      summary: "export GITHUB_TOKEN=ghp_supersecretvalue123 && deploy", // gitleaks:allow -- synthetic redaction fixture
+      detail: "curl -H 'Authorization: Bearer eyJsecretjwtpayload.aaa.bbb' https://api", // gitleaks:allow -- synthetic redaction fixture
       type: "manual",
     });
     const list = await client.tool("activity_list", { limit: 5 });

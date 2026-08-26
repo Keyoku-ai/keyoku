@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { bytesDigest, canonicalJson, canonicalJsonDigest } from "../src/canonical-json.js";
+import { bytesDigest, canonicalJson, canonicalJsonDigest, parseJsonBytesRejectDuplicateKeys } from "../src/canonical-json.js";
 import { readVerifiedFactfile } from "../src/contribution.js";
 import {
   PulseConformanceManifestSchema,
@@ -56,8 +56,12 @@ describe("Pulse cross-implementation conformance vectors", () => {
   it("binds canonical JSON, raw Factfile bytes, and poster assets to exact digests", () => {
     const manifest = PulseConformanceManifestSchema.parse(JSON.parse(readFileSync(join(fixtureRoot, "manifest.json"), "utf8")));
     for (const vector of manifest.canonicalJson) {
-      expect(canonicalJson(vector.input)).toBe(vector.canonical);
-      expect(canonicalJsonDigest(vector.input)).toBe(vector.digest);
+      const parsed = parseJsonBytesRejectDuplicateKeys(Buffer.from(vector.inputJson, "utf8"), vector.id);
+      expect(canonicalJson(parsed)).toBe(vector.canonical);
+      expect(canonicalJsonDigest(parsed)).toBe(vector.digest);
+    }
+    for (const vector of manifest.strictJson) {
+      expect(() => parseJsonBytesRejectDuplicateKeys(Buffer.from(vector.inputBytesBase64, "base64"), vector.id)).toThrow(vector.expectedErrorIncludes);
     }
     const factfilePath = join(fixtureRoot, manifest.bytes.factfile.path);
     const factfileBytes = readFileSync(factfilePath);
@@ -89,13 +93,13 @@ describe("Pulse cross-implementation conformance vectors", () => {
     }
   });
 
-  it("freezes all required dispatcher outcomes and fails closed on source conflict", () => {
+  it("freezes fixture-safe dispatcher outcomes and fails closed on source conflict", () => {
     const manifest = PulseConformanceManifestSchema.parse(JSON.parse(readFileSync(join(fixtureRoot, "manifest.json"), "utf8")));
     for (const vector of manifest.dispatch) {
       const events = readEvents(manifest.eventSets[vector.eventSet]!);
       expect(decisionExpectation(planPulseDispatch({ events, ...vector.plan }))).toEqual(vector.expected);
     }
-    expect(new Set(manifest.dispatch.map((vector) => vector.expected.outcome))).toEqual(new Set(["send", "defer", "coalesce", "stale_no_send", "deduplicate", "suppress"]));
+    expect(new Set(manifest.dispatch.map((vector) => vector.expected.outcome))).toEqual(new Set(["defer", "stale_no_send", "suppress"]));
     const conflict = manifest.dispatch.find((vector) => vector.id === manifest.sourceConflict.dispatchVector);
     expect(conflict).toMatchObject({ eventSet: manifest.sourceConflict.eventSet, expected: { outcome: "suppress", reasonCode: "source_conflict", failClosed: true } });
   });

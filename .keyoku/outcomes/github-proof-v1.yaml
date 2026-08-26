@@ -8,7 +8,7 @@ objective: >-
   share a Factfile that explains the outcome without replacing human acceptance.
 owner:
   kind: human
-  id: taikicoleman@icloud.com
+  id: keyoku-owner
   name: Tye
   role: accountable product owner
 constraints:

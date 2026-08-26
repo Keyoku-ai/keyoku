@@ -2,13 +2,16 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { buildPulseFixture } from "./pulse-fixtures.js";
+import { appendWorkEvent, readWorkEvents } from "./assurance-adapter.js";
 import {
+  appendPulseAdapterEvent,
   appendPulseEvent,
   planPulseDispatch,
   readPulseEvents,
   renderPulseProjection,
   replayPulseEvents,
   sealPulseEvent,
+  trustedLocalCheckpointDigests,
   verifyAndSealLocalCheckpoint,
   writePulseProjection,
   type PulseAudience,
@@ -59,16 +62,18 @@ Usage:
   keyoku pulse status [--root DIR] [--json]
   keyoku pulse plan [--root DIR] [--now ISO] [--stale-after-ms N] [--debounce-ms N] [--delivered DIGEST] [--json]
   keyoku pulse checkpoint publish --file draft.json [--root DIR] [--json]
+  keyoku pulse work-event ingest --file event.json [--root DIR] [--json]
+  keyoku pulse work-event list [--root DIR] [--json]
   keyoku pulse render [--root DIR] [--audience stakeholder|developer|timeline|email|text|json] [--out FILE] [--json]
 
 Pulse appends to .keyoku/pulse/events.jsonl. It plans and renders delivery;
 it never sends email, Slack, Teams, webhook, or MCP messages by itself.
 
 Adapter contract:
-  Emit strict keyoku.dev/pulse-event/v1alpha1 JSONL for Codex, Claude Code,
-  GitHub Actions/CI, stdin, webhooks, or any other harness. Event and source
-  digests are mandatory. Use checkpoint publish to verify local Factfile bytes
-  before a checkpoint_published event enters the ledger.`;
+  A caller may emit strict lifecycle events or neutral work-event/v1 records.
+  Event and source digests are mandatory. The caller remains the control plane;
+  Keyoku does not prescribe a runtime protocol or assurance profile. Use
+  checkpoint publish to verify local Factfile bytes before dispatch planning.`;
 }
 
 function numberFlag(argv: string[], flag: string, fallback: number): number {
@@ -96,7 +101,7 @@ async function executePulseCommand(argv: string[]): Promise<unknown> {
     const file = flagValue(rest, "--file") ?? "-";
     const raw = file === "-" ? await stdin() : readFileSync(resolve(file), "utf8");
     const events = parseEvents(raw);
-    const results = events.map((event) => appendPulseEvent(root, event as Record<string, unknown>));
+    const results = events.map((event) => appendPulseAdapterEvent(root, event as Record<string, unknown>));
     return { kind: "ingest", root, path: results[0]?.path ?? resolve(root, ".keyoku", "pulse", "events.jsonl"), appended: results.filter((result) => result.status === "appended").length, deduplicated: results.filter((result) => result.status === "deduplicated").length, eventIds: results.map((result) => result.event.id) };
   }
   if (sub === "status") {
@@ -106,16 +111,20 @@ async function executePulseCommand(argv: string[]): Promise<unknown> {
       kind: "status",
       root,
       eventCount: events.length,
+      verifiedCheckpointCount: state.checkpoints.filter((checkpoint) => checkpoint.verification.status === "verified" && checkpoint.evidenceBinding.mode === "local_factfiles").length,
+      attestedCheckpointCount: state.checkpoints.filter((checkpoint) => checkpoint.verification.status === "attested").length,
       leases: state.leases.map((lease) => ({ id: lease.lease.id, harness: lease.lease.harness, projectId: lease.lease.project.id, runId: lease.lease.runId, agentId: lease.lease.agent.id, task: lease.lease.task, state: lease.state, heartbeatAt: lease.heartbeatAt, latestCheckpointId: lease.latestCheckpointId, sourceDigest: lease.currentSource.verifiedDigest })),
-      checkpoints: state.checkpoints.map((checkpoint) => ({ id: checkpoint.id, title: checkpoint.title, publishedAt: checkpoint.publishedAt, trigger: checkpoint.materialTrigger, sourceDigest: checkpoint.source.verifiedDigest, contentDigest: checkpoint.contentDigest })),
+      checkpoints: state.checkpoints.map((checkpoint) => ({ id: checkpoint.id, title: checkpoint.title, publishedAt: checkpoint.publishedAt, trigger: checkpoint.materialTrigger, verificationStatus: checkpoint.verification.status, evidenceMode: checkpoint.evidenceBinding.mode, sourceDigest: checkpoint.source.verifiedDigest, contentDigest: checkpoint.contentDigest })),
     };
   }
   if (sub === "plan") {
+    const events = readPulseEvents(root);
     return {
       kind: "plan",
       root,
       decision: planPulseDispatch({
-        events: readPulseEvents(root),
+        events,
+        trustedCheckpointDigests: trustedLocalCheckpointDigests(root, events),
         now: flagValue(rest, "--now"),
         staleAfterMs: numberFlag(rest, "--stale-after-ms", 5 * 60_000),
         debounceMs: numberFlag(rest, "--debounce-ms", 30_000),
@@ -134,11 +143,24 @@ async function executePulseCommand(argv: string[]): Promise<unknown> {
     const result = appendPulseEvent(root, event);
     return { kind: "checkpoint", root, status: result.status, event, path: result.path };
   }
+  if (sub === "work-event") {
+    const action = rest[0];
+    if (action === "ingest") {
+      const file = flagValue(rest, "--file");
+      if (!file) throw new Error("Usage: keyoku pulse work-event ingest --file event.json [--root DIR]");
+      const event = JSON.parse(readFileSync(resolve(file), "utf8")) as Record<string, unknown>;
+      return { kind: "work-event-ingest", root, ...appendWorkEvent(root, event) };
+    }
+    if (action === "list") return { kind: "work-event-list", root, events: readWorkEvents(root) };
+    throw new Error("Usage: keyoku pulse work-event ingest --file event.json | list [--root DIR]");
+  }
   if (sub === "render") {
     const audience = (flagValue(rest, "--audience") ?? "stakeholder") as PulseAudience;
     if (!["stakeholder", "developer", "timeline", "email", "text", "json"].includes(audience)) throw new Error(`Unknown Pulse audience '${audience}'.`);
+    const events = readPulseEvents(root);
     const decision = planPulseDispatch({
-      events: readPulseEvents(root),
+      events,
+      trustedCheckpointDigests: trustedLocalCheckpointDigests(root, events),
       now: flagValue(rest, "--now"),
       staleAfterMs: numberFlag(rest, "--stale-after-ms", 5 * 60_000),
       debounceMs: numberFlag(rest, "--debounce-ms", 30_000),
@@ -166,15 +188,17 @@ export async function pulseCmd(argv: string[]): Promise<void> {
       console.log(JSON.stringify({ ok: true, result: serializable }, null, 2));
       return;
     }
-    const typed = result as { kind: string; text?: string; jsonl?: string; out?: string; fixture?: { description: string }; appended?: number; deduplicated?: number; eventCount?: number; leases?: unknown[]; checkpoints?: unknown[]; decision?: { outcome: string; reason: string; checkpointIds: string[] }; output?: string; path?: string; audience?: string; status?: string; event?: PulseEvent };
+    const typed = result as { kind: string; text?: string; jsonl?: string; out?: string; fixture?: { description: string }; appended?: number; deduplicated?: number; eventCount?: number; verifiedCheckpointCount?: number; attestedCheckpointCount?: number; leases?: unknown[]; checkpoints?: unknown[]; events?: unknown[]; decision?: { outcome: string; reason: string; checkpointIds: string[] }; output?: string; path?: string; audience?: string; status?: string; event?: PulseEvent | { id?: string } };
     if (typed.kind === "help") console.log(typed.text);
     else if (typed.kind === "fixture") {
       if (typed.out) console.log(`Wrote ${typed.fixture?.description}\n${typed.out}`);
       else process.stdout.write(typed.jsonl ?? "");
     } else if (typed.kind === "ingest") console.log(`Pulse ingested ${typed.appended} event(s); ${typed.deduplicated} deduplicated.`);
-    else if (typed.kind === "status") console.log(`Keyoku Pulse\n${typed.eventCount} events · ${typed.leases?.length ?? 0} leases · ${typed.checkpoints?.length ?? 0} verified checkpoints`);
+    else if (typed.kind === "status") console.log(`Keyoku Pulse\n${typed.eventCount} events · ${typed.leases?.length ?? 0} leases · ${typed.verifiedCheckpointCount ?? 0} locally verified checkpoints · ${typed.attestedCheckpointCount ?? 0} attested checkpoints`);
     else if (typed.kind === "plan") console.log(`${typed.decision?.outcome}: ${typed.decision?.reason}\n${typed.decision?.checkpointIds.join("\n") ?? ""}`.trim());
     else if (typed.kind === "checkpoint") console.log(`Pulse checkpoint ${typed.status}: ${typed.event?.id}\n${typed.path}`);
+    else if (typed.kind === "work-event-ingest") console.log(`Pulse WorkEvent ${typed.status}: ${typed.event?.id}\n${typed.path}`);
+    else if (typed.kind === "work-event-list") console.log(`Pulse WorkEvents\n${typed.events?.length ?? 0} validated event(s)`);
     else if (typed.kind === "render") {
       if (typed.path) console.log(`Rendered ${typed.audience}: ${typed.path}`);
       else process.stdout.write(typed.output ?? "");

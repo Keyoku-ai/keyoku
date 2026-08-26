@@ -12,39 +12,45 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: 22
           cache: npm
           registry-url: https://registry.npmjs.org
       # npm >= 11.5 is required for OIDC Trusted Publishing (tokenless + provenance).
-      - run: npm install -g npm@latest
+      - run: npm install -g npm@12.0.2
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
-      - run: npm run eval # quality gate: muscle-memory retrieval, not just correctness
+      - run: npm run eval
+      - run: npm audit --omit=dev
       - run: node scripts/preflight.mjs # release integrity: version single-sourced, changelog present, built artifact matches package.json (npm test already built dist/)
       # Publish path, in order of preference:
       #   1. npm Trusted Publishing (OIDC, tokenless, provenance) — configure once at
       #      npmjs.com → package 'keyoku' → Settings → Trusted Publishing → add this repo
       #      (Keyoku-ai/keyoku) + workflow 'release.yml'. Then this just works.
       #   2. NPM_TOKEN secret (Automation type) as a fallback.
-      # Idempotent (skips a version already on npm), and degrades to a loud warning
-      # instead of a red build when neither auth path is configured (maintainer then
-      # publishes via CLI). It never silently claims success.
+      # Idempotent (skips a version already on npm). Prereleases go to `next` so
+      # the v2 `latest` line remains a rollback boundary. Publish failures are
+      # real release failures; a green workflow must never mean "nothing shipped".
       - name: Publish to npm
         run: |
           VERSION=$(node -p "require('./package.json').version")
+          if [[ "${GITHUB_REF_NAME}" != "v${VERSION}" ]]; then
+            echo "::error title=Tag/version mismatch::Tag ${GITHUB_REF_NAME} does not match package v${VERSION}."
+            exit 1
+          fi
+          if [[ "${VERSION}" == *-* ]]; then
+            DIST_TAG=next
+          else
+            DIST_TAG=latest
+          fi
           if npm view "keyoku@${VERSION}" version >/dev/null 2>&1; then
             echo "keyoku@${VERSION} already on npm — skipping publish."
             exit 0
           fi
-          if npm publish --provenance --access public; then
-            echo "Published keyoku@${VERSION} with provenance."
-          else
-            echo "::warning title=npm publish skipped::Could not publish keyoku@${VERSION} — enable Trusted Publishing for Keyoku-ai/keyoku (release.yml) at npmjs.com, or set the NPM_TOKEN secret. Until then publish from the maintainer CLI: npm publish --access public"
-            exit 0
-          fi
+          npm publish --provenance --access public --tag "${DIST_TAG}"
+          echo "Published keyoku@${VERSION} with provenance on ${DIST_TAG}."
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -8,7 +8,7 @@ objective: >-
   without manually rewriting dashboard copy.
 owner:
   kind: human
-  id: taikicoleman@icloud.com
+  id: keyoku-owner
   name: Tye
   role: accountable product owner
 constraints:

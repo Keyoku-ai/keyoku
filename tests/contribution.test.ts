@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
@@ -67,7 +67,10 @@ describe("repository-local contribution gates", () => {
     const root = repo();
     initProject({ root, name: "Example" });
     writeFileSync(join(root, "evidence.png"), Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"));
-    writeFileSync(join(root, "journey.webm"), Buffer.from("portable-test-video"));
+    writeFileSync(join(root, "journey.webm"), Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.from("portable-test-video")]));
+    writeFileSync(join(root, "outside.png"), Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from("outside-secret-bytes")]));
+    symlinkSync("outside.png", join(root, "linked.png"));
+    writeFileSync(join(root, "mismatch.mp4"), "not an mp4", "utf8");
     const timestamp = new Date().toISOString();
     writeFileSync(
       join(root, ".keyoku", "outcomes", "working-build.yaml"),
@@ -91,6 +94,8 @@ describe("repository-local contribution gates", () => {
               artifacts: [
                 { kind: "screenshot", path: "evidence.png", label: "Rendered outcome", caption: "A captured view of the behavior under review.", annotations: [{ label: "Visible result", detail: "The reviewer can see the outcome.", x: 50, y: 40 }] },
                 { kind: "video", path: "journey.webm", label: "Outcome journey", caption: "A short recording of the behavior under review.", annotations: [{ label: "Interaction completes", atMs: 1200 }] },
+                { kind: "screenshot", path: "linked.png", label: "Rejected linked media", caption: "This linked file must never enter the portable report.", annotations: [] },
+                { kind: "video", path: "mismatch.mp4", label: "Rejected mismatched media", caption: "Extension alone must not authorize embedding.", annotations: [] },
               ],
             },
           },
@@ -109,10 +114,13 @@ describe("repository-local contribution gates", () => {
     const snapshot = await runGate(root, contribution.id);
 
     expect(snapshot.state).toBe("ready_for_review");
+    expect(existsSync(join(root, ".keyoku", "runtime", "goals.json"))).toBe(false);
     expect(snapshot.summary).toMatchObject({ passed: 1, failed: 0, verified: true });
     expect(snapshot.contribution.actors[0]).toMatchObject({ name: "Project Owner", kind: "human" });
     expect(snapshot.repository.changedFiles).toContain(".keyoku/outcomes/working-build.yaml");
     expect(snapshot.repository.branch).toBeTruthy();
+    expect(snapshot.repository.sourceCapsuleDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(snapshot.repository.sourceCapsuleDigest).toBe(snapshot.repository.worktreeDigest);
     expect(snapshot.repository.ahead).toBe(0);
     expect(snapshot.repository.changedFiles.every((path) => !path.startsWith(".keyoku/contributions/"))).toBe(true);
 
@@ -145,6 +153,9 @@ describe("repository-local contribution gates", () => {
     expect(html).toContain("Reproduce this observation");
     expect(html).toContain("data:image/png;base64,");
     expect(html).toContain("data:video/webm;base64,");
+    expect(html).toContain("Artifact path traverses a symbolic link");
+    expect(html).toContain("media signature");
+    expect(html).not.toContain(Buffer.from("outside-secret-bytes").toString("base64"));
     expect(html).toContain("<video controls");
     expect(html).toContain("annotation-pin");
     expect(html).toContain("Visible result");
@@ -372,5 +383,39 @@ describe("repository-local contribution gates", () => {
     ].join("\n");
     expect(published).not.toContain("sk-supersecret123");
     expect(published).toContain("«redacted»");
+  });
+
+  it("fails closed when a passing probe mutates the source checkout", async () => {
+    const root = repo();
+    initProject({ root, name: "Stable Probe" });
+    const timestamp = new Date().toISOString();
+    writeFileSync(join(root, ".keyoku", "outcomes", "stable-probe.yaml"), stringify({
+      schemaVersion: "keyoku.dev/outcome/v1alpha1",
+      id: "stable-probe",
+      revision: 1,
+      title: "Probe observes without changing source",
+      objective: "Passing evidence is bound to the same source the probe observed.",
+      owner: { kind: "human", id: "owner@example.com", name: "Project Owner" },
+      constraints: [],
+      criteria: [{
+        description: "The probe appears to pass",
+        probe: { kind: "command", run: "node -e \"require('fs').writeFileSync('README.md', '# mutated\\n'); console.log(JSON.stringify({ok:true}))\"", parse: "json" },
+        assert: { path: "output.ok", op: "eq", value: true },
+      }],
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }), "utf8");
+    const contribution = startContribution({ root, outcomeId: "stable-probe" });
+    await expect(runGate(root, contribution.id)).rejects.toThrow(/verification probe mutated its disposable source checkout/);
+  });
+
+  it("captures spaces, newlines, and arrow text in filenames without line parsing", () => {
+    const root = repo();
+    const odd = "odd name\nwith -> arrow.txt";
+    writeFileSync(join(root, odd), "odd bytes", "utf8");
+    const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+    const snapshot = captureRepository(root, base);
+    expect(snapshot.changedFiles).toContain(odd);
+    expect(snapshot.dirty).toBe(true);
   });
 });

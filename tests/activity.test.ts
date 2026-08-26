@@ -140,18 +140,18 @@ describe("session partitioning", () => {
 
 describe("redactSecrets", () => {
   it("masks credential assignments and bearer tokens", () => {
-    expect(redactSecrets("export GITHUB_TOKEN=ghp_abc123def && git push")).toBe(
+    expect(redactSecrets("export GITHUB_TOKEN=ghp_abc123def && git push")).toBe( // gitleaks:allow -- synthetic redaction fixture
       "export GITHUB_TOKEN=«redacted» && git push",
     );
-    expect(redactSecrets("curl -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.x.y'")).toContain(
+    expect(redactSecrets("curl -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.x.y'")).toContain( // gitleaks:allow -- synthetic redaction fixture
       "Bearer «redacted»",
     );
-    expect(redactSecrets('{"api_key": "sk-live-12345678"}')).toContain("«redacted»");
+    expect(redactSecrets('{"api_key": "sk-live-12345678"}')).toContain("«redacted»"); // gitleaks:allow -- synthetic redaction fixture
     expect(redactSecrets("password: hunter22")).toBe("password: «redacted»");
   });
 
   it("masks Basic-auth credentials without leaking the token", () => {
-    const out = redactSecrets("curl -H 'Authorization: Basic dXNlcjpzM2NyZXRwYXNz'");
+    const out = redactSecrets("curl -H 'Authorization: Basic dXNlcjpzM2NyZXRwYXNz'"); // gitleaks:allow -- synthetic redaction fixture
     expect(out).toContain("Basic «redacted»");
     expect(out).not.toContain("dXNlcjpzM2NyZXRwYXNz"); // the actual credential is gone
   });

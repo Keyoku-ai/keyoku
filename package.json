@@ -9,15 +9,30 @@
   "main": "dist/index.js",
   "exports": {
     ".": "./dist/index.js",
+    "./fixtures/assurance/*": "./fixtures/assurance/*",
     "./fixtures/conformance/*": "./fixtures/conformance/*"
   },
   "files": [
-    "dist/*.js",
+    "dist/index.js",
+    "dist/index.js.map",
+    "assets/banner-dark.svg",
+    "assets/banner-light.svg",
+    "docs/ASSURANCE-ADAPTER.md",
+    "docs/FACTFILE-STANDARD.md",
+    "docs/GITHUB.md",
+    "docs/PRODUCTION-READINESS.md",
+    "docs/PUBLIC-SURFACE.md",
+    "docs/PULSE.md",
+    "docs/REPO-MAP.md",
+    "docs/SECURITY-REVIEW.md",
+    "fixtures/assurance",
     "fixtures/conformance",
     "fixtures/pulse",
+    "scripts/render-assurance-fixtures.mjs",
     "scripts/render-conformance-fixtures.mjs",
     "scripts/render-pulse-fixtures.mjs",
     "README.md",
+    "SECURITY.md",
     "LICENSE"
   ],
   "scripts": {
@@ -28,6 +43,7 @@
     "eval": "tsx evals/muscle-memory.eval.ts",
     "fixtures:pulse": "node scripts/render-pulse-fixtures.mjs",
     "fixtures:conformance": "npm run build && node scripts/render-conformance-fixtures.mjs",
+    "fixtures:assurance": "npm run build && node scripts/render-assurance-fixtures.mjs",
     "typecheck": "tsc --noEmit",
     "prepare": "npm run build",
     "preflight": "npm run build && node scripts/preflight.mjs",
@@ -48,11 +64,11 @@
     "factfile",
     "git",
     "open-source",
-    "workflow",
-    "activity-tracing",
-    "automation"
+    "evidence",
+    "human-review",
+    "progress"
   ],
-  "author": "Keyoku <support@keyoku.ai>",
+  "author": "Keyoku",
   "license": "MIT",
   "homepage": "https://keyoku.ai",
   "repository": {
@@ -66,13 +82,13 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.104.1",
     "@modelcontextprotocol/sdk": "^1.12.0",
     "jmespath": "^0.16.0",
     "yaml": "^2.9.0",
     "zod": "^3.25.0"
   },
   "devDependencies": {
+    "@anthropic-ai/sdk": "^0.104.1",
     "@types/jmespath": "^0.15.2",
     "@types/node": "^20.10.0",
     "tsup": "^8.0.1",

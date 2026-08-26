@@ -2,10 +2,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { z } from "zod";
 
-import { bytesDigest, canonicalJson, canonicalJsonDigest } from "./canonical-json.js";
-import { readVerifiedFactfile } from "./contribution.js";
+import { bytesDigest, canonicalJson, canonicalJsonDigest, decodeUtf8Strict } from "./canonical-json.js";
+import { mediaSignatureMatches, mediaTypeForPath, readBoundedArtifact } from "./artifact-safety.js";
+import { captureRepository, readVerifiedFactfile } from "./contribution.js";
+import { readLocalLedger, resolveLocalLedger, updateLocalLedger } from "./local-ledger.js";
 
-const PULSE_DIR = join(".keyoku", "pulse");
 const PULSE_EVENTS_FILE = "events.jsonl";
 const HexShaSchema = z.string().regex(/^[a-f0-9]{7,64}$/, "must be a lowercase hexadecimal revision");
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/, "must be a sha256 digest");
@@ -100,6 +101,8 @@ export const PulseDecisionRequestSchema = z.object({
 
 export const PulseFactfileReferenceSchema = z.object({
   id: IdSchema,
+  projectId: IdSchema,
+  outcomeId: IdSchema,
   path: z.string().min(1).max(4_000),
   digest: DigestSchema,
   sourceDigest: DigestSchema,
@@ -124,7 +127,7 @@ export const PulseEvidenceBindingSchema = z.discriminatedUnion("mode", [
 ]);
 
 export const PulseVerificationSchema = z.object({
-  status: z.literal("verified"),
+  status: z.enum(["verified", "attested"]),
   verifiedAt: TimestampSchema,
   methods: z.array(z.object({
     kind: z.enum(["command", "http", "mcp", "human"]),
@@ -157,6 +160,7 @@ const VerifiedCheckpointFields = z.object({
   schemaVersion: z.literal("keyoku.dev/pulse-checkpoint/v1alpha1"),
   id: IdSchema,
   projectId: IdSchema,
+  outcomeId: IdSchema,
   runId: IdSchema,
   leaseIds: z.array(IdSchema).min(1).max(100),
   title: z.string().min(1).max(1_000),
@@ -183,8 +187,11 @@ export const VerifiedCheckpointSchema = VerifiedCheckpointFields.superRefine((ch
     if (factfile.sourceDigest !== checkpoint.source.verifiedDigest) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["factfiles", index, "sourceDigest"], message: "must match the checkpoint source digest" });
     }
+    if (factfile.projectId !== checkpoint.projectId) context.addIssue({ code: z.ZodIssueCode.custom, path: ["factfiles", index, "projectId"], message: "must match checkpoint projectId" });
+    if (factfile.outcomeId !== checkpoint.outcomeId) context.addIssue({ code: z.ZodIssueCode.custom, path: ["factfiles", index, "outcomeId"], message: "must match checkpoint outcomeId" });
   });
   if (checkpoint.evidenceBinding.mode === "local_factfiles") {
+    if (checkpoint.verification.status !== "verified") context.addIssue({ code: z.ZodIssueCode.custom, path: ["verification", "status"], message: "must be verified for locally checked Factfiles" });
     checkpoint.factfiles.forEach((factfile, index) => {
       if (!factfile.bytesDigest) {
         context.addIssue({ code: z.ZodIssueCode.custom, path: ["factfiles", index, "bytesDigest"], message: "is required for locally verified Factfiles" });
@@ -194,7 +201,7 @@ export const VerifiedCheckpointSchema = VerifiedCheckpointFields.superRefine((ch
       if (!asset.digest) context.addIssue({ code: z.ZodIssueCode.custom, path: ["assets", index, "digest"], message: "is required for locally verified assets" });
       if (asset.posterPath && !asset.posterDigest) context.addIssue({ code: z.ZodIssueCode.custom, path: ["assets", index, "posterDigest"], message: "is required for a locally verified poster" });
     });
-  }
+  } else if (checkpoint.verification.status !== "attested") context.addIssue({ code: z.ZodIssueCode.custom, path: ["verification", "status"], message: "must remain attested until authenticated verification is implemented" });
   const expected = pulseDigest(withoutKey(checkpoint, "contentDigest"));
   if (checkpoint.contentDigest !== expected) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["contentDigest"], message: `does not match checkpoint content (expected ${expected})` });
@@ -222,47 +229,114 @@ export function verifyAndSealLocalCheckpoint(rootInput: string, input: LocalChec
   if (input.source.canonicalRoot !== root && input.source.canonicalRoot !== `file://${root}`) {
     throw new Error(`Checkpoint canonical source root '${input.source.canonicalRoot}' does not match verified root '${root}'.`);
   }
+  let factfileBaseSha: string | undefined;
   const references = input.factfiles.map(({ path: pathInput }) => {
     const absolute = resolve(root, pathInput);
     const relativePath = relative(root, absolute);
     if (relativePath.startsWith("..") || isAbsolute(relativePath)) throw new Error(`Factfile path is outside the verified root: ${pathInput}`);
     if (!existsSync(absolute)) throw new Error(`Factfile does not exist: ${relativePath}`);
-    const bytes = readFileSync(absolute);
+    const bounded = readBoundedArtifact(root, pathInput);
+    const bytes = bounded.bytes;
     const factfile = readVerifiedFactfile(absolute);
+    if (factfileBaseSha && factfile.repository.baseSha !== factfileBaseSha) throw new Error("Local checkpoint Factfiles do not share one repository base revision.");
+    factfileBaseSha = factfile.repository.baseSha;
     if (resolve(factfile.repository.repositoryRoot) !== root || factfile.repository.headSha !== input.source.headSha || factfile.repository.worktreeDigest !== input.source.worktreeDigest) {
       throw new Error(`Factfile source does not match checkpoint source at ${relativePath}.`);
     }
+    if (factfile.project.id !== input.projectId) throw new Error(`Factfile project '${factfile.project.id}' does not match checkpoint project '${input.projectId}'.`);
+    if (factfile.outcome.id !== input.outcomeId) throw new Error(`Factfile outcome '${factfile.outcome.id}' does not match checkpoint outcome '${input.outcomeId}'.`);
     return PulseFactfileReferenceSchema.parse({
       id: factfile.id,
-      path: relativePath,
+      projectId: factfile.project.id,
+      outcomeId: factfile.outcome.id,
+      path: bounded.relativePath,
       digest: factfile.digest,
       sourceDigest: input.source.verifiedDigest,
       bytesDigest: pulseBytesDigest(bytes),
       state: factfile.state,
     });
   });
+  if (!factfileBaseSha) throw new Error("A local checkpoint requires at least one Factfile.");
+  if (input.source.baseSha && input.source.baseSha !== factfileBaseSha) throw new Error("Checkpoint base revision does not match its Factfiles.");
+  const sourceBeforeAssets = captureRepository(root, factfileBaseSha);
+  if (sourceBeforeAssets.headSha !== input.source.headSha || sourceBeforeAssets.worktreeDigest !== input.source.worktreeDigest) {
+    throw new Error("Checkpoint source is stale: the current Git head or worktree does not match its Factfiles.");
+  }
+  if (input.source.branch && sourceBeforeAssets.branch !== input.source.branch) throw new Error("Checkpoint branch does not match the current repository branch.");
   const assets = input.assets.map((asset) => {
-    const absolute = resolve(root, asset.path);
-    const relativePath = relative(root, absolute);
-    if (relativePath.startsWith("..") || isAbsolute(relativePath)) throw new Error(`Pulse asset path is outside the verified root: ${asset.path}`);
-    if (!existsSync(absolute)) throw new Error(`Pulse asset does not exist: ${relativePath}`);
-    const digest = pulseBytesDigest(readFileSync(absolute));
+    const bounded = readBoundedArtifact(root, asset.path);
+    const relativePath = bounded.relativePath;
+    const digest = pulseBytesDigest(bounded.bytes);
     if (asset.digest && asset.digest !== digest) throw new Error(`Pulse asset digest mismatch: ${relativePath}`);
+    if (asset.kind === "screenshot" || asset.kind === "video") {
+      const mediaType = mediaTypeForPath(asset.path);
+      if (!mediaType || (asset.kind === "screenshot") !== mediaType.startsWith("image/") || !mediaSignatureMatches(bounded.bytes, mediaType)) {
+        throw new Error(`Pulse ${asset.kind} bytes do not match a supported media signature: ${relativePath}`);
+      }
+    }
     if (!asset.posterPath) return { ...asset, path: relativePath, digest };
-    const posterAbsolute = resolve(root, asset.posterPath);
-    const posterRelative = relative(root, posterAbsolute);
-    if (posterRelative.startsWith("..") || isAbsolute(posterRelative)) throw new Error(`Pulse poster path is outside the verified root: ${asset.posterPath}`);
-    if (!existsSync(posterAbsolute)) throw new Error(`Pulse poster does not exist: ${posterRelative}`);
-    const posterDigest = pulseBytesDigest(readFileSync(posterAbsolute));
+    const poster = readBoundedArtifact(root, asset.posterPath);
+    const posterRelative = poster.relativePath;
+    const posterMediaType = mediaTypeForPath(asset.posterPath);
+    if (!posterMediaType?.startsWith("image/") || !mediaSignatureMatches(poster.bytes, posterMediaType)) throw new Error(`Pulse poster bytes do not match a supported image signature: ${posterRelative}`);
+    const posterDigest = pulseBytesDigest(poster.bytes);
     if (asset.posterDigest && asset.posterDigest !== posterDigest) throw new Error(`Pulse poster digest mismatch: ${posterRelative}`);
     return { ...asset, path: relativePath, digest, posterPath: posterRelative, posterDigest };
   });
+  const sourceAfterAssets = captureRepository(root, factfileBaseSha);
+  if (sourceAfterAssets.headSha !== sourceBeforeAssets.headSha || sourceAfterAssets.worktreeDigest !== sourceBeforeAssets.worktreeDigest) {
+    throw new Error("Checkpoint source changed while Factfile and artifact bytes were being verified.");
+  }
   return sealVerifiedCheckpoint({
     ...input,
     factfiles: references,
     assets,
     evidenceBinding: { mode: "local_factfiles", verifiedRoot: root },
   });
+}
+
+/**
+ * Re-read every byte behind a stored local checkpoint and require the sealed
+ * result to be identical. This is the only supported way to promote a
+ * persisted `local_factfiles` claim into the dispatch planner's trust set.
+ */
+export function verifyStoredLocalCheckpoint(rootInput: string, checkpointInput: VerifiedCheckpoint): VerifiedCheckpoint {
+  const checkpoint = VerifiedCheckpointSchema.parse(checkpointInput);
+  if (checkpoint.evidenceBinding.mode !== "local_factfiles" || checkpoint.verification.status !== "verified") {
+    throw new Error(`Checkpoint '${checkpoint.id}' is attested, not a locally verified checkpoint.`);
+  }
+  const {
+    contentDigest: _contentDigest,
+    evidenceBinding: _evidenceBinding,
+    factfiles,
+    ...input
+  } = checkpoint;
+  const verified = verifyAndSealLocalCheckpoint(rootInput, {
+    ...input,
+    factfiles: factfiles.map(({ path }) => ({ path })),
+  });
+  if (verified.contentDigest !== checkpoint.contentDigest) {
+    throw new Error(`Stored checkpoint '${checkpoint.id}' no longer matches its verified local evidence.`);
+  }
+  return verified;
+}
+
+/**
+ * Build a fail-closed planner trust set from current local bytes. Invalid,
+ * stale, missing, or self-asserted local checkpoints are intentionally
+ * omitted so planning suppresses them instead of throwing or dispatching.
+ */
+export function trustedLocalCheckpointDigests(rootInput: string, events: PulseEvent[]): string[] {
+  const trusted: string[] = [];
+  for (const checkpoint of replayPulseEvents(events).checkpoints) {
+    if (checkpoint.evidenceBinding.mode !== "local_factfiles" || checkpoint.verification.status !== "verified") continue;
+    try {
+      trusted.push(verifyStoredLocalCheckpoint(rootInput, checkpoint).contentDigest);
+    } catch {
+      // Fail closed: the planner will identify the omitted checkpoint as untrusted.
+    }
+  }
+  return [...new Set(trusted)].sort();
 }
 
 const EventIdentityFields = {
@@ -359,8 +433,8 @@ export function sealPulseEvent(input: Record<string, unknown>): PulseEvent {
   return PulseEventSchema.parse({ ...unsigned, eventDigest: pulseDigest(unsigned) });
 }
 
-function pulseEventsPath(rootInput: string): string {
-  return join(resolve(rootInput), PULSE_DIR, PULSE_EVENTS_FILE);
+function pulseEventsPath(rootInput: string, create = false): string {
+  return resolveLocalLedger(rootInput, PULSE_EVENTS_FILE, create);
 }
 
 export interface PulseAppendResult {
@@ -371,8 +445,7 @@ export interface PulseAppendResult {
 
 export function readPulseEvents(rootInput: string): PulseEvent[] {
   const path = pulseEventsPath(rootInput);
-  if (!existsSync(path)) return [];
-  return readFileSync(path, "utf8").split("\n").filter(Boolean).map((line, index) => {
+  return decodeUtf8Strict(readLocalLedger(path), `Pulse ledger ${path}`).split("\n").filter(Boolean).map((line, index) => {
     try {
       return PulseEventSchema.parse(JSON.parse(line));
     } catch (error) {
@@ -382,17 +455,33 @@ export function readPulseEvents(rootInput: string): PulseEvent[] {
 }
 
 export function appendPulseEvent(rootInput: string, input: PulseEvent | Record<string, unknown>): PulseAppendResult {
-  const root = resolve(rootInput);
   const event = PulseEventSchema.parse(input);
-  const existing = readPulseEvents(root).find((candidate) => candidate.id === event.id);
-  const path = pulseEventsPath(root);
-  if (existing) {
-    if (existing.eventDigest !== event.eventDigest) throw new Error(`Pulse event id '${event.id}' already exists with different content.`);
-    return { status: "deduplicated", event: existing, path };
+  const path = pulseEventsPath(rootInput, true);
+  let result: PulseAppendResult | undefined;
+  updateLocalLedger(path, (current) => {
+    const events = decodeUtf8Strict(current, `Pulse ledger ${path}`).split("\n").filter(Boolean).map((line, index) => {
+      try { return PulseEventSchema.parse(JSON.parse(line)); }
+      catch (error) { throw new Error(`Invalid Pulse event at ${path}:${index + 1}: ${error instanceof Error ? error.message : String(error)}`); }
+    });
+    const existing = events.find((candidate) => candidate.id === event.id);
+    if (existing) {
+      if (existing.eventDigest !== event.eventDigest) throw new Error(`Pulse event id '${event.id}' already exists with different content.`);
+      result = { status: "deduplicated", event: existing, path };
+      return current;
+    }
+    result = { status: "appended", event, path };
+    return Buffer.concat([current, Buffer.from(`${JSON.stringify(event)}\n`, "utf8")]);
+  });
+  return result!;
+}
+
+/** Public adapter ingress cannot self-promote a locally verified checkpoint. */
+export function appendPulseAdapterEvent(rootInput: string, input: PulseEvent | Record<string, unknown>): PulseAppendResult {
+  const event = PulseEventSchema.parse(input);
+  if (event.type === "checkpoint_published" && event.checkpoint.evidenceBinding.mode === "local_factfiles") {
+    throw new Error("Adapter ingress cannot claim local Factfile verification. Use Pulse checkpoint publish so Keyoku reads and verifies the local bytes.");
   }
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(event)}\n`, { encoding: "utf8", flag: "a", mode: 0o600 });
-  return { status: "appended", event, path };
+  return appendPulseEvent(rootInput, event);
 }
 
 export interface PulseLeaseProjection {
@@ -561,6 +650,8 @@ export interface PlanPulseDispatchOptions {
   staleAfterMs?: number;
   debounceMs?: number;
   deliveredContentDigests?: string[];
+  /** Digests produced by verifyStoredLocalCheckpoint, never caller assertions. */
+  trustedCheckpointDigests?: string[];
 }
 
 export function planPulseDispatch(options: PlanPulseDispatchOptions): PulseDispatchDecision {
@@ -568,6 +659,7 @@ export function planPulseDispatch(options: PlanPulseDispatchOptions): PulseDispa
   const staleAfterMs = options.staleAfterMs ?? 5 * 60_000;
   const debounceMs = options.debounceMs ?? 30_000;
   const delivered = new Set(options.deliveredContentDigests ?? []);
+  const trustedCheckpointDigests = new Set(options.trustedCheckpointDigests ?? []);
   const decision = (partial: Omit<PulseDispatchDecision, "schemaVersion" | "plannedAt">): PulseDispatchDecision => ({
     schemaVersion: "keyoku.dev/pulse-dispatch/v1alpha1",
     plannedAt: now,
@@ -590,7 +682,10 @@ export function planPulseDispatch(options: PlanPulseDispatchOptions): PulseDispa
   const active = state.leases.filter((lease) => ["working", "verifying", "blocked"].includes(lease.state));
   const stale = active.filter((lease) => Date.parse(now) - Date.parse(lease.heartbeatAt) > staleAfterMs);
   if (stale.length > 0) {
-    const trusted = state.latestTrustedCheckpoint ? buildPulseSnapshot([state.latestTrustedCheckpoint]) : undefined;
+    const trustedCheckpoint = [...state.checkpoints].reverse().find((checkpoint) => checkpoint.verification.status === "verified"
+      && checkpoint.evidenceBinding.mode === "local_factfiles"
+      && trustedCheckpointDigests.has(checkpoint.contentDigest));
+    const trusted = trustedCheckpoint ? buildPulseSnapshot([trustedCheckpoint]) : undefined;
     return decision({
       outcome: "stale_no_send",
       reasonCode: "stale_activity_lease",
@@ -602,7 +697,39 @@ export function planPulseDispatch(options: PlanPulseDispatchOptions): PulseDispa
   }
   const allSnapshots = state.checkpoints.map((checkpoint) => buildPulseSnapshot([checkpoint]));
   const undelivered = state.checkpoints.filter((checkpoint, index) => !delivered.has(allSnapshots[index]!.contentDigest));
-  if (state.checkpoints.length > 0 && undelivered.length === 0) {
+  if (state.checkpoints.length === 0) {
+    if (active.some((lease) => lease.state === "working" || lease.state === "verifying")) {
+      return decision({ outcome: "defer", reasonCode: "fresh_uncheckpointed_work", reason: "Fresh work is in progress, but no verified checkpoint exists. Partial activity is not reportable.", failClosed: false, checkpointIds: [] });
+    }
+    return decision({ outcome: "suppress", reasonCode: "no_material_checkpoint", reason: "Lifecycle activity exists without a material verified checkpoint.", failClosed: false, checkpointIds: [] });
+  }
+  const candidates = undelivered.length > 0 ? undelivered : state.checkpoints;
+  const projectIds = new Set(candidates.map((checkpoint) => checkpoint.projectId));
+  const compatible = projectIds.size === 1 && candidates.every((left, index) => candidates.slice(index + 1).every((right) => pulseSourcesCompatible(left.source, right.source)));
+  if (!compatible) {
+    return decision({ outcome: "suppress", reasonCode: "source_conflict", reason: "Candidate checkpoints do not share a compatible project and source ancestry. Dispatch failed closed.", failClosed: true, checkpointIds: candidates.map((checkpoint) => checkpoint.id) });
+  }
+  const unverified = candidates.filter((checkpoint) => checkpoint.verification.status !== "verified" || checkpoint.evidenceBinding.mode !== "local_factfiles");
+  if (unverified.length > 0) {
+    return decision({
+      outcome: "suppress",
+      reasonCode: "attested_checkpoint",
+      reason: `${unverified.length} checkpoint${unverified.length === 1 ? " is" : "s are"} fixture- or adapter-attested, not locally verified. No dispatchable snapshot was produced.`,
+      failClosed: true,
+      checkpointIds: unverified.map((checkpoint) => checkpoint.id),
+    });
+  }
+  const untrusted = candidates.filter((checkpoint) => !trustedCheckpointDigests.has(checkpoint.contentDigest));
+  if (untrusted.length > 0) {
+    return decision({
+      outcome: "suppress",
+      reasonCode: "untrusted_local_checkpoint",
+      reason: `${untrusted.length} local checkpoint${untrusted.length === 1 ? " was" : "s were"} not reverified from current Factfile, source, and artifact bytes. No dispatchable snapshot was produced.`,
+      failClosed: true,
+      checkpointIds: untrusted.map((checkpoint) => checkpoint.id),
+    });
+  }
+  if (undelivered.length === 0) {
     return decision({
       outcome: "deduplicate",
       reasonCode: "already_delivered",
@@ -610,17 +737,6 @@ export function planPulseDispatch(options: PlanPulseDispatchOptions): PulseDispa
       failClosed: false,
       checkpointIds: state.checkpoints.map((checkpoint) => checkpoint.id),
     });
-  }
-  if (undelivered.length === 0) {
-    if (active.some((lease) => lease.state === "working" || lease.state === "verifying")) {
-      return decision({ outcome: "defer", reasonCode: "fresh_uncheckpointed_work", reason: "Fresh work is in progress, but no verified checkpoint exists. Partial activity is not reportable.", failClosed: false, checkpointIds: [] });
-    }
-    return decision({ outcome: "suppress", reasonCode: "no_material_checkpoint", reason: "Lifecycle activity exists without a material verified checkpoint.", failClosed: false, checkpointIds: [] });
-  }
-  const projectIds = new Set(undelivered.map((checkpoint) => checkpoint.projectId));
-  const compatible = projectIds.size === 1 && undelivered.every((left, index) => undelivered.slice(index + 1).every((right) => pulseSourcesCompatible(left.source, right.source)));
-  if (!compatible) {
-    return decision({ outcome: "suppress", reasonCode: "source_conflict", reason: "Undelivered checkpoints do not share a compatible project and source ancestry. Dispatch failed closed.", failClosed: true, checkpointIds: undelivered.map((checkpoint) => checkpoint.id) });
   }
   const freshWorking = active.filter((lease) => lease.state === "working" || lease.state === "verifying");
   if (freshWorking.length > 0) {

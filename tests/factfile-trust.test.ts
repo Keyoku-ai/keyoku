@@ -98,7 +98,7 @@ describe("strict Factfile trust boundary", () => {
   it("rejects a re-signed source identity that no longer matches the repository", async () => {
     const { root, contributionId, path } = await fixture();
     const value = readObject(path);
-    value.repository = { ...(value.repository as Record<string, unknown>), worktreeDigest: "c".repeat(64) };
+    value.repository = { ...(value.repository as Record<string, unknown>), worktreeDigest: "c".repeat(64), sourceCapsuleDigest: "c".repeat(64) };
     writeResigned(path, value);
 
     expect(() => reviewContribution({
@@ -107,6 +107,14 @@ describe("strict Factfile trust boundary", () => {
       decision: "note",
       comment: "This must not attach to a forged source identity.",
     })).toThrow(/repository changed/);
+  });
+
+  it("rejects a re-signed Factfile whose capsule and worktree identities diverge", async () => {
+    const { path } = await fixture();
+    const value = readObject(path);
+    value.repository = { ...(value.repository as Record<string, unknown>), sourceCapsuleDigest: "d".repeat(64) };
+    writeResigned(path, value);
+    expect(() => readVerifiedFactfile(path)).toThrow(/sourceCapsuleDigest: must equal worktreeDigest/);
   });
 
   it("rejects re-signed review tampering and invalid historical snapshots", async () => {

@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 import { afterAll, describe, expect, it } from "vitest";
 
-const ENTRY = join(__dirname, "..", "dist", "index.js");
+const ENTRY = join(__dirname, "..", "dist", "legacy-cli.js");
 
 const home = mkdtempSync(join(tmpdir(), "keyoku-import-home-"));
 const transcripts = mkdtempSync(join(tmpdir(), "keyoku-import-src-"));

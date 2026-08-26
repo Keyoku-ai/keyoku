@@ -12,6 +12,7 @@ import {
   nextInstruction,
   proposeDirection,
   readProofSession,
+  readProofSessionEvents,
   reportWork,
   requestDecision,
   resolveDecision,
@@ -65,7 +66,11 @@ describe("two-way proof sessions", () => {
       agents: [{ actorId: "agent-1", connected: true }],
       directions: [{ id: "ship-alpha", proposedBy: "agent-1" }],
     });
+    const beforeResolution = readProofSessionEvents(root, contribution.id).length;
     const resolved = resolveDecision(root, contribution.id, { decisionId: decision.id, selectedOptionId: "narrow", resolvedBy: "owner@example.com" });
+    const resolutionEvents = readProofSessionEvents(root, contribution.id).slice(beforeResolution);
+    expect(resolutionEvents.map((event) => event.type)).toEqual(["decision.resolved", "instruction.queued"]);
+    expect(new Set(resolutionEvents.map((event) => event.at)).size).toBe(1);
     expect(resolved.instruction.text).toContain("local proof loop");
     expect(nextInstruction(root, contribution.id, "agent-1")?.id).toBe(resolved.instruction.id);
     expect(acknowledgeInstruction(root, contribution.id, resolved.instruction.id, "agent-1").status).toBe("acknowledged");

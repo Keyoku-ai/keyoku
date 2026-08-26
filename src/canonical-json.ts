@@ -36,6 +36,11 @@ export function bytesDigest(value: Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+export function decodeUtf8Strict(value: Uint8Array, label = "UTF-8 input"): string {
+  try { return new TextDecoder("utf-8", { fatal: true }).decode(value); }
+  catch { throw new Error(`${label}: invalid UTF-8 byte sequence.`); }
+}
+
 /** Strict JSON parser that rejects duplicate decoded object keys. */
 export function parseJsonRejectDuplicateKeys(text: string, label = "JSON"): unknown {
   let cursor = 0;
@@ -49,8 +54,20 @@ export function parseJsonRejectDuplicateKeys(text: string, label = "JSON"): unkn
       const character = text[cursor]!;
       if (character === '"') {
         cursor += 1;
-        try { return JSON.parse(text.slice(start, cursor)) as string; }
-        catch { fail("invalid string escape"); }
+        const token = text.slice(start, cursor);
+        if (/\\u[dD][89a-fA-F][0-9a-fA-F]{2}/u.test(token)) fail("escaped UTF-16 surrogate forms are not permitted");
+        let decoded: string;
+        try { decoded = JSON.parse(token) as string; }
+        catch { return fail("invalid string escape"); }
+        for (let index = 0; index < decoded.length; index += 1) {
+          const code = decoded.charCodeAt(index);
+          if (code >= 0xd800 && code <= 0xdbff) {
+            const low = decoded.charCodeAt(index + 1);
+            if (low < 0xdc00 || low > 0xdfff) fail("unpaired UTF-16 surrogate is not permitted");
+            index += 1;
+          } else if (code >= 0xdc00 && code <= 0xdfff) fail("unpaired UTF-16 surrogate is not permitted");
+        }
+        return decoded;
       }
       if (character === "\\") {
         cursor += 2;
@@ -116,4 +133,8 @@ export function parseJsonRejectDuplicateKeys(text: string, label = "JSON"): unkn
   whitespace();
   if (cursor !== text.length) fail("unexpected trailing content");
   return parsed;
+}
+
+export function parseJsonBytesRejectDuplicateKeys(value: Uint8Array, label = "JSON"): unknown {
+  return parseJsonRejectDuplicateKeys(decodeUtf8Strict(value, label), label);
 }

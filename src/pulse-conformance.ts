@@ -34,9 +34,15 @@ export const PulseConformanceManifestSchema = z.object({
   schemaVersion: z.literal(PULSE_CONFORMANCE_VERSION),
   canonicalJson: z.array(z.object({
     id: z.string().min(1),
-    input: z.record(z.unknown()),
+    input: z.unknown(),
+    inputJson: z.string().min(1),
     canonical: z.string(),
     digest: DigestSchema,
+  }).strict()).min(1),
+  strictJson: z.array(z.object({
+    id: z.string().min(1),
+    inputBytesBase64: z.string().min(1),
+    expectedErrorIncludes: z.string().min(1),
   }).strict()).min(1),
   bytes: z.object({
     factfile: z.object({ path: z.string().min(1), bytesDigest: DigestSchema, byteLength: z.number().int().positive(), factfileDigest: DigestSchema }).strict(),
@@ -117,6 +123,7 @@ function conformanceFactfile(): GateSnapshot {
       baseSha: "1".repeat(40),
       headSha: "2".repeat(40),
       worktreeDigest: "3".repeat(64),
+      sourceCapsuleDigest: "3".repeat(64),
       dirty: false,
       changedFiles: [],
     },
@@ -190,16 +197,17 @@ function conflictCheckpoint(id: string, lease: AgentActivityLease): VerifiedChec
     schemaVersion: "keyoku.dev/pulse-checkpoint/v1alpha1",
     id,
     projectId: lease.project.id,
+    outcomeId: lease.task.id,
     runId: lease.runId,
     leaseIds: [lease.id],
-    title: `${id} verified`,
-    changeSummary: "A fixture checkpoint was verified on one canonical root.",
+    title: `${id} attested fixture`,
+    changeSummary: "A synthetic checkpoint was attested on one declared canonical root.",
     whyItMatters: "Incompatible roots must never be combined into one report.",
     publishedAt: "2026-08-25T16:01:00.000Z",
     source: lease.currentSource,
-    verification: { status: "verified", verifiedAt: "2026-08-25T16:01:00.000Z", methods: [{ kind: "command", label: "Conformance check", reproduce: "keyoku conformance verify", result: "passed" }] },
+    verification: { status: "attested", verifiedAt: "2026-08-25T16:01:00.000Z", methods: [{ kind: "command", label: "Conformance check", reproduce: "keyoku conformance verify", result: "passed in a synthetic fixture" }] },
     evidenceBinding: { mode: "fixture", label: "Synthetic source-conflict conformance vector" },
-    factfiles: [{ id: `${id}-factfile`, path: `.keyoku/${id}.json`, digest: canonicalJsonDigest({ id }), sourceDigest: lease.currentSource.verifiedDigest, state: "ready_for_review" }],
+    factfiles: [{ id: `${id}-factfile`, projectId: lease.project.id, outcomeId: lease.task.id, path: `.keyoku/${id}.json`, digest: canonicalJsonDigest({ id }), sourceDigest: lease.currentSource.verifiedDigest, state: "ready_for_review" }],
     assets: [],
     limitations: ["Fixture-only evidence."],
     materialTrigger: "verified_checkpoint",
@@ -271,16 +279,13 @@ export function buildPulseConformanceVectors(): PulseConformanceVectors {
     "source-conflict": buildSourceConflictEvents(),
   };
   const eventSetPaths = Object.fromEntries(Object.keys(eventSets).map((id) => [id, `events/${id}.jsonl`]));
-  const sendPlan: ConformancePlan = { ...generic.recommendedPlan };
-  const sendDecision = planPulseDispatch({ events: eventSets.generic!, ...sendPlan });
-  if (!sendDecision.snapshot) throw new Error("Send conformance vector must produce a snapshot.");
+  const attestedPlan: ConformancePlan = { ...generic.recommendedPlan };
   const plans: Array<{ id: string; eventSet: string; plan: ConformancePlan }> = [
-    { id: "send-material-checkpoint", eventSet: "generic", plan: sendPlan },
+    { id: "suppress-attested-checkpoint", eventSet: "generic", plan: attestedPlan },
     { id: "defer-uncheckpointed-work", eventSet: "generic-through-verification", plan: { now: "2026-08-24T16:02:10.000Z", staleAfterMs: 300_000, debounceMs: 0, deliveredContentDigests: [] } },
     { id: "defer-fresh-agent-with-candidate", eventSet: "generic-through-checkpoint", plan: { now: "2026-08-24T16:03:10.000Z", staleAfterMs: 300_000, debounceMs: 0, deliveredContentDigests: [] } },
     { id: "coalesce-compatible-checkpoints", eventSet: "processyard", plan: { ...processyard.coalescingPlan! } },
     { id: "stale-no-send", eventSet: "processyard", plan: { ...processyard.recommendedPlan } },
-    { id: "deduplicate-delivered-snapshot", eventSet: "generic", plan: { ...sendPlan, deliveredContentDigests: [sendDecision.snapshot.contentDigest] } },
     { id: "suppress-source-conflict", eventSet: "source-conflict", plan: { now: "2026-08-25T16:03:00.000Z", staleAfterMs: 300_000, debounceMs: 0, deliveredContentDigests: [] } },
   ];
   const dispatch = plans.map((vector) => ({
@@ -291,9 +296,25 @@ export function buildPulseConformanceVectors(): PulseConformanceVectors {
   const factfileBytes = renderConformanceFactfile();
   const factfile = conformanceFactfile();
   const canonicalInput = { "😀": 6, "ä": 4, a: 2, "あ": 5, "Á": 3, Z: 1 };
+  const canonicalCases = [
+    { id: "mixed-case-unicode", input: canonicalInput, inputJson: JSON.stringify(canonicalInput) },
+    { id: "negative-zero", input: { value: 0 }, inputJson: "{\"value\":-0}" },
+    { id: "one-million", input: { value: 1e6 }, inputJson: "{\"value\":1000000}" },
+    { id: "one-millionth", input: { value: 1e-6 }, inputJson: "{\"value\":0.000001}" },
+    { id: "one-ten-millionth", input: { value: 1e-7 }, inputJson: "{\"value\":1e-7}" },
+    { id: "one-sextillion", input: { value: 1e21 }, inputJson: "{\"value\":1e+21}" },
+    { id: "literal-line-separators", input: { value: "line\u2028paragraph\u2029end" }, inputJson: "{\"value\":\"line\u2028paragraph\u2029end\"}" },
+    { id: "redacted-marker", input: { value: "«redacted»" }, inputJson: "{\"value\":\"«redacted»\"}" },
+  ].map((vector) => ({ ...vector, canonical: canonicalJson(vector.input), digest: canonicalJsonDigest(vector.input) }));
+  const strictJson = [
+    { id: "invalid-utf8", bytes: Buffer.from([0x7b, 0x22, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x22, 0x3a, 0x22, 0xc3, 0x28, 0x22, 0x7d]), expectedErrorIncludes: "invalid UTF-8" },
+    { id: "escaped-high-surrogate", bytes: Buffer.from('{"value":"\\ud800"}', "utf8"), expectedErrorIncludes: "surrogate forms" },
+    { id: "escaped-surrogate-pair", bytes: Buffer.from('{"value":"\\ud83d\\ude00"}', "utf8"), expectedErrorIncludes: "surrogate forms" },
+  ].map(({ id, bytes, expectedErrorIncludes }) => ({ id, inputBytesBase64: bytes.toString("base64"), expectedErrorIncludes }));
   const manifest = PulseConformanceManifestSchema.parse({
     schemaVersion: PULSE_CONFORMANCE_VERSION,
-    canonicalJson: [{ id: "mixed-case-unicode", input: canonicalInput, canonical: canonicalJson(canonicalInput), digest: canonicalJsonDigest(canonicalInput) }],
+    canonicalJson: canonicalCases,
+    strictJson,
     bytes: {
       factfile: { path: "factfiles/verified.json", bytesDigest: bytesDigest(Buffer.from(factfileBytes, "utf8")), byteLength: Buffer.byteLength(factfileBytes), factfileDigest: factfile.digest },
       asset: {

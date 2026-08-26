@@ -32,7 +32,9 @@ describe("cross-project proof setup", () => {
     const profile = detectProject(root);
     expect(profile.kind).toBe(kind);
     expect(profile.checks.some((check) => check.command === command)).toBe(true);
-    expect(renderGithubWorkflow(profile, "review-ready-change")).toContain("fetch-depth: 0");
+    const workflow = renderGithubWorkflow(profile, "review-ready-change");
+    expect(workflow).toContain("fetch-depth: 0");
+    expect(workflow).not.toMatch(/uses:\s+[^\s]+@(v\d+|stable)\b/);
   });
 
   it("installs a bounded outcome and safe GitHub workflow in one command", () => {
@@ -53,6 +55,8 @@ describe("cross-project proof setup", () => {
     expect(workflow).toContain("cancel-in-progress: true");
     expect(workflow).toContain("name: Keyoku / outcome proof");
     expect(workflow).toContain("keyoku proof ci review-ready-change");
+    expect(workflow).toContain("npm install --global keyoku@3.0.0-alpha.1");
+    expect(workflow).not.toMatch(/uses:\s+[^\s]+@(v\d+|stable)\b/);
     expect(workflow).not.toContain("pull-requests: write");
   });
 

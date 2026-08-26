@@ -1,8 +1,10 @@
 # Changelog
 
-## 3.0.0-alpha.1 — 2026-08-16
+## 3.0.0-alpha.1 — 2026-08-25
 
-Keyoku's open-source V1 is now a local, Git-native proof session between humans and coding agents.
+Unreleased candidate for Keyoku's narrow, local, Git-native proof and attention
+layer around coding agents. This entry does not claim that the package has been
+published or that npm `latest` has moved from v2.
 
 ### Added
 
@@ -10,17 +12,29 @@ Keyoku's open-source V1 is now a local, Git-native proof session between humans 
 - A token-scoped loopback UI with **Agent work**, **Needs you**, **Review first**, and claim-by-claim **Proof** surfaces.
 - Active contribution reuse per branch and outcome, plus content binding for the exact outcome contract.
 - Annotated screenshot and timestamped video evidence in portable Factfiles.
-- `keyoku proof serve`, four MCP coordination tools, and a Marketplace-compatible composite GitHub Action.
+- `keyoku proof serve`, five bounded MCP proof-session tools, seven bounded Pulse tools, one side-effect-free assurance evaluator, and a Marketplace-compatible composite GitHub Action.
+- Exact-digest Factfile verification plus `keyoku factfile inspect|verify|assess|publish`.
+- Harness-neutral Pulse lifecycle events, verified checkpoints, deterministic dispatch planning, and stakeholder/developer/timeline/email/text/JSON projections.
+- An optional neutral `EvidenceProvider` and WorkEvent bridge; callers retain runtime orchestration and assurance-profile policy.
+- A SHA-256 source capsule for command-backed Factfile criteria, materialized into one fresh disposable Git checkout per criterion with dirty/untracked bytes, paths, modes, symlinks, mutation detection, original-source race rejection, and validated cleanup.
 
 ### Changed
 
 - Factfiles now present claim → observation → meaning → limits → reproduction → relevant code and artifacts; raw assertions remain audit detail.
 - The launch promise is intentionally narrow: Keyoku coordinates proof and human attention without replacing GitHub, coding harnesses, or project-management systems.
+- The v3 package entrypoint now exposes only `proof`, `factfile`, `pulse`, `serve`, `doctor`, `version`, and help. Goals, workflows, connectors, activity recording, memory, execution, and behavior-iteration commands remain compatibility source and are excluded from the v3 archive.
+- Synthetic and adapter-attested checkpoints remain visibly attested and nondispatchable. Local promotion rechecks Factfile project/outcome/source identity, rejects symlinked or signature-mismatched media, and public adapter ingestion cannot self-claim local verification.
+- Repository identity uses fail-closed Git calls and NUL-delimited paths; gates bracket probes, evidence resolution, and persistence with source captures so checkout mutation fails closed.
+- Repository commands are now explicitly read-only proof observations. Writes, additions, deletions, mode changes, and mutate-restore behavior reject proof; this evidence isolation does not claim OS sandboxing of arbitrary repository code.
 
 ## Unreleased
 
+> The entries below record work on the v2 compatibility lineage. They are not
+> v3 public commands or MCP tools unless a later release explicitly promotes
+> them into the checked `docs/PUBLIC-SURFACE.md` inventory.
+
 ### Added
-- **Behavior iteration: `keyoku iterate` plus four MCP tools.** A provider-neutral,
+- **Compatibility behavior iteration: `keyoku iterate` plus four MCP tools.** A provider-neutral,
   bounded prove → repair → re-prove protocol now turns failed repository-owned
   claims into deterministic agent instructions and re-evaluates only at an
   idempotent checkpoint. Each round records the exact Git/worktree identity,

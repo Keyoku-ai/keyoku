@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -10,6 +10,7 @@ import { initProject, runGate, startContribution } from "../src/contribution.js"
 import {
   PulseEventSchema,
   VerifiedCheckpointSchema,
+  appendPulseAdapterEvent,
   appendPulseEvent,
   planPulseDelivery,
   planPulseDispatch,
@@ -20,9 +21,11 @@ import {
   sealPulseEvent,
   sealPulseSource,
   sealVerifiedCheckpoint,
+  trustedLocalCheckpointDigests,
   verifyAndSealLocalCheckpoint,
   writePulseProjection,
   type AgentActivityLease,
+  type PulseContentSnapshot,
   type PulseEvent,
 } from "../src/pulse.js";
 
@@ -79,17 +82,11 @@ describe("Keyoku Pulse", () => {
     expect(() => replayPulseEvents([...fixture.events, heartbeat])).toThrow(/ambiguous ordering/);
   });
 
-  it("sends one material checkpoint and deduplicates by the content-bound snapshot", () => {
+  it("suppresses synthetic attested checkpoints instead of producing a dispatchable snapshot", () => {
     const fixture = buildGenericPulseFixture();
     const first = planPulseDispatch({ events: fixture.events, ...fixture.recommendedPlan });
-    expect(first).toMatchObject({ outcome: "send", reasonCode: "material_checkpoint", failClosed: false });
-    expect(first.snapshot?.checkpointIds).toEqual(["cart-recovery-verified"]);
-    const duplicate = planPulseDispatch({
-      events: fixture.events,
-      ...fixture.recommendedPlan,
-      deliveredContentDigests: [first.snapshot!.contentDigest],
-    });
-    expect(duplicate).toMatchObject({ outcome: "deduplicate", reasonCode: "already_delivered" });
+    expect(first).toMatchObject({ outcome: "suppress", reasonCode: "attested_checkpoint", failClosed: true, checkpointIds: ["cart-recovery-verified"] });
+    expect(first.snapshot).toBeUndefined();
   });
 
   it("defers during the coalescing window", () => {
@@ -100,7 +97,7 @@ describe("Keyoku Pulse", () => {
       staleAfterMs: 300_000,
       debounceMs: 30_000,
     });
-    expect(decision).toMatchObject({ outcome: "defer", reasonCode: "fresh_agents_working", checkpointIds: ["cart-recovery-verified"] });
+    expect(decision).toMatchObject({ outcome: "suppress", reasonCode: "attested_checkpoint", checkpointIds: ["cart-recovery-verified"] });
   });
 
   it("fails closed instead of projecting future-dated activity", () => {
@@ -153,7 +150,8 @@ describe("Keyoku Pulse", () => {
     const checkpoint = verifyAndSealLocalCheckpoint(root, {
       schemaVersion: "keyoku.dev/pulse-checkpoint/v1alpha1",
       id: "local-checkpoint",
-      projectId: "local-project",
+      projectId: "local-proof",
+      outcomeId: "local-proof",
       runId: "local-run",
       leaseIds: ["local-lease"],
       title: "Local proof verified",
@@ -169,24 +167,64 @@ describe("Keyoku Pulse", () => {
     });
     expect(checkpoint.evidenceBinding).toMatchObject({ mode: "local_factfiles", verifiedRoot: root });
     expect(checkpoint.factfiles[0]?.bytesDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(() => verifyAndSealLocalCheckpoint(root, {
+      ...checkpoint,
+      projectId: "other-project",
+      factfiles: [{ path: factfilePath }],
+    })).toThrow(/Factfile project/);
+    writeFileSync(join(root, ".keyoku", "contributions", "real-report.txt"), "outside bytes", "utf8");
+    symlinkSync("real-report.txt", join(root, ".keyoku", "contributions", "linked-report.txt"));
+    expect(() => verifyAndSealLocalCheckpoint(root, {
+      ...checkpoint,
+      factfiles: [{ path: factfilePath }],
+      assets: [{ kind: "report", path: ".keyoku/contributions/linked-report.txt", label: "Linked report", caption: "Must fail closed." }],
+    })).toThrow(/symbolic link/);
+    const selfPromoted = sealPulseEvent({ schemaVersion: "keyoku.dev/pulse-event/v1alpha1", id: "self-promoted", type: "checkpoint_published", at: checkpoint.publishedAt, leaseId: "local-lease", checkpoint });
+    expect(() => appendPulseAdapterEvent(root, selfPromoted)).toThrow(/cannot claim local Factfile verification/);
+    const lease: AgentActivityLease = {
+      schemaVersion: "keyoku.dev/pulse-lease/v1alpha1",
+      id: "local-lease",
+      harness: "generic-jsonl",
+      project: { id: "local-proof", name: "Local proof" },
+      runId: "local-run",
+      agent: { id: "local-agent", name: "Local agent" },
+      canonicalSourceRoot: root,
+      task: { id: "local-proof", title: "Verify local proof", outcome: "Produce a complete source-bound Factfile." },
+      startedAt: "2026-08-24T16:00:00.000Z",
+      heartbeatAt: "2026-08-24T16:00:00.000Z",
+      state: "working",
+      currentSource: source,
+    };
+    const events: PulseEvent[] = [
+      sealPulseEvent({ schemaVersion: "keyoku.dev/pulse-event/v1alpha1", id: "local-started", type: "started", at: lease.startedAt, leaseId: lease.id, lease }),
+      selfPromoted,
+      sealPulseEvent({ schemaVersion: "keyoku.dev/pulse-event/v1alpha1", id: "local-completed", type: "completed", at: "2026-08-24T16:02:00.000Z", leaseId: lease.id, source, checkpointId: checkpoint.id }),
+    ];
+    expect(planPulseDispatch({ events, now: "2026-08-24T16:03:00.000Z", debounceMs: 0 })).toMatchObject({ outcome: "suppress", reasonCode: "untrusted_local_checkpoint" });
+    const trusted = trustedLocalCheckpointDigests(root, events);
+    expect(trusted).toEqual([checkpoint.contentDigest]);
+    expect(planPulseDispatch({ events, trustedCheckpointDigests: trusted, now: "2026-08-24T16:03:00.000Z", debounceMs: 0 })).toMatchObject({ outcome: "send", reasonCode: "material_checkpoint" });
+    writeFileSync(join(root, "README.md"), "# Changed after proof\n", "utf8");
+    expect(trustedLocalCheckpointDigests(root, events)).toEqual([]);
+    writeFileSync(join(root, "README.md"), "# Local proof\n", "utf8");
+    expect(trustedLocalCheckpointDigests(root, events)).toEqual([checkpoint.contentDigest]);
     writeFileSync(join(root, factfilePath), `${JSON.stringify({ ...factfile, project: { ...factfile.project, summary: "tampered" } })}\n`, "utf8");
+    expect(trustedLocalCheckpointDigests(root, events)).toEqual([]);
+    expect(planPulseDispatch({ events, trustedCheckpointDigests: trustedLocalCheckpointDigests(root, events), now: "2026-08-24T16:03:00.000Z", debounceMs: 0 })).toMatchObject({ outcome: "suppress", reasonCode: "untrusted_local_checkpoint" });
     expect(() => verifyAndSealLocalCheckpoint(root, {
       ...checkpoint,
       factfiles: [{ path: factfilePath }],
     })).toThrow(/digest mismatch/);
   });
 
-  it("coalesces Processyard M0–M6 across compatible harnesses", () => {
+  it("replays Processyard M0–M6 but keeps its synthetic checkpoints nondispatchable", () => {
     const fixture = buildProcessyardPulseFixture();
     const state = replayPulseEvents(fixture.events);
     expect(state.checkpoints.map((checkpoint) => checkpoint.title.split(" · ")[0])).toEqual(["M0", "M1", "M2", "M3", "M4", "M5", "M6"]);
     expect(new Set(state.leases.map((lease) => lease.lease.harness))).toEqual(new Set(["codex", "claude-code", "github-actions"]));
     const decision = planPulseDispatch({ events: fixture.events, ...fixture.coalescingPlan! });
-    expect(decision).toMatchObject({ outcome: "coalesce", reasonCode: "compatible_checkpoints", checkpointIds: ["processyard-m5", "processyard-m6"] });
-    expect(decision.snapshot?.checkpoints[0]?.assets[0]).toMatchObject({ kind: "video", posterPath: "evidence/economy-theatre-poster.png" });
-    const timeline = renderPulseProjection(decision.snapshot!, "timeline");
-    expect(timeline).toContain("Evidence asset unresolved");
-    expect(timeline).not.toContain("<img");
+    expect(decision).toMatchObject({ outcome: "suppress", reasonCode: "attested_checkpoint", failClosed: true });
+    expect(decision.snapshot).toBeUndefined();
   });
 
   it("freezes the latest trusted checkpoint and sends no normal update when leases go stale", () => {
@@ -197,7 +235,7 @@ describe("Keyoku Pulse", () => {
     });
     expect(decision).toMatchObject({ outcome: "stale_no_send", reasonCode: "stale_activity_lease", failClosed: true });
     expect(decision.snapshot).toBeUndefined();
-    expect(decision.frozenSnapshot?.checkpointIds).toEqual(["processyard-m6"]);
+    expect(decision.frozenSnapshot).toBeUndefined();
   });
 
   it("fails closed when agent checkpoints have conflicting source roots", () => {
@@ -221,6 +259,7 @@ describe("Keyoku Pulse", () => {
       schemaVersion: "keyoku.dev/pulse-checkpoint/v1alpha1",
       id,
       projectId: "conflict-project",
+      outcomeId: `${leaseId}-task`,
       runId: "conflict-run",
       leaseIds: [leaseId],
       title: id,
@@ -228,9 +267,9 @@ describe("Keyoku Pulse", () => {
       whyItMatters: "It is a material checkpoint.",
       publishedAt: `2026-08-24T16:${minute}:00.000Z`,
       source,
-      verification: { status: "verified", verifiedAt: `2026-08-24T16:${minute}:00.000Z`, methods: [{ kind: "command", label: "check", reproduce: "npm test", result: "passed" }] },
+      verification: { status: "attested", verifiedAt: `2026-08-24T16:${minute}:00.000Z`, methods: [{ kind: "command", label: "check", reproduce: "npm test", result: "passed in a synthetic fixture" }] },
       evidenceBinding: { mode: "fixture", label: "source-conflict adversarial fixture" },
-      factfiles: [{ id: `${id}-factfile`, path: `${id}.json`, digest: pulseDigest(id), sourceDigest: source.verifiedDigest, state: "ready_for_review" }],
+      factfiles: [{ id: `${id}-factfile`, projectId: "conflict-project", outcomeId: `${leaseId}-task`, path: `${id}.json`, digest: pulseDigest(id), sourceDigest: source.verifiedDigest, state: "ready_for_review" }],
       assets: [],
       limitations: ["No deployment claim."],
       materialTrigger: "verified_checkpoint",
@@ -255,7 +294,21 @@ describe("Keyoku Pulse", () => {
   it("renders every audience from one snapshot and only plans permissioned delivery", () => {
     const fixture = buildGenericPulseFixture();
     const dispatch = planPulseDispatch({ events: fixture.events, ...fixture.recommendedPlan });
-    const snapshot = dispatch.snapshot!;
+    expect(dispatch).toMatchObject({ outcome: "suppress", reasonCode: "attested_checkpoint" });
+    const checkpointEvent = fixture.events.find((event) => event.type === "checkpoint_published");
+    if (!checkpointEvent || checkpointEvent.type !== "checkpoint_published") throw new Error("checkpoint fixture missing");
+    const checkpoint = checkpointEvent.checkpoint;
+    const contentDigest = pulseDigest({ projectId: checkpoint.projectId, checkpointDigests: [checkpoint.contentDigest] });
+    const snapshot: PulseContentSnapshot = {
+      schemaVersion: "keyoku.dev/pulse-snapshot/v1alpha1",
+      id: `preview-${contentDigest.slice(0, 20)}`,
+      projectId: checkpoint.projectId,
+      asOf: checkpoint.publishedAt,
+      checkpointIds: [checkpoint.id],
+      checkpoints: [checkpoint],
+      source: checkpoint.source,
+      contentDigest,
+    };
     expect(renderPulseProjection(snapshot, "stakeholder")).toContain("What changed");
     expect(renderPulseProjection(snapshot, "developer")).toContain("Verification");
     expect(renderPulseProjection(snapshot, "timeline")).toContain("What changed");
@@ -264,24 +317,22 @@ describe("Keyoku Pulse", () => {
     expect(renderPulseProjection(snapshot, "json")).toContain(snapshot.contentDigest);
     expect(renderPulseProjection(snapshot, "timeline")).toContain("Open Factfile evidence");
     expect(renderPulseProjection(snapshot, "developer")).toContain(snapshot.source.verifiedDigest);
-    expect(planPulseDelivery({ dispatch, adapter: { kind: "email", recipient: "owner@example.com" } })).toMatchObject({ status: "no_send", reason: expect.stringContaining("Fixture-bound") });
-    const checkpointEvent = fixture.events.find((event) => event.type === "checkpoint_published");
-    if (!checkpointEvent || checkpointEvent.type !== "checkpoint_published") throw new Error("checkpoint fixture missing");
+    expect(planPulseDelivery({ dispatch, adapter: { kind: "email", recipient: "owner@example.com" } })).toMatchObject({ status: "no_send", reason: expect.stringContaining("suppress") });
     const { contentDigest: _fixtureDigest, ...checkpointContent } = checkpointEvent.checkpoint;
     const attestedCheckpoint = sealVerifiedCheckpoint({ ...checkpointContent, evidenceBinding: { mode: "adapter_attested", adapter: "test-adapter", responsibility: "The adapter verified remote Factfile bytes and exact source identity." } });
     const attestedEvents = fixture.events.map((event) => event.id === checkpointEvent.id
       ? sealPulseEvent({ ...event, checkpoint: attestedCheckpoint })
       : event);
     const attestedDispatch = planPulseDispatch({ events: attestedEvents, ...fixture.recommendedPlan });
-    expect(planPulseDelivery({ dispatch: attestedDispatch, adapter: { kind: "email", recipient: "owner@example.com" } }).status).toBe("not_authorized");
+    expect(attestedDispatch).toMatchObject({ outcome: "suppress", reasonCode: "attested_checkpoint" });
+    expect(planPulseDelivery({ dispatch: attestedDispatch, adapter: { kind: "email", recipient: "owner@example.com" } }).status).toBe("no_send");
     const planned = planPulseDelivery({
       dispatch: attestedDispatch,
       adapter: { kind: "email", recipient: "owner@example.com" },
       authority: { channel: "email", subject: "founder checkpoint", grantedBy: "owner@example.com", grantedAt: "2026-08-24T16:04:00.000Z", projectIds: [snapshot.projectId] },
       now: "2026-08-24T16:05:00.000Z",
     });
-    expect(planned).toMatchObject({ status: "ready", snapshotDigest: attestedDispatch.snapshot?.contentDigest });
-    expect(planned.reason).toContain("caller must perform");
+    expect(planned).toMatchObject({ status: "no_send", reason: expect.stringContaining("suppress") });
     const root = mkdtempSync(join(tmpdir(), "keyoku-pulse-render-"));
     const path = writePulseProjection(join(root, "timeline.html"), snapshot, "timeline");
     expect(readFileSync(path, "utf8")).toContain(snapshot.contentDigest);

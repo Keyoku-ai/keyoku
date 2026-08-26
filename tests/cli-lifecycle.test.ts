@@ -8,7 +8,8 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import { Store } from "../src/store.js";
 
-const ENTRY = join(__dirname, "..", "dist", "index.js");
+// Compatibility behavior remains regression-tested, but is not the v3 package entrypoint.
+const ENTRY = join(__dirname, "..", "dist", "legacy-cli.js");
 const home = mkdtempSync(join(tmpdir(), "keyoku-cli-life-"));
 
 afterAll(() => rmSync(home, { recursive: true, force: true }));

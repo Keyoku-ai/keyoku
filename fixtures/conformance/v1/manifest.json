@@ -11,16 +11,97 @@
         "Á": 3,
         "Z": 1
       },
+      "inputJson": "{\"😀\":6,\"ä\":4,\"a\":2,\"あ\":5,\"Á\":3,\"Z\":1}",
       "canonical": "{\"Z\":1,\"a\":2,\"Á\":3,\"ä\":4,\"あ\":5,\"😀\":6}",
       "digest": "0f1fe24d4557ef543b80ef7d10e460dbcecdc0e4dac7955287950337bc4f0853"
+    },
+    {
+      "id": "negative-zero",
+      "input": {
+        "value": 0
+      },
+      "inputJson": "{\"value\":-0}",
+      "canonical": "{\"value\":0}",
+      "digest": "23d7b286bd429460b92a2a1c21b6afc34110446c5034c17363fda363aa0a7c5d"
+    },
+    {
+      "id": "one-million",
+      "input": {
+        "value": 1000000
+      },
+      "inputJson": "{\"value\":1000000}",
+      "canonical": "{\"value\":1000000}",
+      "digest": "7becf1021641e948d71d940cdc4851f26e6231592414a72a8e9f3a36d9a4aadb"
+    },
+    {
+      "id": "one-millionth",
+      "input": {
+        "value": 0.000001
+      },
+      "inputJson": "{\"value\":0.000001}",
+      "canonical": "{\"value\":0.000001}",
+      "digest": "bc1c982dd4e677d72ff5821cc67554e045e838a31ddc55fa0fdb1a32d5a1dce9"
+    },
+    {
+      "id": "one-ten-millionth",
+      "input": {
+        "value": 1e-7
+      },
+      "inputJson": "{\"value\":1e-7}",
+      "canonical": "{\"value\":1e-7}",
+      "digest": "910750038eb30a40d06da88009b6259aabaf3751b3cb212c616d51abb6b008a4"
+    },
+    {
+      "id": "one-sextillion",
+      "input": {
+        "value": 1e+21
+      },
+      "inputJson": "{\"value\":1e+21}",
+      "canonical": "{\"value\":1e+21}",
+      "digest": "776bf0d292f3767fdfca3fdc9683d0ba51886b8e6e79cd228a41bafcfa9a1a6f"
+    },
+    {
+      "id": "literal-line-separators",
+      "input": {
+        "value": "line paragraph end"
+      },
+      "inputJson": "{\"value\":\"line paragraph end\"}",
+      "canonical": "{\"value\":\"line paragraph end\"}",
+      "digest": "92f0f4bb82a26bac6b6ff0a8c15283961f927c0664d32c22c795395b59b59c03"
+    },
+    {
+      "id": "redacted-marker",
+      "input": {
+        "value": "«redacted»"
+      },
+      "inputJson": "{\"value\":\"«redacted»\"}",
+      "canonical": "{\"value\":\"«redacted»\"}",
+      "digest": "39fa045469afc9faac3f99e320df59328cc73253352fcfbd9107c8aa1fcb2c98"
+    }
+  ],
+  "strictJson": [
+    {
+      "id": "invalid-utf8",
+      "inputBytesBase64": "eyJ2YWx1ZSI6IsMoIn0=",
+      "expectedErrorIncludes": "invalid UTF-8"
+    },
+    {
+      "id": "escaped-high-surrogate",
+      "inputBytesBase64": "eyJ2YWx1ZSI6Ilx1ZDgwMCJ9",
+      "expectedErrorIncludes": "surrogate forms"
+    },
+    {
+      "id": "escaped-surrogate-pair",
+      "inputBytesBase64": "eyJ2YWx1ZSI6Ilx1ZDgzZFx1ZGUwMCJ9",
+      "expectedErrorIncludes": "surrogate forms"
     }
   ],
   "bytes": {
     "factfile": {
       "path": "factfiles/verified.json",
-      "bytesDigest": "81bc49d9246fa69a07e43be7599e95dc1cea6e6a91542496ca6e32f498253d94",
-      "byteLength": 3142,
-      "factfileDigest": "a6056e7e78f91d0a53459c62e1c66a4557bd459f423648ce63d8ce8625675404"
+      "bytesDigest": "4511a0900d2b7e249645384451879601be1942e23941da42fe2a5644ed1e8520",
+      "byteLength": 3237,
+      "factfileDigest": "4558e8787677ff34462d14815c823c94c5542e626688a071fa0715a56fe4b417"
     },
     "asset": {
       "kind": "video",
@@ -86,7 +167,7 @@
   },
   "dispatch": [
     {
-      "id": "send-material-checkpoint",
+      "id": "suppress-attested-checkpoint",
       "eventSet": "generic",
       "plan": {
         "now": "2026-08-24T16:05:00.000Z",
@@ -95,13 +176,12 @@
         "deliveredContentDigests": []
       },
       "expected": {
-        "outcome": "send",
-        "reasonCode": "material_checkpoint",
-        "failClosed": false,
+        "outcome": "suppress",
+        "reasonCode": "attested_checkpoint",
+        "failClosed": true,
         "checkpointIds": [
           "cart-recovery-verified"
-        ],
-        "snapshotContentDigest": "7150fa41eae8bc325f199f33b44231075e4091c97812cec7b31c17064ab4bd2c"
+        ]
       }
     },
     {
@@ -130,9 +210,9 @@
         "deliveredContentDigests": []
       },
       "expected": {
-        "outcome": "defer",
-        "reasonCode": "fresh_agents_working",
-        "failClosed": false,
+        "outcome": "suppress",
+        "reasonCode": "attested_checkpoint",
+        "failClosed": true,
         "checkpointIds": [
           "cart-recovery-verified"
         ]
@@ -146,22 +226,21 @@
         "staleAfterMs": 3600000,
         "debounceMs": 0,
         "deliveredContentDigests": [
-          "615c821368b4f39a3787a086c832e9349f6cd49f3d65f09c34de358280a2650a",
-          "53ecb847286238775027bf016788b94d727aca3afda77d266a1c8b33c7a144e9",
-          "7d675cd721595bd6151a1c6f6dbd3d353aa750822208d3b1b34eaace58166326",
-          "0e03b7739bef9d391f76bbedcdcc8eb5879164ae51edb3a8334a1d5f00a72e9a",
-          "50e90f35cbd7c46eb54d504a86b123a206851b680de82130eacdf6e4f51e49a9"
+          "0109d493f8993301b26be76be16360cdc7c8e0dad17a9f0d217ce30528b1d8fa",
+          "4c0f9e4e2b11d590dffb1a77453f16da0e7f899169f6bddc962772dd65bf25f1",
+          "2b1a303bdee856b4cc22792b95542e3c422a0ed4e76f6a18cec76bcf7546d80f",
+          "9e04a6fc2293ae7c714f7aab88933ce3eadd75e04466f5e39257a21c67465478",
+          "d7a37f11701a8ff47bb028b6ce6e43e2fea916e75b256c981b15ff228ce05ba4"
         ]
       },
       "expected": {
-        "outcome": "coalesce",
-        "reasonCode": "compatible_checkpoints",
-        "failClosed": false,
+        "outcome": "suppress",
+        "reasonCode": "attested_checkpoint",
+        "failClosed": true,
         "checkpointIds": [
           "processyard-m5",
           "processyard-m6"
-        ],
-        "snapshotContentDigest": "f17fd9bf523f01e582ccec00df05857117d252b5aded3f5ad6d6b2529f44d01f"
+        ]
       }
     },
     {
@@ -172,41 +251,18 @@
         "staleAfterMs": 300000,
         "debounceMs": 0,
         "deliveredContentDigests": [
-          "615c821368b4f39a3787a086c832e9349f6cd49f3d65f09c34de358280a2650a",
-          "53ecb847286238775027bf016788b94d727aca3afda77d266a1c8b33c7a144e9",
-          "7d675cd721595bd6151a1c6f6dbd3d353aa750822208d3b1b34eaace58166326",
-          "0e03b7739bef9d391f76bbedcdcc8eb5879164ae51edb3a8334a1d5f00a72e9a",
-          "50e90f35cbd7c46eb54d504a86b123a206851b680de82130eacdf6e4f51e49a9"
+          "0109d493f8993301b26be76be16360cdc7c8e0dad17a9f0d217ce30528b1d8fa",
+          "4c0f9e4e2b11d590dffb1a77453f16da0e7f899169f6bddc962772dd65bf25f1",
+          "2b1a303bdee856b4cc22792b95542e3c422a0ed4e76f6a18cec76bcf7546d80f",
+          "9e04a6fc2293ae7c714f7aab88933ce3eadd75e04466f5e39257a21c67465478",
+          "d7a37f11701a8ff47bb028b6ce6e43e2fea916e75b256c981b15ff228ce05ba4"
         ]
       },
       "expected": {
         "outcome": "stale_no_send",
         "reasonCode": "stale_activity_lease",
         "failClosed": true,
-        "checkpointIds": [
-          "processyard-m6"
-        ],
-        "frozenSnapshotContentDigest": "bf5358cca23ef1aa4135b451b73c61311e5c0716b849394ef522342afe102917"
-      }
-    },
-    {
-      "id": "deduplicate-delivered-snapshot",
-      "eventSet": "generic",
-      "plan": {
-        "now": "2026-08-24T16:05:00.000Z",
-        "staleAfterMs": 300000,
-        "debounceMs": 0,
-        "deliveredContentDigests": [
-          "7150fa41eae8bc325f199f33b44231075e4091c97812cec7b31c17064ab4bd2c"
-        ]
-      },
-      "expected": {
-        "outcome": "deduplicate",
-        "reasonCode": "already_delivered",
-        "failClosed": false,
-        "checkpointIds": [
-          "cart-recovery-verified"
-        ]
+        "checkpointIds": []
       }
     },
     {

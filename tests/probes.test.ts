@@ -1,4 +1,7 @@
 import { createServer, type Server } from "node:http";
+import { existsSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -71,6 +74,17 @@ describe("command probes", () => {
     );
     expect(envelope.error).toContain("timed out");
     expect(Date.now() - started).toBeLessThan(3_000);
+  });
+
+  it("kills the command process group so timed-out grandchildren cannot outlive cleanup", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keyoku-probe-timeout-"));
+    const marker = join(root, "grandchild-survived.txt");
+    const childScript = `setTimeout(()=>require('fs').writeFileSync(${JSON.stringify(marker)},'alive'),800)`;
+    const parentScript = `require('child_process').spawn(process.execPath,['-e',${JSON.stringify(childScript)}],{stdio:'inherit'});setTimeout(()=>{},5000)`;
+    const envelope = await runProbe({ kind: "command", run: `node -e ${JSON.stringify(parentScript)}`, timeoutMs: 100 }, noConnectors);
+    expect(envelope.error).toContain("timed out");
+    await new Promise<void>((resolve) => setTimeout(resolve, 1_000));
+    expect(existsSync(marker)).toBe(false);
   });
 
   it("respects cwd and number parsing", async () => {

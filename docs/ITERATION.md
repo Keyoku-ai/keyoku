@@ -1,4 +1,9 @@
-# Keyoku behavior iteration
+# Keyoku behavior-iteration compatibility contract
+
+> This controller remains implemented and regression-tested as compatibility
+> source, but its CLI and MCP verbs are not part of the bounded v3 public
+> surface. v3 expresses incremental work through repeated `keyoku proof run`
+> checkpoints plus Pulse. See [PUBLIC-SURFACE.md](PUBLIC-SURFACE.md).
 
 Status: `v1alpha1`
 

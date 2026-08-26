@@ -1,89 +1,87 @@
-# Production readiness
+# Production-readiness gate
 
-Honest status of keyoku as a product other people depend on. The convergence
-engine is production-grade; this tracks the **operational shell** around it.
-Grouped by who can close each item: ✅ done · 🟡 needs maintainer (one-time,
-out of code) · 🔵 next in code.
+Status: **unreleased v3 candidate — not approved for publication**
+Updated: 2026-08-25
 
-## Tier 1 — table stakes
+This document describes the narrow v3 assurance product. It supersedes the old
+v2 claim that Keyoku's memory/convergence engine was production-grade. The
+public npm `latest` and public website remain on v2 until the owner approves one
+exact, immutable replacement candidate.
 
-### ✅ Release integrity (done — 2.8.0)
-- `npm run preflight` + a CI step in `release.yml` verify, before any tag ships:
-  valid semver, CHANGELOG entry present, `VERSION` single-sourced from
-  package.json (the 2.7.1 "0.1.0" drift can't recur), the **built artifact
-  reports the right version**, and `dist` is in the tarball.
-- The release workflow already runs typecheck → test → eval → preflight.
+## Product boundary
 
-### 🟡 npm Trusted Publishing (maintainer, ~2 min, one-time)
-CI **cannot publish** today — there is no `NPM_TOKEN` and no Trusted Publishing
-configured, so every release so far went out via the maintainer CLI
-(`npm publish`), with **no provenance**. The workflow is already OIDC-ready
-(`id-token: write`, npm upgraded). Close it once:
+Keyoku is an independent proof, attention, and stakeholder-presentation layer
+around autonomous work. It does not run agents, schedule work, own a control
+plane, or mutate an orchestrator's state. A neutral system may select no
+assurance, basic receipt checks, or Keyoku high assurance through the optional
+EvidenceProvider and WorkEvent interfaces.
 
-> npmjs.com → package **`keyoku`** → Settings → **Trusted Publishing** → add
-> repository **`Keyoku-ai/keyoku`**, workflow **`release.yml`**.
+The MIT package provides local Factfiles, Pulse planning/rendering, the CLI,
+MCP tools, schemas, fixtures, and adapters. The separately licensed Engine is
+optional durable multi-project storage/API infrastructure. The local path must
+remain fully useful without Engine.
 
-After that, pushing a `vX.Y.Z` tag publishes automatically, tokenless, with
-provenance. (Full detail in `docs/PUBLISHING.md`.)
+## Declared candidate matrix
 
-### 🟡 Repo consolidation (maintainer)
-Two working trees clone the same repo: `~/Development/Keyoku/keyoku-harness`
-(the one the **live MCP server runs** — `dist/index.js`) and
-`~/Development/Keyoku Harness/keyoku-harness` (used for site deploys). Editing
-the wrong one ships nothing. Pick one canonical checkout; it's a foot-gun for
-any contributor. See `docs/REPO-MAP.md`.
+| Surface | Candidate target | Current evidence | Release position |
+|---|---|---|---|
+| Local CLI/library/MCP | Node.js 20 and 22 on Linux and macOS, Git repositories using regular files, internal relative symlinks, and tracked/nonignored untracked source | Full local tests and clean-package runs have passed during integration; Ubuntu CI is configured but has not run on an immutable v3 commit | Candidate only |
+| Source capsule probes | Reviewed repository commands, executed sequentially in fresh disposable checkouts | Dirty bytes, odd paths, executable modes, internal symlinks, mutation, mutate-restore, isolation, source races, unsupported entries, and timeout cleanup have regression coverage | Candidate only; not an OS sandbox |
+| Pulse local ledger | One repository-local installation with cooperative same-user writers | Canonical event validation, replay/idempotency, conflict rejection, linked-path rejection, exclusive write lock, bounded descriptor-anchored append, and fsync | Candidate only; not a distributed queue or malicious same-user containment boundary |
+| Engine | Supported Go toolchain and SQLite on Linux/macOS | Unit, race, vet, lint, semantic Factfile checks, corpus conformance, and backup/restore rehearsal passed during integration | Candidate only; hosted operations not proven |
+| Website | Current evergreen Chrome/WebKit-class browsers, keyboard, reduced motion, mobile reflow | Local lint/build/browser checks and original-resolution review passed during integration | Private replacement deployment still pending |
+| Windows | Not declared for v3 alpha | No exact-candidate Windows execution evidence | Unsupported until proven; fail reports are requested |
 
-### ✅ Store growth bounds (done, pre-existing)
-`activity.jsonl` self-caps (trims at ~2.5 MB → last 8k events, `store.ts`);
-observations cap per goal (500 → 400); `audit.jsonl` caps at ~1 MB (v2.12.1);
-`executions.json` caps at 200 terminal runs while keeping all in-flight ones
-(2.17.x). A large file on disk just means the *old* global install (pre-cap)
-was writing it — the current build trims it. Remaining minor gap (🔵):
-`knowledge.jsonl` is still unbounded (small today); add the same size-cap if it grows.
+## Required release gates
 
-### 🔵 Store concurrency
-The JSON store is synchronous, atomic (tmp+rename), cacheless, last-writer-wins
-per entry — fine for one machine / a few sessions. Team or heavy multi-session
-use wants real atomic ops or a SQLite backend (the `Store` interface is already
-the seam for that swap). Documented in `store.ts`.
+The release candidate is publishable only when all of the following evidence is
+bound to committed revisions and exact archives:
 
-## Tier 2 — the product promise (learning that compounds)
+- Public CLI, API, Factfile, Pulse, decision, replay, export, and adapter flows
+  pass from clean install, including failure, stale proof, recovery, and upgrade
+  boundaries.
+- Generated JSON, JSONL, Markdown, HTML, manifests, receipts, and reports parse
+  and execute in their native consumers; tampering and semantic mismatches fail
+  closed.
+- Harness and Engine consume the same conformance corpus byte for byte and
+  produce the same canonical outcomes.
+- Dependency, secret, path, permission, concurrency, race, canonicalization,
+  and supply-chain checks pass for the exact candidate.
+- Human UX, terminal UX, keyboard operation, screen-reader semantics, contrast,
+  reduced motion, 200% zoom, narrow mobile layout, long evidence, and recovery
+  messages receive direct review.
+- Engine backup/restore, migrations, rollback, health checks, resource budgets,
+  and deployment runbooks are rehearsed against the final revision if Engine is
+  included in the release.
+- Exact archives install on clean Node 20 and 22 environments; checksums, SBOMs,
+  version mapping, release notes, migration guidance, and rollback instructions
+  agree across all repositories.
+- A fresh agent and a human independently exercise the exact final archives and
+  interactive product journey. Any source change invalidates that evidence.
 
-### ✅ Self-pruning (done — 2.8.0)
-Suggestions now rank by `similarity × precision`, where precision is learned
-from whether a workflow's steps actually recur in later converged goals. A
-workflow that only ever word-matches sinks. This is the first real
-**outcome-grounded** signal in retrieval. (`recordSuggestionOutcomes` +
-`suggestWorkflows` in `engine.ts`.)
+## Open publication blockers
 
-### 🔵 Semantic retrieval
-Recall is still jaccard (token overlap) — the lite-model re-rank layers on top
-but needs a key. Embeddings via the BSL engine/brain would finish the
-"no-heuristics" path for the offline/no-key case.
+- Harness, Engine, and site integration trees are not yet immutable commits;
+  earlier passing commands are development evidence, not final release receipts.
+- Private owner-only deployment of the corrected interactive site is pending.
+- No verified private vulnerability intake exists. Enable GitHub private
+  vulnerability reporting or approve and verify a monitored security contact.
+- Engine licensing/licensor and repository-ownership posture require an explicit
+  owner decision before the public v3 sequence.
+- Final exact-revision archive, SBOM, release notes, migration, rollback, and
+  independent acceptance packets have not yet been issued.
+- npm Trusted Publishing and the release candidate itself have not been approved.
 
-### 🔵 Validation depth
-Lift is proven directionally (behavioral planning 1/3→3/3, one execution run,
-both n=1). A production claim wants multi-trial runs, a weaker-model row, and a
-behavioral metric tracked over time — today only the deterministic retrieval
-eval gates CI (`npm run eval`); the value evals are manual.
+## Rollback boundary
 
-## Tier 3 — trust & adoption
+Do not move npm `latest`, replace the public website, merge protected branches,
+or delete the v2 line while v3 is under review. A prerelease, if approved, must
+use the `next` dist-tag. The public v2 repository/tag/package/site combination is
+the rollback boundary until v3 is separately proven and accepted.
 
-### 🔵 Data trust (it reads your activity)
-Secret redaction exists at record time (`activity.ts`). Still wanted: a
-retention policy, scoping/opt-out controls, and a `keyoku inspect` that shows
-exactly what's in `~/.keyoku`. For a tool that ingests computer activity (and
-the basis for Lar's onboarding), this is make-or-break before broad promotion.
+## Release verdict
 
-### 🔵 Docs / site currency
-2.2→2.8 shipped a lot (goal_focus, pitfalls, re-rank, self-pruning). Per the
-ship-propagation rule, the site/README/quickstart should teach the new
-flagship (`goal_focus`) and land a <5-min "wow".
-
----
-
-**One-liner:** the engine is production-grade; Tier 1 is now mostly closed
-(release integrity ✅, growth bounds ✅) with two small **maintainer** toggles
-left (Trusted Publishing, repo consolidation). Tier 2's differentiator
-(self-pruning) has its first version shipped. Tiers 2–3 remaining are roadmap,
-not blockers.
+**NO-GO for public release today.** The coherent local product slice is real,
+but publication requires exact committed revisions, rerun gates from final
+archives, corrected private deployment, independent acceptance, and the owner
+decisions listed above.

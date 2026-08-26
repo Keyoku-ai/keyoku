@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "evidence-provider/v1",
+  "work": {
+    "id": "sample-change",
+    "objective": "Confirm the bounded change behaves as declared."
+  },
+  "claims": [
+    {
+      "id": "behavior",
+      "statement": "The declared behavior passes its native check.",
+      "verdict": "pass",
+      "evidenceRefs": [
+        "native-check",
+        "result-log"
+      ]
+    }
+  ],
+  "source": {
+    "capturedDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "currentDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "label": "source snapshot"
+  },
+  "commands": [
+    {
+      "id": "native-check",
+      "command": "project-test-command",
+      "exitCode": 0,
+      "resultDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "result-log",
+      "path": "evidence/result.txt",
+      "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    }
+  ],
+  "limitations": [
+    "This generic fixture contains synthetic digests and establishes no deployment claim."
+  ],
+  "authority": {
+    "kind": "human",
+    "id": "review-owner",
+    "decision": "approved"
+  },
+  "contentDigest": "f9b802d170c98e99b11e7e46fcfd60114ae80c5a31795f133fdf69708dacf22e"
+}

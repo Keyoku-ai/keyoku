@@ -4,6 +4,13 @@ import { stringify } from "yaml";
 
 import { initProject, loadOutcome, loadProject, type Actor, type Outcome } from "./contribution.js";
 
+const PACKAGE_VERSION = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
+const CHECKOUT_ACTION = "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"; // v6.0.2
+const SETUP_NODE_ACTION = "actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f"; // v6.3.0
+const SETUP_PYTHON_ACTION = "actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c"; // v6.0.0
+const SETUP_GO_ACTION = "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e"; // v7.0.0
+const UPLOAD_ARTIFACT_ACTION = "actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f"; // v7.0.0
+
 export type ProjectKind = "node" | "python" | "rust" | "go" | "generic";
 
 export interface ProjectProfile {
@@ -90,10 +97,10 @@ export function detectProject(rootInput = process.cwd()): ProjectProfile {
 }
 
 function githubSetup(profile: ProjectProfile): string {
-  if (profile.kind === "node") return `      - uses: actions/setup-node@v4\n        with:\n          node-version: 20\n      - name: Install project dependencies\n        run: ${profile.installSteps[0]}`;
-  if (profile.kind === "python") return `      - uses: actions/setup-python@v5\n        with:\n          python-version: \"3.12\"\n      - name: Install project dependencies\n        run: ${profile.installSteps[0]}`;
-  if (profile.kind === "rust") return "      - uses: dtolnay/rust-toolchain@stable\n        with:\n          components: rustfmt";
-  if (profile.kind === "go") return "      - uses: actions/setup-go@v5\n        with:\n          go-version: stable\n          cache: true";
+  if (profile.kind === "node") return `      - uses: ${SETUP_NODE_ACTION} # v6.3.0\n        with:\n          node-version: 20\n      - name: Install project dependencies\n        run: ${profile.installSteps[0]}`;
+  if (profile.kind === "python") return `      - uses: ${SETUP_PYTHON_ACTION} # v6.0.0\n        with:\n          python-version: \"3.12\"\n      - name: Install project dependencies\n        run: ${profile.installSteps[0]}`;
+  if (profile.kind === "rust") return "      - name: Select the stable Rust toolchain\n        run: rustup toolchain install stable --profile minimal --component rustfmt && rustup default stable";
+  if (profile.kind === "go") return `      - uses: ${SETUP_GO_ACTION} # v7.0.0\n        with:\n          go-version: stable\n          cache: true`;
   return "      # Add project setup steps here when your proof command needs them.";
 }
 
@@ -103,7 +110,9 @@ function renderGithubWorkflowTemplate(profile: ProjectProfile, outcomeId: string
 
 export function renderGithubWorkflow(profile: ProjectProfile, outcomeId: string): string {
   return renderGithubWorkflowTemplate(profile, outcomeId)
-    .replace("- name: Install Keyoku\n        run: npm install --global keyoku@latest", "- name: Install the Keyoku v3 source alpha\n        run: npm install --global github:Keyoku-ai/keyoku#proof-alpha.1");
+    .replace("actions/checkout@v4", `${CHECKOUT_ACTION} # v6.0.2`)
+    .replace("actions/upload-artifact@v4", `${UPLOAD_ARTIFACT_ACTION} # v7.0.0`)
+    .replace("- name: Install Keyoku\n        run: npm install --global keyoku@latest", `- name: Install the exact Keyoku candidate\n        run: npm install --global keyoku@${PACKAGE_VERSION}`);
 }
 
 export function initProof(input: ProofInitInput = {}): ProofInitResult {

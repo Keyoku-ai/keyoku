@@ -19,14 +19,25 @@ mkdir -p /tmp/pulse-project
 keyoku pulse ingest --root /tmp/pulse-project --file /tmp/pulse.jsonl
 keyoku pulse status --root /tmp/pulse-project --json
 keyoku pulse plan --root /tmp/pulse-project --now 2026-08-24T16:05:00.000Z --debounce-ms 0 --json
-keyoku pulse render --root /tmp/pulse-project --now 2026-08-24T16:05:00.000Z --debounce-ms 0 --audience timeline --out /tmp/pulse.html
 ```
+
+The generic fixture is synthetic and therefore produces
+`suppress/attested_checkpoint`, not a dispatchable snapshot. Audience rendering
+requires a locally verified checkpoint created by `pulse checkpoint publish`.
 
 The append-only ledger is `.keyoku/pulse/events.jsonl`. Replaying the same event id and digest is idempotent. Reusing an id with different content fails. Replay canonicalizes a valid event set by timestamp, lifecycle dependency rank, and event id, so arrival-order permutations produce the same state. Same-lease events that still have an ambiguous timestamp/rank fail closed rather than inheriting JSONL order.
 
+Local writes reject symlinked ledger paths, serialize writers with an exclusive
+fail-closed lock, append through identity-checked descriptors, and fsync the ledger
+and parent directory. If a process crashes while holding the lock, Keyoku reports
+the exact `.lock` path; remove it only after confirming that no writer is alive,
+then retry. This is cooperative same-user process safety, not containment against
+a malicious process running as that OS user.
+
 ## Adapter contract
 
-Codex, Claude Code, GitHub Actions/CI, a webhook, or a generic process may write the same `keyoku.dev/pulse-event/v1alpha1` JSONL. ChatGPT or any other thread internals are never the canonical protocol.
+Any caller may write the same `keyoku.dev/pulse-event/v1alpha1` JSONL. Keyoku is
+an optional assurance adapter, not the caller's runtime protocol or control plane.
 
 Lifecycle types are:
 
@@ -51,7 +62,16 @@ For local Factfiles, do not hand-author a `checkpoint_published` event. Use:
 keyoku pulse checkpoint publish --root /path/to/project --file checkpoint-draft.json --json
 ```
 
-The command reads every Factfile, recomputes its canonical digest and bytes digest, and checks its Git head and worktree digest against the checkpoint source before appending the event. `adapter_attested` checkpoints must explicitly name the adapter and its responsibility. `fixture` bindings are demonstrations, never live evidence.
+The command reads every Factfile, recomputes its canonical digest and bytes digest,
+checks project/outcome identity plus Git head and worktree digest, and rejects
+symlinked or signature-mismatched media before appending the event.
+Before planning or rendering, the CLI and MCP adapter re-read those current
+bytes and omit any stale or self-asserted local checkpoint from the planner's
+trust set. Such a checkpoint returns `suppress/untrusted_local_checkpoint`.
+`adapter_attested` checkpoints must explicitly name the adapter and its
+responsibility. Adapter and fixture bindings remain visibly `attested`, never
+`verified`, and the local dispatcher always returns
+`suppress/attested_checkpoint` for them.
 
 Visual assets follow the same rule. An asset without a resolved digest renders as **Evidence asset unresolved**, not as a working image or video. A live adapter must resolve and digest the real file before delivery.
 
@@ -66,7 +86,7 @@ The planner returns exactly one outcome:
 | `deduplicate` | The content-bound snapshot was already delivered |
 | `suppress` | No material checkpoint exists, or source/project/future-state conflict fails closed |
 | `coalesce` | Multiple compatible checkpoints share project and source ancestry |
-| `stale_no_send` | An active lease is stale; freeze the last trusted checkpoint and send no normal update |
+| `stale_no_send` | An active lease is stale; freeze the last locally reverified checkpoint and send no normal update |
 
 Partial uncheckpointed work never becomes a report. Future-dated events fail closed. Conflicting canonical roots or unconnected source ancestry fail closed. Cron may wake the planner to catch up an undelivered checkpoint, but time alone is not a material event.
 
@@ -91,11 +111,14 @@ Friendly model-written copy may be added only after the deterministic planner ha
 
 ## Processyard fixture
 
-`keyoku pulse fixture processyard` provides a truthful M0–M6 integration fixture across Codex, Claude Code, and GitHub Actions identities. It includes:
+`keyoku pulse fixture processyard` provides a synthetic M0–M6 integration story. It includes:
 
 - a long-running development lease blocked on an owner decision;
-- prior checkpoint digests so M5 and M6 can coalesce while fresh;
+- synthetic checkpoint digests that remain nondispatchable;
 - a later `stale_no_send` planning instant;
 - unresolved Economy Theatre poster/video paths, labeled as fixture bindings because the media bytes are not present in this repository.
 
-The fixture establishes the portable contract and deterministic story. It does not establish a production Processyard integration, a deployed service, a Gmail authority grant, or a sent founder email.
+The fixture exercises parsing, replay, stale handling, and attestation rejection.
+It does not establish a production Processyard integration, a deployed service,
+coalescing of locally verified Factfiles, a Gmail authority grant, or a sent
+founder email.

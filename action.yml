@@ -3,7 +3,7 @@ description: Turn a repository-owned outcome into exact-revision evidence and a 
 author: Keyoku
 branding:
   icon: check-circle
-  color: purple
+  color: gray-dark
 inputs:
   outcome:
     description: Outcome id under .keyoku/outcomes.
@@ -13,9 +13,9 @@ inputs:
     required: false
     default: HEAD^
   keyoku-version:
-    description: Published Keyoku npm version or tag.
+    description: Exact published Keyoku npm version used by this action revision.
     required: false
-    default: latest
+    default: "3.0.0-alpha.1"
   retention-days:
     description: Number of days GitHub retains the full Factfile artifact.
     required: false
@@ -33,7 +33,7 @@ outputs:
 runs:
   using: composite
   steps:
-    - uses: actions/setup-node@v4
+    - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
       with:
         node-version: 20
     - name: Generate exact-revision proof
@@ -46,7 +46,7 @@ runs:
       run: npx --yes "keyoku@${KEYOKU_VERSION}" proof ci "${KEYOKU_OUTCOME}" --base "${KEYOKU_BASE}"
     - name: Attach the full Factfile
       if: always() && steps.proof.outputs.contribution_id != ''
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
       with:
         name: keyoku-factfile-${{ github.sha }}
         path: .keyoku/contributions/${{ steps.proof.outputs.contribution_id }}/factfile.*

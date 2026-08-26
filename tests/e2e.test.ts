@@ -6,7 +6,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-const ENTRY = join(__dirname, "..", "dist", "index.js");
+const ENTRY = join(__dirname, "..", "dist", "legacy-cli.js");
 
 let home: string;
 let client: Client;

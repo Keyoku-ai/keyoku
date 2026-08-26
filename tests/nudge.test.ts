@@ -18,7 +18,7 @@ import {
 } from "../src/nudge.js";
 import type { ActivityEvent } from "../src/types.js";
 
-const ENTRY = join(__dirname, "..", "dist", "index.js");
+const ENTRY = join(__dirname, "..", "dist", "legacy-cli.js");
 
 let n = 0;
 function ev(cmd: string): ActivityEvent {

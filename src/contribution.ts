@@ -1,29 +1,50 @@
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
+  closeSync,
+  constants,
   existsSync,
+  fsyncSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readdirSync,
-  statSync,
+  renameSync,
+  unlinkSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { parse, stringify } from "yaml";
 import { z } from "zod";
 
-import { redactSecrets } from "./activity.js";
 import { ArchitectureProjectionSchema, renderArchitectureSvg, scanArchitecture, type ArchitectureProjection } from "./architecture.js";
-import { canonicalJson, canonicalJsonDigest, parseJsonRejectDuplicateKeys } from "./canonical-json.js";
-import { ConnectorManager } from "./connectors.js";
-import { Harness } from "./engine.js";
-import { Store } from "./store.js";
+import { mediaSignatureMatches, mediaTypeForPath, readBoundedArtifact } from "./artifact-safety.js";
+import { evaluateAssertion } from "./assert.js";
+import { canonicalJson, canonicalJsonDigest, parseJsonBytesRejectDuplicateKeys, parseJsonRejectDuplicateKeys } from "./canonical-json.js";
+import { runProbe } from "./probes.js";
 import { ProofSessionStateSchema, readProofSession, type ProofSessionState } from "./proof-session.js";
+import { readLocalLedger, resolvePrivateDirectory, updateLocalLedger } from "./local-ledger.js";
+import { redactSecrets } from "./redaction.js";
+import {
+  assertOriginalSourceUnchanged,
+  captureSourceTreeDigest,
+  createSourceCapsule,
+  disposeSourceCapsule,
+  runCommandInSourceCapsule,
+  watchOriginalSource,
+  withSourceCapsuleCheckout,
+  type MutationMonitor,
+  type SourceCapsule,
+} from "./source-capsule.js";
 import {
   AssertOpSchema,
   CriterionInputSchema,
   type ConvergenceReport,
+  type CriterionEvaluation,
   type CriterionInput,
+  type Probe,
+  type ProbeEnvelope,
 } from "./types.js";
 
 export const KEYOKU_DIR = ".keyoku";
@@ -183,6 +204,7 @@ export interface RepositorySnapshot {
   baseSha: string;
   headSha: string;
   worktreeDigest: string;
+  sourceCapsuleDigest: string;
   dirty: boolean;
   changedFiles: string[];
 }
@@ -250,9 +272,14 @@ const RepositorySnapshotSchema = z.object({
   baseSha: z.string().min(1),
   headSha: z.string().min(1),
   worktreeDigest: DigestSchema,
+  sourceCapsuleDigest: DigestSchema,
   dirty: z.boolean(),
   changedFiles: z.array(z.string()),
-}).strict();
+}).strict().superRefine((repository, context) => {
+  if (repository.sourceCapsuleDigest !== repository.worktreeDigest) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["sourceCapsuleDigest"], message: "must equal worktreeDigest" });
+  }
+});
 
 const ScopeAssessmentSchema = z.object({
   declared: z.boolean(),
@@ -487,6 +514,21 @@ function gitRaw(root: string, args: string[]): string {
   }
 }
 
+function gitRequired(root: string, args: string[], label: string): string {
+  try {
+    const output = execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+    if (!output) throw new Error("empty output");
+    return output;
+  } catch (error) {
+    throw new Error(`Cannot establish ${label}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function gitRawRequired(root: string, args: string[], label: string): string {
+  try { return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); }
+  catch (error) { throw new Error(`Cannot establish ${label}: ${error instanceof Error ? error.message : String(error)}`); }
+}
+
 export function findProjectRoot(start = process.cwd()): string {
   let cursor = resolve(start);
   for (;;) {
@@ -522,10 +564,8 @@ function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-function readReviews(root: string, contributionId: string): ReviewEvent[] {
-  const path = join(contributionDir(root, contributionId), "reviews.jsonl");
-  if (!existsSync(path)) return [];
-  return readFileSync(path, "utf8")
+function parseReviews(root: string, path: string, bytes: Buffer): ReviewEvent[] {
+  return bytes.toString("utf8")
     .split("\n")
     .filter(Boolean)
     .map((line, index) => {
@@ -537,6 +577,46 @@ function readReviews(root: string, contributionId: string): ReviewEvent[] {
       if (!result.success) throw new Error(`Invalid review event at line ${index + 1}: ${result.error.message}`);
       return result.data;
     });
+}
+
+function readReviews(root: string, contributionId: string): ReviewEvent[] {
+  const path = join(resolvePrivateDirectory(root, [KEYOKU_DIR, "contributions", slug(contributionId)], false), "reviews.jsonl");
+  return parseReviews(root, path, readLocalLedger(path));
+}
+
+function writeAll(fd: number, bytes: Buffer): void {
+  let offset = 0;
+  while (offset < bytes.length) offset += writeSync(fd, bytes, offset, bytes.length - offset);
+}
+
+function fsyncDirectory(path: string): void {
+  const fd = openSync(path, constants.O_RDONLY);
+  try { fsyncSync(fd); } finally { closeSync(fd); }
+}
+
+function writeExclusive(path: string, bytes: Buffer): void {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const fd = openSync(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
+  try { writeAll(fd, bytes); fsyncSync(fd); } finally { closeSync(fd); }
+  fsyncDirectory(dirname(path));
+}
+
+function writeAtomic(path: string, bytes: Buffer): void {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const temp = join(dirname(path), `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`);
+  const fd = openSync(temp, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
+  try {
+    writeAll(fd, bytes);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  try {
+    renameSync(temp, path);
+    fsyncDirectory(dirname(path));
+  } finally {
+    if (existsSync(temp)) unlinkSync(temp);
+  }
 }
 
 export interface VerifiedFactfileExpectations {
@@ -552,7 +632,7 @@ export interface VerifiedFactfileExpectations {
 export function readVerifiedFactfile(path: string, expected: VerifiedFactfileExpectations = {}): GateSnapshot {
   let raw: unknown;
   try {
-    raw = parseJsonRejectDuplicateKeys(readFileSync(path, "utf8"), `Invalid Factfile ${path}`);
+    raw = parseJsonBytesRejectDuplicateKeys(readFileSync(path), `Invalid Factfile ${path}`);
   } catch (error) {
     throw new Error(error instanceof Error ? error.message : String(error));
   }
@@ -600,17 +680,19 @@ export function listFactfileHistory(rootInput: string, contributionId: string): 
 }
 
 function persistSnapshot(root: string, contribution: ContributionManifest, snapshot: GateSnapshot): void {
-  const dir = contributionDir(root, contribution.id);
+  const dir = resolvePrivateDirectory(root, [KEYOKU_DIR, "contributions", slug(contribution.id)]);
+  const snapshots = resolvePrivateDirectory(dir, ["snapshots"]);
   const { digest: _previousDigest, ...unsignedSnapshot } = snapshot;
   snapshot.digest = canonicalJsonDigest(unsignedSnapshot);
-  writeYaml(join(dir, "manifest.yaml"), contribution);
-  writeJson(join(dir, "snapshots", `${snapshot.id}.json`), snapshot);
+  const snapshotJson = Buffer.from(`${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+  writeExclusive(join(snapshots, `${snapshot.id}.json`), snapshotJson);
   const history = listFactfileHistory(root, contribution.id);
-  writeFileSync(join(dir, "snapshots", `${snapshot.id}.html`), renderFactfileHtml(snapshot, { history, historical: true }), "utf8");
-  writeJson(join(dir, "factfile.json"), snapshot);
-  writeFileSync(join(dir, "factfile.md"), renderFactfileMarkdown(snapshot), "utf8");
-  writeFileSync(join(dir, "factfile.github.md"), renderFactfileGithubMarkdown(snapshot), "utf8");
-  writeFileSync(join(dir, "factfile.html"), renderFactfileHtml(snapshot, { history }), "utf8");
+  writeExclusive(join(snapshots, `${snapshot.id}.html`), Buffer.from(renderFactfileHtml(snapshot, { history, historical: true }), "utf8"));
+  writeAtomic(join(dir, "manifest.yaml"), Buffer.from(stringify(contribution, { lineWidth: 100 }), "utf8"));
+  writeAtomic(join(dir, "factfile.json"), snapshotJson);
+  writeAtomic(join(dir, "factfile.md"), Buffer.from(renderFactfileMarkdown(snapshot), "utf8"));
+  writeAtomic(join(dir, "factfile.github.md"), Buffer.from(renderFactfileGithubMarkdown(snapshot), "utf8"));
+  writeAtomic(join(dir, "factfile.html"), Buffer.from(renderFactfileHtml(snapshot, { history }), "utf8"));
 }
 
 function remoteUrl(root: string): string | undefined {
@@ -745,7 +827,7 @@ export function startContribution(input: StartContributionInput): ContributionMa
     outcomeId: outcome.id,
     outcomeRevision: outcome.revision,
     outcomeDigest: canonicalJsonDigest(outcome),
-    baseSha: git(root, ["rev-parse", input.baseSha ?? "HEAD"]),
+    baseSha: gitRequired(root, ["rev-parse", "--verify", input.baseSha ?? "HEAD"], "the contribution base revision"),
     actors,
     status: "draft",
     createdAt: timestamp,
@@ -760,11 +842,12 @@ function ignoredEvidencePath(path: string): boolean {
   // Evidence artifacts describe the source snapshot; they are not themselves
   // part of that snapshot. Excluding them prevents generating a Factfile from
   // making its own proof stale. Outcome and project contracts remain included.
-  return path.startsWith(".keyoku/contributions/") || path.startsWith(".keyoku/runtime/");
+  return path.startsWith(".keyoku/contributions/") || path.startsWith(".keyoku/pulse/") || path.startsWith(".keyoku/runtime/");
 }
 
 export function captureRepository(root: string, baseSha: string): RepositorySnapshot {
-  const headSha = git(root, ["rev-parse", "HEAD"]);
+  const verifiedBaseSha = gitRequired(root, ["rev-parse", "--verify", baseSha], "the repository base revision");
+  const headSha = gitRequired(root, ["rev-parse", "--verify", "HEAD"], "the repository head revision");
   const branch = git(root, ["branch", "--show-current"], "detached");
   const upstream = git(root, ["rev-parse", "--abbrev-ref", "@{upstream}"], "");
   const [behind = 0, ahead = 0] = upstream
@@ -772,30 +855,28 @@ export function captureRepository(root: string, baseSha: string): RepositorySnap
     : [0, 0];
   // Porcelain's first column may intentionally be a space. Do not pass this
   // through git(), which trims output and would corrupt the first path.
-  const porcelain = gitRaw(root, ["status", "--porcelain=v1", "--untracked-files=all"]);
-  const worktreeFiles = porcelain
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => line.slice(3).replace(/^.* -> /, ""))
+  const porcelain = gitRawRequired(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"], "the NUL-delimited worktree status");
+  const porcelainEntries = porcelain.split("\0").filter(Boolean);
+  const worktreeFiles: string[] = [];
+  for (let index = 0; index < porcelainEntries.length; index += 1) {
+    const entry = porcelainEntries[index]!;
+    const status = entry.slice(0, 2);
+    const path = entry.slice(3);
+    if (status.includes("R") || status.includes("C")) {
+      const destination = porcelainEntries[index + 1];
+      if (destination) { worktreeFiles.push(destination); index += 1; }
+      else worktreeFiles.push(path);
+    } else worktreeFiles.push(path);
+  }
+  const sourceFiles = worktreeFiles
     .filter((path) => !ignoredEvidencePath(path))
     .sort();
-  const committedFiles = git(root, ["diff", "--name-only", `${baseSha}...${headSha}`], "")
-    .split("\n")
+  const committedFiles = gitRawRequired(root, ["diff", "--name-only", "-z", `${verifiedBaseSha}...${headSha}`], "the NUL-delimited committed path set")
+    .split("\0")
     .filter(Boolean)
     .filter((path) => !ignoredEvidencePath(path));
-  const changedFiles = [...new Set([...committedFiles, ...worktreeFiles])].sort();
-  const digest = createHash("sha256");
-  digest.update(`base\0${baseSha}\0head\0${headSha}\0`);
-  digest.update(gitRaw(root, ["diff", "--binary", `${baseSha}...${headSha}`]));
-  digest.update(gitRaw(root, ["diff", "--binary", "HEAD"]));
-  digest.update(gitRaw(root, ["diff", "--binary", "--cached", "HEAD"]));
-  for (const path of changedFiles) {
-    digest.update(`\0${path}\0`);
-    const absolute = join(root, path);
-    if (existsSync(absolute) && statSync(absolute).isFile() && porcelain.includes(`?? ${path}`)) {
-      digest.update(readFileSync(absolute));
-    }
-  }
+  const changedFiles = [...new Set([...committedFiles, ...sourceFiles])].sort();
+  const sourceCapsuleDigest = captureSourceTreeDigest(root);
   return {
     repositoryRoot: root,
     branch,
@@ -804,13 +885,14 @@ export function captureRepository(root: string, baseSha: string): RepositorySnap
     behind,
     ...(remoteUrl(root) ? { remote: remoteUrl(root) } : {}),
     lastCommit: git(root, ["log", "-1", "--pretty=%s"], "unknown"),
-    baseSha,
+    baseSha: verifiedBaseSha,
     headSha,
-    worktreeDigest: digest.digest("hex"),
+    worktreeDigest: sourceCapsuleDigest,
+    sourceCapsuleDigest,
     // A committed base-to-head diff is the contribution under review, not a
     // dirty worktree. Keep these concepts separate so a clean revision-bound
     // Factfile cannot be mislabeled merely because it contains real changes.
-    dirty: worktreeFiles.length > 0,
+    dirty: sourceFiles.length > 0,
     changedFiles,
   };
 }
@@ -861,7 +943,7 @@ function buildReviewPlan(
   outcome: Outcome,
   repository: RepositorySnapshot,
   scope: ScopeAssessment,
-  report: ConvergenceReport,
+  report: { criteria: CriterionEvaluation[] },
   reviews: ReviewEvent[],
 ): ReviewAttentionItem[] {
   const items: ReviewAttentionItem[] = [];
@@ -915,18 +997,95 @@ function buildReviewPlan(
   return items.sort((a, b) => weight[a.priority] - weight[b.priority]);
 }
 
-function resolveCriteria(root: string, criteria: CriterionInput[]): CriterionInput[] {
-  return criteria.map((criterion) => {
-    if (criterion.probe.kind !== "command") return criterion;
-    const cwd = criterion.probe.cwd;
-    return {
-      ...criterion,
-      probe: {
-        ...criterion.probe,
-        cwd: cwd ? (isAbsolute(cwd) ? cwd : resolve(root, cwd)) : root,
+const MAX_FACTFILE_ACTUAL_CHARS = 2_000;
+
+function capFactfileActual(value: unknown): unknown {
+  let serialized: string;
+  try { serialized = JSON.stringify(value) ?? "undefined"; }
+  catch { serialized = String(value); }
+  if (serialized.length <= MAX_FACTFILE_ACTUAL_CHARS) return value;
+  return `${serialized.slice(0, MAX_FACTFILE_ACTUAL_CHARS)}… (truncated ${serialized.length - MAX_FACTFILE_ACTUAL_CHARS} chars)`;
+}
+
+function probeDidNotComplete(probe: Probe, envelope: ProbeEnvelope): boolean {
+  if (envelope.error === undefined) return false;
+  if (probe.kind === "command") return envelope.exitCode === -1 || envelope.output === null;
+  if (probe.kind === "http") return envelope.status === undefined || envelope.output === null;
+  return true;
+}
+
+/**
+ * Factfile verification is deliberately independent of the v2 goal/workflow
+ * engine. It executes only the repository-owned criteria and returns the
+ * observations needed by the exact-source snapshot.
+ */
+async function evaluateFactfileCriteria(
+  capsule: SourceCapsule,
+  originalMonitor: MutationMonitor,
+  criteria: CriterionInput[],
+  presentations: Array<EvidencePresentation | undefined>,
+): Promise<{
+  converged: boolean;
+  criteria: CriterionEvaluation[];
+  presentations: Array<ResolvedEvidencePresentation | undefined>;
+  architecture?: ArchitectureProjection;
+}> {
+  const evaluations: CriterionEvaluation[] = [];
+  for (let index = 0; index < criteria.length; index += 1) {
+    const criterion = criteria[index]!;
+    const started = Date.now();
+    const envelope = criterion.probe.kind === "command"
+      ? await runCommandInSourceCapsule(capsule, criterion.probe)
+      : await runProbe(criterion.probe);
+    const result = evaluateAssertion(envelope, criterion.assert);
+    const incomplete = probeDidNotComplete(criterion.probe, envelope);
+    const path = (criterion.assert.path ?? "").trim();
+    const value = criterion.assert.value;
+    const meaningfulFailureAssertion =
+      (path === "exitCode" || path === "status") &&
+      criterion.assert.op === "eq" &&
+      (typeof value === "string" ? value.length > 0 : value != null);
+    const pass = result.pass && !incomplete && (!envelope.error || meaningfulFailureAssertion);
+    const error = [
+      envelope.error,
+      result.error,
+      result.pass && !pass ? "assertion passed but the probe itself failed — failing the criterion" : undefined,
+    ].filter(Boolean).join("; ");
+    evaluations.push({
+      id: `c${index + 1}`,
+      description: criterion.description,
+      pass,
+      actual: capFactfileActual(result.actual),
+      expected: {
+        op: criterion.assert.op,
+        value: criterion.assert.value,
+        path: criterion.assert.path ?? "output",
       },
+      ...(error ? { error } : {}),
+      ...(result.note ? { note: result.note } : {}),
+      durationMs: Date.now() - started,
+    });
+    await assertOriginalSourceUnchanged(capsule, originalMonitor);
+  }
+  const capsuleProjection = await withSourceCapsuleCheckout(capsule, (checkout) => {
+    let architecture: ArchitectureProjection | undefined;
+    try { architecture = scanArchitecture(checkout); } catch { /* architecture is optional for adopted repositories */ }
+    return {
+      presentations: presentations.map((presentation) => resolveEvidencePresentation(checkout, presentation)),
+      architecture,
     };
   });
+  return {
+    converged: evaluations.every((item) => item.pass),
+    criteria: evaluations,
+    presentations: capsuleProjection.presentations,
+    ...(capsuleProjection.architecture ? { architecture: capsuleProjection.architecture } : {}),
+  };
+}
+
+function resolveCriteria(root: string, criteria: CriterionInput[]): CriterionInput[] {
+  void root;
+  return criteria;
 }
 
 function summarizeHumanReview(outcome: Pick<Outcome, "humanCriteria">, reviews: ReviewEvent[]): GateSnapshot["humanReview"] {
@@ -967,24 +1126,18 @@ function resolveEvidencePresentation(root: string, presentation?: EvidencePresen
     whyItMatters: presentation.whyItMatters,
     code: presentation.code,
     artifacts: presentation.artifacts.map((artifact) => {
-      const absolute = resolve(root, artifact.path);
-      const relativePath = relative(root, absolute);
-      if (relativePath.startsWith("..") || isAbsolute(relativePath)) {
-        return { ...artifact, unavailable: "Artifact path is outside the project." };
-      }
-      if (!existsSync(absolute) || !statSync(absolute).isFile()) {
-        return { ...artifact, unavailable: "Artifact was not found for this snapshot." };
-      }
-      const bytes = readFileSync(absolute);
+      let bounded: ReturnType<typeof readBoundedArtifact>;
+      try { bounded = readBoundedArtifact(root, artifact.path); }
+      catch (error) { return { ...artifact, unavailable: error instanceof Error ? error.message : String(error) }; }
+      const bytes = bounded.bytes;
       const digest = hash(bytes);
       if (artifact.kind !== "screenshot" && artifact.kind !== "video") return { ...artifact, digest };
       const limit = artifact.kind === "screenshot" ? 2_000_000 : 12_000_000;
       if (bytes.length > limit) return { ...artifact, digest, unavailable: `${artifact.kind === "screenshot" ? "Screenshot" : "Video"} exceeds the ${limit / 1_000_000} MB portable-report limit.` };
-      const lower = artifact.path.toLowerCase();
-      const mediaType = artifact.kind === "screenshot"
-        ? lower.endsWith(".png") ? "image/png" : lower.endsWith(".webp") ? "image/webp" : lower.endsWith(".jpg") || lower.endsWith(".jpeg") ? "image/jpeg" : undefined
-        : lower.endsWith(".mp4") ? "video/mp4" : lower.endsWith(".webm") ? "video/webm" : undefined;
+      const mediaType = mediaTypeForPath(artifact.path);
       if (!mediaType) return { ...artifact, digest, unavailable: artifact.kind === "screenshot" ? "Screenshot must be PNG, WebP, or JPEG." : "Video must be MP4 or WebM." };
+      if ((artifact.kind === "screenshot") !== mediaType.startsWith("image/")) return { ...artifact, digest, unavailable: `Artifact extension does not match kind '${artifact.kind}'.` };
+      if (!mediaSignatureMatches(bytes, mediaType)) return { ...artifact, digest, unavailable: `Artifact bytes do not match the declared ${mediaType} media signature.` };
       return {
         ...artifact,
         digest,
@@ -1048,86 +1201,96 @@ export async function runGate(rootInput: string | undefined, contributionId: str
     if (accepted.repository.headSha === current.headSha && accepted.repository.worktreeDigest === current.worktreeDigest) return accepted;
   }
 
-  const runtime = join(root, KEYOKU_DIR, "runtime");
-  const store = new Store(runtime);
-  const harness = new Harness(store, new ConnectorManager(store));
   const criteria = resolveCriteria(root, outcome.criteria);
-  const definitionDigest = canonicalJsonDigest({ objective: outcome.objective, criteria, humanCriteria: outcome.humanCriteria, constraints: outcome.constraints }).slice(0, 12);
-  const goalSlug = slug(`gate-${outcome.id}-r${outcome.revision}-${definitionDigest}`);
-  let goal = store.listGoals().find((candidate) => candidate.slug === goalSlug);
-  if (!goal) {
-    goal = harness.createGoal({
-      slug: goalSlug,
-      objective: outcome.objective,
-      criteria,
-      constraints: outcome.constraints,
-      autonomy: "observe",
-      cwd: root,
-    });
-  }
-
   contribution.status = "evaluating";
   contribution.updatedAt = now();
   writeYaml(join(contributionDir(root, contribution.id), "manifest.yaml"), contribution);
-  const report = await harness.assess(goal.id);
-  await harness.connectors.closeAll();
-  const repository = captureRepository(root, contribution.baseSha);
-  const scope = assessScope(outcome, repository.changedFiles);
-  let architecture: ArchitectureProjection | undefined;
-  try { architecture = scanArchitecture(root); } catch { /* architecture is optional for adopted repositories */ }
-  const generatedAt = now();
-  // A human verdict is evidence for one exact source identity. Keep the
-  // append-only review ledger intact, but never project a verdict from an old
-  // head/worktree into a newly generated Factfile.
-  const reviews = reviewsForRepository(readReviews(root, contribution.id), repository);
-  const humanReview = summarizeHumanReview(outcome, reviews);
-  const reviewPlan = buildReviewPlan(outcome, repository, scope, report, reviews);
-  const snapshotBase = {
-    schemaVersion: "keyoku.dev/factfile/v1alpha1" as const,
-    id: `fact_${generatedAt.replace(/[-:.TZ]/g, "").slice(0, 14)}_${repository.worktreeDigest.slice(0, 8)}`,
-    project: { id: project.id, name: project.name, summary: project.summary },
-    outcome: {
-      id: outcome.id,
-      revision: outcome.revision,
-      title: outcome.title,
-      objective: outcome.objective,
-      constraints: outcome.constraints,
-      ...(outcome.scope ? { scope: outcome.scope } : {}),
-      owner: outcome.owner,
-      humanCriteria: outcome.humanCriteria,
-    },
-    contribution: { ...contribution },
-    repository,
-    scope,
-    reviewPlan,
-    session: readProofSession(root, contribution.id),
-    ...(architecture ? { architecture } : {}),
-    state: gateState(report.converged && scope.passed, humanReview),
-    generatedAt,
-    reviews,
-    evidence: report.criteria.map((item, index) => ({
-      ...item,
-      actual: redactEvidence(item.actual),
-      verification: verificationMethod(outcome.criteria[index]!),
-      ...(item.error ? { error: redactSecrets(item.error) } : {}),
-      ...(item.note ? { note: redactSecrets(item.note) } : {}),
-      ...(outcome.criteria[index]?.evidence ? { presentation: resolveEvidencePresentation(root, outcome.criteria[index].evidence) } : {}),
-    })),
-    summary: {
-      passed: report.criteria.filter((item) => item.pass).length,
-      failed: report.criteria.filter((item) => !item.pass).length,
-      total: report.criteria.length,
-      verified: report.converged && scope.passed,
-    },
-    humanReview,
-  };
-  const snapshot: GateSnapshot = { ...snapshotBase, digest: canonicalJsonDigest(snapshotBase) };
-  contribution.status = snapshot.state;
-  contribution.updatedAt = generatedAt;
-  snapshot.contribution.status = contribution.status;
-  snapshot.contribution.updatedAt = contribution.updatedAt;
-  persistSnapshot(root, contribution, snapshot);
-  return snapshot;
+  const sourceBeforeProbes = captureRepository(root, contribution.baseSha);
+  const capsule = createSourceCapsule(root);
+  if (sourceBeforeProbes.worktreeDigest !== capsule.contentDigest) {
+    disposeSourceCapsule(capsule);
+    throw new Error("Proof refused: the source changed between repository inspection and immutable capsule capture. Rerun from a stable source tree.");
+  }
+  let originalMonitor: MutationMonitor;
+  try { originalMonitor = watchOriginalSource(capsule); }
+  catch (error) {
+    disposeSourceCapsule(capsule);
+    throw error;
+  }
+  try {
+    await assertOriginalSourceUnchanged(capsule, originalMonitor);
+    originalMonitor.clear();
+    const report = await evaluateFactfileCriteria(capsule, originalMonitor, criteria, outcome.criteria.map((criterion) => criterion.evidence));
+    await assertOriginalSourceUnchanged(capsule, originalMonitor);
+    const repository = captureRepository(root, contribution.baseSha);
+    if (repository.headSha !== sourceBeforeProbes.headSha || repository.worktreeDigest !== capsule.contentDigest) {
+      throw new Error("Proof refused: the source no longer matches the immutable verification capsule. Restore or retain the intended changes, then rerun proof.");
+    }
+    const scope = assessScope(outcome, repository.changedFiles);
+    const architecture = report.architecture;
+    const generatedAt = now();
+    // A human verdict is evidence for one exact source identity. Keep the
+    // append-only review ledger intact, but never project a verdict from an old
+    // head/worktree into a newly generated Factfile.
+    const reviews = reviewsForRepository(readReviews(root, contribution.id), repository);
+    const humanReview = summarizeHumanReview(outcome, reviews);
+    const reviewPlan = buildReviewPlan(outcome, repository, scope, report, reviews);
+    const snapshotBase = {
+      schemaVersion: "keyoku.dev/factfile/v1alpha1" as const,
+      id: `fact_${generatedAt.replace(/[-:.TZ]/g, "")}_${randomUUID().slice(0, 8)}`,
+      project: { id: project.id, name: project.name, summary: project.summary },
+      outcome: {
+        id: outcome.id,
+        revision: outcome.revision,
+        title: outcome.title,
+        objective: outcome.objective,
+        constraints: outcome.constraints,
+        ...(outcome.scope ? { scope: outcome.scope } : {}),
+        owner: outcome.owner,
+        humanCriteria: outcome.humanCriteria,
+      },
+      contribution: { ...contribution },
+      repository,
+      scope,
+      reviewPlan,
+      session: readProofSession(root, contribution.id),
+      ...(architecture ? { architecture } : {}),
+      state: gateState(report.converged && scope.passed, humanReview),
+      generatedAt,
+      reviews,
+      evidence: report.criteria.map((item, index) => ({
+        ...item,
+        actual: redactEvidence(item.actual),
+        verification: verificationMethod(outcome.criteria[index]!),
+        ...(item.error ? { error: redactSecrets(item.error) } : {}),
+        ...(item.note ? { note: redactSecrets(item.note) } : {}),
+        ...(report.presentations[index] ? { presentation: report.presentations[index] } : {}),
+      })),
+      summary: {
+        passed: report.criteria.filter((item) => item.pass).length,
+        failed: report.criteria.filter((item) => !item.pass).length,
+        total: report.criteria.length,
+        verified: report.converged && scope.passed,
+      },
+      humanReview,
+    };
+    const snapshot: GateSnapshot = { ...snapshotBase, digest: canonicalJsonDigest(snapshotBase) };
+    await assertOriginalSourceUnchanged(capsule, originalMonitor);
+    contribution.status = snapshot.state;
+    contribution.updatedAt = generatedAt;
+    snapshot.contribution.status = contribution.status;
+    snapshot.contribution.updatedAt = contribution.updatedAt;
+    persistSnapshot(root, contribution, snapshot);
+    await assertOriginalSourceUnchanged(capsule, originalMonitor);
+    const sourceAfterPersist = captureRepository(root, contribution.baseSha);
+    if (sourceAfterPersist.headSha !== repository.headSha || sourceAfterPersist.worktreeDigest !== capsule.contentDigest) {
+      throw new Error("Proof refused: the source checkout changed before Factfile persistence completed. The generated files are stale and must not be reported; rerun proof.");
+    }
+    return snapshot;
+  } finally {
+    originalMonitor.close();
+    disposeSourceCapsule(capsule);
+  }
 }
 
 export function reviewContribution(input: ReviewContributionInput): GateSnapshot {
@@ -1135,11 +1298,6 @@ export function reviewContribution(input: ReviewContributionInput): GateSnapshot
   const contribution = loadContribution(root, input.contributionId);
   const path = join(contributionDir(root, contribution.id), "factfile.json");
   if (!existsSync(path)) throw new Error(`No Factfile for '${contribution.id}'. Run 'keyoku gate ${contribution.id}' first.`);
-  const snapshot = readVerifiedFactfile(path, { contributionId: contribution.id });
-  const current = captureRepository(root, contribution.baseSha);
-  if (snapshot.repository.headSha !== current.headSha || snapshot.repository.worktreeDigest !== current.worktreeDigest) {
-    throw new Error("The repository changed after this Factfile was generated. Run the gate again before reviewing or accepting it.");
-  }
   const reviewer = input.reviewer ?? defaultActor(root);
   const reviewerResult = ActorSchema.safeParse(reviewer);
   if (!reviewerResult.success || reviewer.kind !== "human") {
@@ -1150,34 +1308,47 @@ export function reviewContribution(input: ReviewContributionInput): GateSnapshot
   if (Boolean(input.criterionId) !== Boolean(input.verdict)) {
     throw new Error("A human criterion review requires both criterionId and verdict.");
   }
-  if (input.criterionId && !snapshot.outcome.humanCriteria.some((criterion) => criterion.id === input.criterionId)) {
-    throw new Error(`Unknown human criterion '${input.criterionId}'.`);
-  }
-  if (snapshot.state === "accepted" && input.decision === "accepted") {
-    throw new Error("This exact Factfile is already accepted.");
-  }
-  if (snapshot.state === "accepted" && input.criterionId) {
-    throw new Error("Accepted is terminal for this exact Factfile. Create new source evidence before changing a criterion verdict.");
-  }
-  if (input.decision === "accepted" && snapshot.state !== "ready_for_review") {
-    throw new Error("Only a ready-for-review Factfile can be accepted. Resolve evidence gaps and run the gate again.");
-  }
-  const reviewedAt = now();
-  const event: ReviewEvent = ReviewEventSchema.parse({
-    id: slug(`review-${reviewedAt.replace(/[-:.TZ]/g, "").slice(0, 14)}-${randomUUID().slice(0, 8)}`),
-    decision: input.decision,
-    reviewer,
-    comment,
-    ...(input.criterionId ? { criterionId: input.criterionId, verdict: input.verdict } : {}),
-    reviewedAt,
-    factfileId: snapshot.id,
-    factfileDigest: snapshot.digest,
-    repository: { headSha: current.headSha, worktreeDigest: current.worktreeDigest },
+  const reviewsPath = join(resolvePrivateDirectory(root, [KEYOKU_DIR, "contributions", slug(contribution.id)]), "reviews.jsonl");
+  let snapshot!: GateSnapshot;
+  let event!: ReviewEvent;
+  let reviewedAt!: string;
+  updateLocalLedger(reviewsPath, (ledger) => {
+    snapshot = readVerifiedFactfile(path, { contributionId: contribution.id });
+    const current = captureRepository(root, contribution.baseSha);
+    if (snapshot.repository.headSha !== current.headSha || snapshot.repository.worktreeDigest !== current.worktreeDigest) {
+      throw new Error("The repository changed after this Factfile was generated. Run the gate again before reviewing or accepting it.");
+    }
+    const projected = reviewsForRepository(parseReviews(root, reviewsPath, ledger), current);
+    if (canonicalJsonDigest(projected) !== canonicalJsonDigest(snapshot.reviews ?? [])) {
+      throw new Error("The review ledger is ahead of the Factfile projection. Rerun the gate to rebuild the projection before adding another review.");
+    }
+    if (input.criterionId && !snapshot.outcome.humanCriteria.some((criterion) => criterion.id === input.criterionId)) {
+      throw new Error(`Unknown human criterion '${input.criterionId}'.`);
+    }
+    if (snapshot.state === "accepted" && input.decision === "accepted") {
+      throw new Error("This exact Factfile is already accepted.");
+    }
+    if (snapshot.state === "accepted" && input.criterionId) {
+      throw new Error("Accepted is terminal for this exact Factfile. Create new source evidence before changing a criterion verdict.");
+    }
+    if (input.decision === "accepted" && snapshot.state !== "ready_for_review") {
+      throw new Error("Only a ready-for-review Factfile can be accepted. Resolve evidence gaps and run the gate again.");
+    }
+    reviewedAt = now();
+    event = ReviewEventSchema.parse({
+      id: slug(`review-${reviewedAt.replace(/[-:.TZ]/g, "")}-${randomUUID().slice(0, 8)}`),
+      decision: input.decision,
+      reviewer,
+      comment,
+      ...(input.criterionId ? { criterionId: input.criterionId, verdict: input.verdict } : {}),
+      reviewedAt,
+      factfileId: snapshot.id,
+      factfileDigest: snapshot.digest,
+      repository: { headSha: current.headSha, worktreeDigest: current.worktreeDigest },
+    });
+    return Buffer.concat([ledger, Buffer.from(`${JSON.stringify(event)}\n`, "utf8")]);
   });
-  const reviewsPath = join(contributionDir(root, contribution.id), "reviews.jsonl");
-  mkdirSync(dirname(reviewsPath), { recursive: true });
-  writeFileSync(reviewsPath, `${JSON.stringify(event)}\n`, { encoding: "utf8", flag: "a", mode: 0o600 });
-  snapshot.id = `fact_${reviewedAt.replace(/[-:.TZ]/g, "").slice(0, 14)}_${randomUUID().slice(0, 6)}`;
+  snapshot.id = `fact_${reviewedAt.replace(/[-:.TZ]/g, "")}_${randomUUID().slice(0, 8)}`;
   snapshot.generatedAt = reviewedAt;
   snapshot.reviews = [...(snapshot.reviews ?? []), event];
   snapshot.session = readProofSession(root, contribution.id);

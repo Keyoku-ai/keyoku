@@ -49,6 +49,7 @@ function lease(input: {
 function checkpoint(input: {
   id: string;
   projectId: string;
+  outcomeId: string;
   runId: string;
   leaseId: string;
   title: string;
@@ -66,6 +67,7 @@ function checkpoint(input: {
     schemaVersion: "keyoku.dev/pulse-checkpoint/v1alpha1",
     id: input.id,
     projectId: input.projectId,
+    outcomeId: input.outcomeId,
     runId: input.runId,
     leaseIds: [input.leaseId],
     title: input.title,
@@ -74,7 +76,7 @@ function checkpoint(input: {
     publishedAt: input.at,
     source: input.source,
     verification: {
-      status: "verified",
+      status: "attested",
       verifiedAt: input.at,
       methods: [{
         kind: "command",
@@ -87,6 +89,8 @@ function checkpoint(input: {
     evidenceBinding: { mode: "fixture", label: `${input.projectId} demonstration fixture; adapters must bind real Factfile bytes before delivery` },
     factfiles: [{
       id: `${input.id}-factfile`,
+      projectId: input.projectId,
+      outcomeId: input.outcomeId,
       path: `.keyoku/contributions/${input.id}/factfile.json`,
       digest: pulseDigest(`factfile:${input.id}`),
       sourceDigest: input.source.verifiedDigest,
@@ -147,9 +151,10 @@ export function buildGenericPulseFixture(): PulseFixture {
   const verified = checkpoint({
     id: "cart-recovery-verified",
     projectId: "checkout-example",
+    outcomeId: "restore-cart",
     runId: agentLease.runId,
     leaseId: agentLease.id,
-    title: "Saved carts restore exactly",
+    title: "Saved-cart fixture checkpoint",
     change: "The cart recovery path now restores product ids and quantities from the saved session.",
     why: "Returning shoppers can continue checkout without rebuilding their cart.",
     at: T(3),
@@ -165,7 +170,7 @@ export function buildGenericPulseFixture(): PulseFixture {
   ];
   return {
     name: "generic",
-    description: "Harness-neutral JSONL/stdin fixture with one exact-source verified checkpoint.",
+    description: "Harness-neutral JSONL/stdin fixture with one synthetic attested checkpoint; it is intentionally nondispatchable.",
     events,
     recommendedPlan: { now: T(5), staleAfterMs: 300_000, debounceMs: 0, deliveredContentDigests: [] },
   };
@@ -222,12 +227,13 @@ export function buildProcessyardPulseFixture(): PulseFixture {
     ["M2", "Economy Theatre implemented", "The demonstration flow now shows the product outcome in a browser-facing experience.", "A non-technical stakeholder can understand the product without a terminal transcript."],
     ["M3", "Checks bound to source", "Automated checks and the changed-file boundary were bound to one source identity.", "Passing output can no longer drift away from the code it describes."],
     ["M4", "Owner decision isolated", "The remaining launch choice was separated from machine verification.", "The agent can continue independent work without manufacturing stakeholder consent."],
-    ["M5", "Evidence story captured", "A poster and replay link were attached to the verified product checkpoint.", "Review starts with the visible product and can drill into the Factfile only when needed."],
-    ["M6", "Release boundary verified", "The complete M0–M6 story passed the fixture's exact-source verification.", "A founder brief and developer evidence view can now share one content-bound snapshot."],
+    ["M5", "Evidence story staged", "A poster and replay path were declared in the synthetic checkpoint.", "The fixture shows the intended evidence shape but cannot claim the referenced bytes exist."],
+    ["M6", "Release boundary rehearsed", "The complete M0–M6 story passed the fixture's schema and replay checks.", "A live integration must still promote local Factfiles before any stakeholder snapshot is dispatchable."],
   ] as const;
   const checkpoints = milestoneData.map(([id, title, change, why], index) => checkpoint({
     id: `processyard-${id.toLowerCase()}`,
     projectId: "processyard",
+    outcomeId: "processyard-modernization",
     runId: development.runId,
     leaseId: index <= 4 ? development.id : index === 5 ? evidence.id : ci.id,
     title: `${id} · ${title}`,

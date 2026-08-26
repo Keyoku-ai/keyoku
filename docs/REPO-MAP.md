@@ -1,63 +1,32 @@
-# Repo map — what's canonical, and what everything else is
+# Keyoku repository map
 
-There are several directories named `keyoku*` across the workspace, and **two
-different packages literally named `keyoku`**. This note removes the ambiguity.
+Keyoku v3 is one product split across three repositories. This integration
+branch is a local release candidate; it is not the published replacement yet.
 
-## The one canonical, published package
+| Repository | Candidate responsibility | Current publication boundary |
+|---|---|---|
+| `keyoku` (this repository) | MIT CLI, Factfile and Pulse schemas, local verifier, planner, renderers, GitHub workflow, and bounded MCP adapters | npm `latest` remains on the v2 release line; no v3 package has been published |
+| `keyoku-engine` | Optional durable Factfile/Pulse SQLite registry and API | Optional; not required for local proof or Pulse |
+| `keyoku-site` | Authoritative product and documentation website | Replacement remains private until the exact candidate is approved |
 
-**This repo (`keyoku-harness/`) is `keyoku` on npm** — the convergence + muscle-memory
-harness, MCP-native, with the `keyoku` CLI.
+The v3 package contract is:
 
-| | |
-|---|---|
-| npm | [`keyoku`](https://www.npmjs.com/package/keyoku) (the `latest` dist-tag) |
-| package name | `keyoku` (see `package.json`) |
-| bin | `keyoku` → `dist/index.js` |
-| install | `npm install -g keyoku && keyoku init` |
-| repo | `github.com/Keyoku-ai/keyoku` |
-| site | `keyoku.ai` |
+```text
+package: keyoku
+binary:  keyoku -> dist/index.js
+install candidate: npm install -g keyoku@next
+first command: keyoku proof init
+rollback after a future alpha: npm install -g keyoku@2
+```
 
-If you are installing, depending on, or contributing to "Keyoku" — this is it.
-Everything below is supporting or historical and is **not** what `npm i keyoku`
-gives you.
+Do not use that install candidate as a claim that `next` exists today. Source
+evaluation uses `npm ci`, `npm run build`, and `npm link` from this repository.
 
-## Supporting components (not this npm package)
+The v2 goal, workflow, connector, activity, memory, and execution implementation
+remains compatibility source. It is not registered by the v3 MCP server and its
+test-only build is excluded from the npm package archive. See
+[PUBLIC-SURFACE.md](PUBLIC-SURFACE.md) for the checked public inventory.
 
-- **`keyoku-engine/`** — the optional Go backend for teams: knowledge graph,
-  semantic search, memory decay, cross-device sync. The harness runs fully
-  standalone without it; set `KEYOKU_ENGINE_URL` to connect one.
-  Repo: `github.com/Keyoku-ai/keyoku-engine`.
-- **`keyoku-site/`** — the marketing site for `keyoku.ai` (deployed separately).
-
-## Historical / sibling (do not confuse with the published package)
-
-- **`../Keyoku Harness/keyoku/`** — an **earlier, private** package *also* named
-  `keyoku` (v1.x), the original **AI-memory SDK** (auto-recall / auto-capture /
-  heartbeat) from before the harness became the product. It is **not** published as
-  the current `keyoku` and is not what this repo builds. Treat it as legacy unless
-  you are specifically working on the memory SDK lineage.
-- **`keyoku-node/` (`@keyoku/sdk`), `keyoku-python/`, `keyoku-embedded/`,
-  `keyoku-bot/`, `keyoku-dashboard/`, `keyoku-git*`, `keyoku-infra/`,
-  `keyoku-demo/`** — experiments, SDKs, deploy infra, and demos in the broader
-  Keyoku family. None of them is the published `keyoku` CLI.
-
-## Local working trees — the canonical clone
-
-Two local clones of **this same repo** exist on the maintainer's machine. Editing
-the wrong one ships nothing. The canonical one is:
-
-> **`~/Development/Keyoku/keyoku-harness`** — this is what the **live Claude Code
-> MCP server runs** (`~/.claude.json` points at its `dist/index.js`). Edit here,
-> `npm run build`, and the next session picks it up.
-
-The other clone — `~/Development/Keyoku Harness/keyoku-harness` — is a second
-checkout used historically for `keyoku-site` deploys. To remove the foot-gun,
-archive or delete it and keep a single working copy. (Both push to the same
-GitHub remote, so no history is lost.)
-
-## Rule of thumb
-
-> When someone says "Keyoku," they mean **this package** (`keyoku-harness` →
-> npm `keyoku`). The convergence loop and muscle memory live here. Anything else
-> is a satellite — name it explicitly (`keyoku-engine`, the memory SDK, the site)
-> to avoid the collision.
+The optional Engine does not make Keyoku an agent runner. Coding harnesses own
+agent execution; Keyoku owns bounded evidence, human attention, exact-source
+Factfiles, and trusted progress projections.
