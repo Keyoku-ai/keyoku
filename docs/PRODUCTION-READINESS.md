@@ -61,8 +61,9 @@ bound to committed revisions and exact archives:
 
 ## Open publication blockers
 
-- Harness, Engine, and site integration trees are not yet immutable commits;
-  earlier passing commands are development evidence, not final release receipts.
+- Harness, Engine, and site now have local integration commits, but public CI has
+  not run those unpublished revisions and independent exact-archive acceptance
+  is still pending. The external evidence packet must record their final mapping.
 - Private owner-only deployment of the corrected interactive site is pending.
 - No verified private vulnerability intake exists. Enable GitHub private
   vulnerability reporting or approve and verify a monitored security contact.
