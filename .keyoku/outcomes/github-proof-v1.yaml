@@ -1,6 +1,6 @@
 schemaVersion: keyoku.dev/outcome/v1alpha1
 id: github-proof-v1
-revision: 9
+revision: 10
 title: Keyoku turns agent work into a live, reviewable proof session
 objective: >-
   A maintainer can add free Keyoku to a Git project, see what connected agents are doing, resolve
@@ -22,7 +22,7 @@ criteria:
   - description: One command detects representative project types and installs a safe proof workflow
     probe:
       kind: command
-      run: npx vitest run tests/project-profile.test.ts -t "cross-project proof setup" --cache=false
+      run: npx vitest run tests/project-profile.test.ts -t "cross-project proof setup" --cache=false --configLoader runner
       timeoutMs: 120000
       parse: text
     assert:
@@ -43,7 +43,7 @@ criteria:
   - description: Pull-request proof covers committed base-to-head changes and fails closed on scope drift
     probe:
       kind: command
-      run: npx vitest run tests/project-profile.test.ts -t "Git-native contribution history" --cache=false
+      run: npx vitest run tests/project-profile.test.ts -t "Git-native contribution history" --cache=false --configLoader runner
       timeoutMs: 120000
       parse: text
     assert:
@@ -64,7 +64,7 @@ criteria:
   - description: The Factfile separates blockers from contextual next directions and proof
     probe:
       kind: command
-      run: npx vitest run tests/contribution.test.ts --cache=false
+      run: npx vitest run tests/contribution.test.ts --cache=false --configLoader runner
       timeoutMs: 120000
       parse: text
     assert:
@@ -105,7 +105,7 @@ criteria:
   - description: The two-way protocol is durable, provider-neutral, and token-scoped
     probe:
       kind: command
-      run: npx vitest run tests/proof-session.test.ts --cache=false
+      run: npx vitest run tests/proof-session.test.ts --cache=false --configLoader runner
       timeoutMs: 120000
       parse: text
     assert:
@@ -128,7 +128,7 @@ criteria:
   - description: Outcome definitions have inspectable repository-owned version history
     probe:
       kind: command
-      run: npx vitest run tests/project-profile.test.ts -t "binds committed PR changes" --cache=false
+      run: npx vitest run tests/project-profile.test.ts -t "binds committed PR changes" --cache=false --configLoader runner
       timeoutMs: 120000
       parse: text
     assert:
@@ -169,7 +169,7 @@ criteria:
   - description: Verification runs against a sealed checkout and rejects source mutation
     probe:
       kind: command
-      run: npx vitest run tests/source-capsule.test.ts --cache=false
+      run: npx vitest run tests/source-capsule.test.ts --cache=false --configLoader runner
       timeoutMs: 120000
       parse: text
     assert:
@@ -216,4 +216,4 @@ humanCriteria:
     description: The public product reads as a focused proof layer rather than a generic agent control plane, memory system, or certification claim
     guidance: Inspect the README, CLI help, package description, MCP instructions, and archived surfaces for conflicting promises.
 createdAt: 2026-08-15T18:30:00Z
-updatedAt: 2026-08-27T00:42:00Z
+updatedAt: 2026-08-27T03:44:20Z

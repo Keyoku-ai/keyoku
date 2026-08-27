@@ -15,6 +15,7 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   watch,
   type FSWatcher,
 } from "node:fs";
@@ -680,6 +681,20 @@ export async function withSourceCapsuleCheckout<T>(capsule: SourceCapsule, callb
   try {
     gitText(capsule.sourceRoot, ["clone", "--quiet", "--no-local", capsule.gitDir, checkout], "materialize a fresh capsule checkout");
     assertMaterializedCheckout(capsule, checkout);
+    const sourceDependencies = join(capsule.sourceRoot, "node_modules");
+    const checkoutDependencies = join(checkout, "node_modules");
+    const dependenciesAreCaptured = capsule.entries.some((entry) => entry.path === "node_modules" || entry.path.startsWith("node_modules/"));
+    if (!dependenciesAreCaptured && existsSync(sourceDependencies)) {
+      const dependencyStat = lstatSync(sourceDependencies);
+      if (dependencyStat.isDirectory() && !dependencyStat.isSymbolicLink()) {
+        // Preserve the pre-v3 command-probe contract: trusted repository
+        // commands may use the caller's already-installed Node dependencies.
+        // The bridge is created only after exact source materialization, is
+        // represented in the probe's before/after inventory as one symlink,
+        // and is never presented as source evidence or an OS sandbox.
+        symlinkSync(sourceDependencies, checkoutDependencies, process.platform === "win32" ? "junction" : "dir");
+      }
+    }
     return await callback(checkout);
   } finally {
     safeCleanup(checkoutParent, tmpdir());

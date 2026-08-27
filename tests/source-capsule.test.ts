@@ -34,7 +34,7 @@ function repository(): string {
   execFileSync("git", ["init", "-q"], { cwd: root });
   execFileSync("git", ["config", "user.email", "owner@example.com"], { cwd: root });
   execFileSync("git", ["config", "user.name", "Owner"], { cwd: root });
-  writeFileSync(join(root, ".gitignore"), "ignored.log\n", "utf8");
+  writeFileSync(join(root, ".gitignore"), "ignored.log\nnode_modules/\n", "utf8");
   writeFileSync(join(root, "README.md"), "captured\n", "utf8");
   execFileSync("git", ["add", ".gitignore", "README.md"], { cwd: root });
   execFileSync("git", ["commit", "-qm", "initial"], { cwd: root });
@@ -177,6 +177,25 @@ describe("content-addressed source capsules", () => {
       expect(result.exitCode).toBe(0);
       expect(String(result.output)).toContain("pass 1");
       assertSourceCapsuleCurrent(capsule);
+    } finally {
+      disposeSourceCapsule(capsule);
+    }
+  });
+
+  it("runs trusted Node probes against already-installed dependencies without presenting them as source", async () => {
+    const root = repository();
+    mkdirSync(join(root, "node_modules", "probe-dependency"), { recursive: true });
+    writeFileSync(join(root, "node_modules", "probe-dependency", "package.json"), '{"main":"index.js"}\n', "utf8");
+    writeFileSync(join(root, "node_modules", "probe-dependency", "index.js"), "module.exports = 'dependency-ready';\n", "utf8");
+    const capsule = createSourceCapsule(root);
+    try {
+      expect(capsule.entries.some((entry) => entry.path.startsWith("node_modules/"))).toBe(false);
+      const result = await runCommandInSourceCapsule(capsule, {
+        kind: "command",
+        run: "node -e \"process.stdout.write(require('probe-dependency'))\"",
+        parse: "text",
+      });
+      expect(result).toMatchObject({ output: "dependency-ready", exitCode: 0 });
     } finally {
       disposeSourceCapsule(capsule);
     }
