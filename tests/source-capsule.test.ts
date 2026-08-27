@@ -198,6 +198,35 @@ describe("content-addressed source capsules", () => {
     }
   });
 
+  it("ignores generated Keyoku ledger writes while still detecting Keyoku contract edits", async () => {
+    const root = repository();
+    mkdirSync(join(root, ".keyoku", "outcomes"), { recursive: true });
+    writeFileSync(join(root, ".keyoku", "project.yaml"), "id: fixture\n", "utf8");
+    writeFileSync(join(root, ".keyoku", "outcomes", "proof.yaml"), "revision: 1\n", "utf8");
+    execFileSync("git", ["add", ".keyoku/project.yaml", ".keyoku/outcomes/proof.yaml"], { cwd: root });
+    execFileSync("git", ["commit", "-qm", "add Keyoku contract"], { cwd: root });
+
+    const capsule = createSourceCapsule(root);
+    const generatedMonitor = watchOriginalSource(capsule);
+    try {
+      mkdirSync(join(root, ".keyoku", "contributions", "run"), { recursive: true });
+      writeFileSync(join(root, ".keyoku", "contributions", "run", "events.jsonl"), "generated event\n", "utf8");
+      await expect(assertOriginalSourceUnchanged(capsule, generatedMonitor)).resolves.toBeUndefined();
+    } finally {
+      generatedMonitor.close();
+    }
+
+    const contractMonitor = watchOriginalSource(capsule);
+    try {
+      writeFileSync(join(root, ".keyoku", "project.yaml"), "id: changed\n", "utf8");
+      writeFileSync(join(root, ".keyoku", "project.yaml"), "id: fixture\n", "utf8");
+      await expect(assertOriginalSourceUnchanged(capsule, contractMonitor)).rejects.toThrow(/Original source changed while probes were running/);
+    } finally {
+      contractMonitor.close();
+      disposeSourceCapsule(capsule);
+    }
+  });
+
   it("revalidates lasting original changes and cleans a timed-out checkout", async () => {
     const root = repository();
     const capsule = createSourceCapsule(root);

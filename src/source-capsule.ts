@@ -74,10 +74,20 @@ function filesystemMutationKey(path: string): string {
   return [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeNs].join(":");
 }
 
+function filesystemDirectoryIdentityKey(path: string): string {
+  const stat = lstatSync(path, { bigint: true });
+  if (!stat.isDirectory()) throw new Error(`Expected a source directory: ${path}`);
+  // Directory mtimes describe child-entry churn, including writes beneath
+  // excluded Keyoku ledgers. Exact source bytes plus the live watcher cover
+  // those entries; bind the directory object itself without making generated
+  // evidence change its parent's source identity.
+  return [stat.dev, stat.ino, stat.mode].join(":");
+}
+
 function assertPlainParentChain(root: string, path: string): string {
   const relativeDirectory = normalizedRelative(root, dirname(path));
   const parts = relativeDirectory.split("/").filter((part) => part && part !== ".");
-  const identities: string[] = [`.:${filesystemMutationKey(root)}`];
+  const identities: string[] = [`.:${filesystemDirectoryIdentityKey(root)}`];
   let current = root;
   for (const part of parts) {
     current = join(current, part);
@@ -88,7 +98,7 @@ function assertPlainParentChain(root: string, path: string): string {
     if (realpathSync(current) !== current) {
       throw new Error(`Source path ancestor resolves outside its lexical directory: ${normalizedRelative(root, current)}`);
     }
-    identities.push(`${normalizedRelative(root, current)}:${filesystemMutationKey(current)}`);
+    identities.push(`${normalizedRelative(root, current)}:${filesystemDirectoryIdentityKey(current)}`);
   }
   return identities.join("|");
 }
@@ -299,8 +309,8 @@ function publicEntries(entries: ScannedEntry[]): SourceCapsuleEntry[] {
 
 function sourceStateDigest(root: string, entries: ScannedEntry[]): string {
   return canonicalJsonDigest({
-    root: filesystemMutationKey(root),
-    directories: visibleSourceDirectories(root).map((path) => ({ path, mutationKey: filesystemMutationKey(resolve(root, path)) })),
+    root: filesystemDirectoryIdentityKey(root),
+    directories: visibleSourceDirectories(root).map((path) => ({ path, mutationKey: filesystemDirectoryIdentityKey(resolve(root, path)) })),
     entries: entries.map((entry) => ({ path: entry.path, mutationKey: entry.mutationKey })),
   });
 }
@@ -461,7 +471,15 @@ function watchDirectories(rootInput: string, directories: string[], ignored: (pa
 
 export function watchOriginalSource(capsule: SourceCapsule): MutationMonitor {
   const directories = visibleSourceDirectories(capsule.sourceRoot);
-  return watchDirectories(capsule.sourceRoot, directories, isExcluded);
+  return watchDirectories(capsule.sourceRoot, directories, (path) => {
+    // macOS can report a descendant write under an excluded Keyoku ledger as
+    // the coarse root-level name `.keyoku`. Dedicated watchers on `.keyoku`
+    // and its visible source directories still observe project/outcome edits
+    // precisely, while exact digest/state checks cover lasting changes. Ignore
+    // only this ambiguous ancestor notification so Keyoku's own Factfile and
+    // session writes cannot make an otherwise stable proof fail at random.
+    return path === ".keyoku" || isExcluded(path);
+  });
 }
 
 async function settleWatcher(): Promise<void> {
