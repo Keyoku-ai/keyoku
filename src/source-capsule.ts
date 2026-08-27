@@ -66,7 +66,12 @@ function digest(bytes: Uint8Array): string {
 
 function filesystemMutationKey(path: string): string {
   const stat = lstatSync(path, { bigint: true });
-  return [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+  // ctime is not part of the captured source identity. APFS can advance it for
+  // read-only directory walks (notably Node's test discovery) even when bytes,
+  // mode, size, inode, and mtime are unchanged. Including it makes a clean
+  // verifier look like a source writer. Writes and mutate-restore attempts are
+  // still covered by exact bytes, inode/mode/size/mtime, and the live watcher.
+  return [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeNs].join(":");
 }
 
 function assertPlainParentChain(root: string, path: string): string {
@@ -386,16 +391,18 @@ function scanMaterializedTree(rootInput: string): { digest: string; mutationDige
       if (isExcluded(path)) continue;
       const stat = lstatSync(absolute);
       const mode = stat.mode & 0o7777;
-      mutationRecords.push({ path, mutationKey: filesystemMutationKey(absolute) });
       if (stat.isDirectory()) {
         records.push({ path, kind: "directory", mode });
         visit(absolute);
+        mutationRecords.push({ path, mutationKey: filesystemMutationKey(absolute) });
       } else if (stat.isSymbolicLink()) {
         const { bytes } = readSymlinkTarget(absolute);
         records.push({ path, kind: "symlink", mode, byteLength: bytes.length, digest: digest(bytes) });
+        mutationRecords.push({ path, mutationKey: filesystemMutationKey(absolute) });
       } else if (stat.isFile()) {
         const bytes = readRegularFileNoFollow(absolute);
         records.push({ path, kind: "file", mode, byteLength: bytes.length, digest: digest(bytes) });
+        mutationRecords.push({ path, mutationKey: filesystemMutationKey(absolute) });
       } else throw new Error(`Disposable checkout contains an unsupported filesystem entry: ${path}`);
     }
   };

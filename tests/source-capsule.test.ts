@@ -157,6 +157,25 @@ describe("content-addressed source capsules", () => {
     }
   });
 
+  it("does not mistake a read-only Node test run for source mutation", async () => {
+    const root = repository();
+    writeFileSync(join(root, "package.json"), '{"type":"module"}\n', "utf8");
+    writeFileSync(join(root, "value.js"), "export const value = 42;\n", "utf8");
+    writeFileSync(join(root, "value.test.js"), "import assert from 'node:assert/strict';\nimport test from 'node:test';\nimport { value } from './value.js';\ntest('reads source', () => assert.equal(value, 42));\n", "utf8");
+    execFileSync("git", ["add", "package.json", "value.js", "value.test.js"], { cwd: root });
+    execFileSync("git", ["commit", "-qm", "add read-only test"], { cwd: root });
+
+    const capsule = createSourceCapsule(root);
+    try {
+      const result = await runCommandInSourceCapsule(capsule, { kind: "command", run: "node --test", parse: "text" });
+      expect(result.exitCode).toBe(0);
+      expect(String(result.output)).toContain("pass 1");
+      assertSourceCapsuleCurrent(capsule);
+    } finally {
+      disposeSourceCapsule(capsule);
+    }
+  });
+
   it("detects concurrent mutate-restore of the original source", async () => {
     const root = repository();
     mkdirSync(join(root, "empty-directory"));
