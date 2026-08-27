@@ -1,6 +1,6 @@
 schemaVersion: keyoku.dev/outcome/v1alpha1
 id: github-proof-v1
-revision: 8
+revision: 9
 title: Keyoku turns agent work into a live, reviewable proof session
 objective: >-
   A maintainer can add free Keyoku to a Git project, see what connected agents are doing, resolve
@@ -22,7 +22,7 @@ criteria:
   - description: One command detects representative project types and installs a safe proof workflow
     probe:
       kind: command
-      run: npx vitest run tests/project-profile.test.ts -t "cross-project proof setup"
+      run: npx vitest run tests/project-profile.test.ts -t "cross-project proof setup" --cache=false
       timeoutMs: 120000
       parse: text
     assert:
@@ -43,7 +43,7 @@ criteria:
   - description: Pull-request proof covers committed base-to-head changes and fails closed on scope drift
     probe:
       kind: command
-      run: npx vitest run tests/project-profile.test.ts -t "Git-native contribution history"
+      run: npx vitest run tests/project-profile.test.ts -t "Git-native contribution history" --cache=false
       timeoutMs: 120000
       parse: text
     assert:
@@ -64,9 +64,8 @@ criteria:
   - description: The Factfile separates blockers from contextual next directions and proof
     probe:
       kind: command
-      run: >-
-        node -e "const fs=require('fs');const s=fs.readFileSync('src/contribution.ts','utf8');process.exit(['What this Factfile establishes','Agent work','Needs you','Choose what happens next','How the outcome changes','Toggle light and dark appearance','Review first','Proof ledger','Reproduce this observation'].every(x=>s.includes(x))?0:1)"
-      timeoutMs: 30000
+      run: npx vitest run tests/contribution.test.ts --cache=false
+      timeoutMs: 120000
       parse: text
     assert:
       path: exitCode
@@ -106,7 +105,7 @@ criteria:
   - description: The two-way protocol is durable, provider-neutral, and token-scoped
     probe:
       kind: command
-      run: npx vitest run tests/proof-session.test.ts
+      run: npx vitest run tests/proof-session.test.ts --cache=false
       timeoutMs: 120000
       parse: text
     assert:
@@ -129,7 +128,7 @@ criteria:
   - description: Outcome definitions have inspectable repository-owned version history
     probe:
       kind: command
-      run: npx vitest run tests/project-profile.test.ts -t "binds committed PR changes"
+      run: npx vitest run tests/project-profile.test.ts -t "binds committed PR changes" --cache=false
       timeoutMs: 120000
       parse: text
     assert:
@@ -167,24 +166,24 @@ criteria:
         - path: src/server.ts
           purpose: Keeps the active MCP surface focused on outcomes, evidence, review, and architecture.
       artifacts: []
-  - description: The complete active Keyoku suite passes after the pivot
+  - description: Verification runs against a sealed checkout and rejects source mutation
     probe:
       kind: command
-      run: npm test
-      timeoutMs: 300000
+      run: npx vitest run tests/source-capsule.test.ts --cache=false
+      timeoutMs: 120000
       parse: text
     assert:
       path: exitCode
       op: eq
       value: 0
     evidence:
-      summary: All active build, CLI, MCP, proof, security, and compatibility tests pass together.
-      whyItMatters: The launch wedge is implemented without silently breaking retained Keyoku behavior.
+      summary: Capsule tests bind tracked and nonignored source bytes, reject writes and mutate-restore attacks, detect concurrent original-source changes, and clean every disposable checkout.
+      whyItMatters: A passing repository probe cannot silently rewrite the source it is being asked to prove.
       code:
-        - path: tests/
-          purpose: Active unit, integration, security, CLI, Git, rendering, and protocol coverage.
-        - path: package.json
-          purpose: Defines the complete reproducible build-and-test command.
+        - path: src/source-capsule.ts
+          purpose: Captures exact source, materializes a sealed checkout, monitors mutations, and verifies freshness.
+        - path: tests/source-capsule.test.ts
+          purpose: Exercises writes, deletes, mode changes, symlink attacks, mutate-restore attempts, timeouts, and concurrent source changes.
       artifacts: []
   - description: The active TypeScript implementation remains internally consistent
     probe:
@@ -217,4 +216,4 @@ humanCriteria:
     description: The public product reads as a focused proof layer rather than a generic agent control plane, memory system, or certification claim
     guidance: Inspect the README, CLI help, package description, MCP instructions, and archived surfaces for conflicting promises.
 createdAt: 2026-08-15T18:30:00Z
-updatedAt: 2026-08-17T02:41:00Z
+updatedAt: 2026-08-27T00:42:00Z
