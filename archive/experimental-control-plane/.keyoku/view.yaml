@@ -1,0 +1,36 @@
+schemaVersion: keyoku.dev/project-view/v1alpha1
+template: convergence-thread
+fields:
+  exchange.kicker:
+    value: Live exchange
+    description: Short label above the causal project summary.
+  exchange.title:
+    value: Your intent, its effect, and the proof.
+    description: Human-facing explanation of the default project lens.
+  exchange.summary:
+    value: One causal sentence—not an activity feed.
+    description: Why this view exists.
+  composer.placeholder:
+    value: Tell the project what you need…
+    description: Prompt for human-to-agent intervention.
+  product.title:
+    value: Keyoku is the interface, not another coding agent.
+    description: Current product boundary shown in the human lane.
+  product.summary:
+    value: Execution stays replaceable. Project understanding and proof stay portable.
+    description: Consequence of the product boundary.
+  authority.title:
+    value: Agents propose and act within rails. People own consequential judgment.
+    description: Current human accountability rule.
+  authority.summary:
+    value: Routine uncertainty does not become an approval request.
+    description: Consequence of the authority rule.
+  architecture.kicker:
+    value: System view
+    description: Label above the architecture projection.
+  architecture.title:
+    value: The codebase, as a current system.
+    description: Architecture projection heading.
+  architecture.summary:
+    value: Deterministic repository observations keep the map honest. The Project Steward proposes semantic changes with provenance instead of silently redrawing the system.
+    description: Architecture trust model.

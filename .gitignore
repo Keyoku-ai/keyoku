@@ -8,3 +8,23 @@ dist/
 .DS_Store
 *.tmp
 *.tgz
+.keyoku/runtime/
+.keyoku/contributions/
+.playwright-cli/
+output/
+.vitest-results.json
+preview-factfile.html
+
+# Local product/market working papers. Public documentation belongs in the
+# README, FACTFILE-STANDARD, GITHUB, SECURITY, and contributor guides.
+docs/KEYOKU-PROOF-V1.md
+docs/KEYOKU-CONTRIBUTION-GATE.html
+
+# Retired product explorations are kept locally for reference. Do not publish
+# internal briefs or obsolete UI captures with the generic proof harness.
+archive/experimental-control-plane/docs/
+docs/artifacts/factfile-human-review.png
+docs/artifacts/keyoku-control-plane-desktop.png
+docs/artifacts/keyoku-control-plane-mobile.png
+docs/artifacts/keyoku-intervention-channel-desktop.png
+docs/artifacts/keyoku-intervention-channel-mobile.png

@@ -8,7 +8,7 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import { Store } from "../src/store.js";
 
-const ENTRY = join(__dirname, "..", "dist", "index.js");
+const ENTRY = join(__dirname, "..", "dist", "legacy-cli.js");
 const home = mkdtempSync(join(tmpdir(), "keyoku-context-"));
 
 afterAll(() => rmSync(home, { recursive: true, force: true }));

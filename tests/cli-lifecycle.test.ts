@@ -8,7 +8,8 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import { Store } from "../src/store.js";
 
-const ENTRY = join(__dirname, "..", "dist", "index.js");
+// Compatibility behavior remains regression-tested, but is not the v3 package entrypoint.
+const ENTRY = join(__dirname, "..", "dist", "legacy-cli.js");
 const home = mkdtempSync(join(tmpdir(), "keyoku-cli-life-"));
 
 afterAll(() => rmSync(home, { recursive: true, force: true }));
@@ -28,49 +29,6 @@ function cli(args: string[], input?: string): { out: string; code: number } {
 }
 
 const recordInput = JSON.stringify({ tool_name: "Bash", tool_input: { command: "echo hi" }, session_id: "s" });
-
-describe("CLI Omnigent drive respects the connector autonomy ladder", () => {
-  const seedOmnigent = (h: string, autonomy: "approve" | "autonomous") => {
-    const store = new Store(h);
-    store.saveConnector({
-      name: "omnigent",
-      transport: { type: "openapi", specUrl: "http://127.0.0.1:1/openapi.json", baseUrl: "http://127.0.0.1:1", allowMutating: true, auth: { kind: "none" } },
-      autonomy,
-      addedAt: new Date().toISOString(),
-    } as any);
-  };
-  const run = (h: string, args: string[]): { out: string; err: string; code: number } => {
-    try {
-      const out = execFileSync(process.execPath, [ENTRY, ...args], {
-        env: { ...process.env, KEYOKU_HOME: h } as NodeJS.ProcessEnv,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      return { out, err: "", code: 0 };
-    } catch (e) {
-      const x = e as { stdout?: string; stderr?: string; status?: number };
-      return { out: x.stdout ?? "", err: x.stderr ?? "", code: x.status ?? 1 };
-    }
-  };
-
-  it("`keyoku converge` refuses when the omnigent connector is not autonomous", () => {
-    const h = mkdtempSync(join(tmpdir(), "keyoku-cli-conv-"));
-    seedOmnigent(h, "approve");
-    const r = run(h, ["converge", "--goal", "ship-it", "--session", "sess_abc"]);
-    expect(r.code).not.toBe(0);
-    expect(r.err + r.out).toContain("autonomy is 'approve'");
-    rmSync(h, { recursive: true, force: true });
-  });
-
-  it("`keyoku guardrails` refuses when the omnigent connector is not autonomous", () => {
-    const h = mkdtempSync(join(tmpdir(), "keyoku-cli-guard-"));
-    seedOmnigent(h, "approve");
-    const r = run(h, ["guardrails", "--goal", "ship-it", "--session", "sess_abc"]);
-    expect(r.code).not.toBe(0);
-    expect(r.err + r.out).toContain("autonomy is 'approve'");
-    rmSync(h, { recursive: true, force: true });
-  });
-});
 
 describe("pause / resume", () => {
   it("pause stops recording; resume restores it", () => {

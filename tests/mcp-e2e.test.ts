@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,12 +7,13 @@ import { createInterface } from "node:readline";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-// Protocol-level regression lock: drives the BUILT server (dist/index.js) over real
+// Protocol-level regression lock for the compatibility server. Public v3 MCP
+// inventory is locked separately in public-surface.test.ts.
 // stdio JSON-RPC, exercising the build-then-verify → reuse → pitfalls loop end to end.
 // `npm test` runs `tsup` first, so dist is fresh. Unit tests cover the engine; this
 // covers the wire protocol an actual MCP client (Claude Code / Cursor / Codex) speaks.
 
-const dist = fileURLToPath(new URL("../dist/index.js", import.meta.url));
+const dist = fileURLToPath(new URL("../dist/legacy-cli.js", import.meta.url));
 
 function makeClient(home: string) {
   const child = spawn(process.execPath, [dist], {
@@ -88,8 +89,8 @@ describe("MCP protocol e2e — muscle memory", () => {
 
   it("redacts secrets in activity_record and goal_record before they hit the store", async () => {
     await client.tool("activity_record", {
-      summary: "export GITHUB_TOKEN=ghp_supersecretvalue123 && deploy",
-      detail: "curl -H 'Authorization: Bearer eyJsecretjwtpayload.aaa.bbb' https://api",
+      summary: "export GITHUB_TOKEN=ghp_supersecretvalue123 && deploy", // gitleaks:allow -- synthetic redaction fixture
+      detail: "curl -H 'Authorization: Bearer eyJsecretjwtpayload.aaa.bbb' https://api", // gitleaks:allow -- synthetic redaction fixture
       type: "manual",
     });
     const list = await client.tool("activity_list", { limit: 5 });
@@ -110,6 +111,32 @@ describe("MCP protocol e2e — muscle memory", () => {
     });
     const g = await client.tool("goal_get", { goal: "e2e-redact" });
     expect(JSON.stringify(g)).not.toContain("sk-live-shouldnotleak");
+  });
+
+  it("exposes the harness-neutral Pulse primitives without a delivery side effect", async () => {
+    const listed = await client.rpc("tools/list", {});
+    const names = listed.result.tools.map((tool: { name: string }) => tool.name);
+    expect(names).toEqual(expect.arrayContaining([
+      "pulse_event_ingest",
+      "pulse_checkpoint_publish",
+      "pulse_status",
+      "pulse_dispatch_plan",
+      "pulse_projection_render",
+    ]));
+    expect(names).not.toContain("pulse_send");
+  });
+
+  it("exposes the provider-neutral iteration protocol without an agent runner or human auto-approval", async () => {
+    const listed = await client.rpc("tools/list", {});
+    const names = listed.result.tools.map((tool: { name: string }) => tool.name);
+    expect(names).toEqual(expect.arrayContaining([
+      "iteration_start",
+      "iteration_status",
+      "iteration_next",
+      "iteration_checkpoint",
+    ]));
+    expect(names).not.toContain("iteration_accept");
+    expect(names).not.toContain("iteration_run_agent");
   });
 
   it("iterative run: captures step + pitfall, then reuses both on a similar goal", async () => {
@@ -177,5 +204,94 @@ describe("MCP protocol e2e — muscle memory", () => {
     const after = await client.tool("workflow_list", {});
     const wf = after.workflows.find((w: any) => w.slug === "e2e-bv");
     expect(wf?.steps.map((s: any) => s.summary)).toEqual(["Dated the changelog section"]);
+  });
+
+  it("goal_update edits criteria in place over the wire — no need to fork a new goal (B2)", async () => {
+    await client.tool("goal_create", {
+      objective: "criteria can be refined in place",
+      slug: "e2e-criteria-edit",
+      criteria: crit("nope", "ready"),
+    });
+
+    const preConverge = await client.tool("goal_assess", { goal: "e2e-criteria-edit" });
+    expect(preConverge.converged).toBe(false);
+
+    // Fix the wrong criterion in place via editCriteria — the whole point of B2.
+    const edited = await client.tool("goal_update", {
+      goal: "e2e-criteria-edit",
+      editCriteria: [
+        {
+          id: "c1",
+          probe: { kind: "command", run: "echo nope", parse: "text" },
+          assert: { op: "contains", value: "nope" },
+        },
+      ],
+    });
+    expect(edited.goal.criteria).toBe(1);
+    expect(edited.criteria[0].id).toBe("c1");
+    expect(edited.criteria[0].assert).toEqual({ op: "contains", value: "nope" });
+
+    const converged = await client.tool("goal_assess", { goal: "e2e-criteria-edit" });
+    expect(converged.converged).toBe(true);
+
+    // Add a criterion post-convergence: must reopen the goal, not silently stay converged.
+    const reopened = await client.tool("goal_update", {
+      goal: "e2e-criteria-edit",
+      addCriteria: [
+        {
+          description: "a second thing",
+          probe: { kind: "command", run: "echo ready", parse: "text" },
+          assert: { op: "contains", value: "ready" },
+        },
+      ],
+    });
+    expect(reopened.goal.status).toBe("active");
+    expect(reopened.goal.criteria).toBe(2);
+
+    const got = await client.tool("goal_get", { goal: "e2e-criteria-edit" });
+    expect(got.goal.criteria.map((c: any) => c.id)).toEqual(["c1", "c2"]);
+    // The edit landed in the trace/history so the learning loop sees it.
+    expect(got.trace.some((r: any) => r.source === "system" && r.tool === "goal_update")).toBe(
+      true,
+    );
+
+    // Plain goal_update calls with no criteria args are unaffected (backward compat).
+    const plain = await client.tool("goal_update", {
+      goal: "e2e-criteria-edit",
+      objective: "criteria can be refined in place (renamed)",
+    });
+    expect(plain.criteria).toBeUndefined();
+    expect(plain.goal.objective).toBe("criteria can be refined in place (renamed)");
+  });
+
+  it("stamps `project` at goal_create from the server's own cwd (belay ADR-35 cross-project scoping), surfaced in goal_get and goal_list", async () => {
+    // The child server was spawned with no explicit `cwd` override, so it
+    // inherits this test process's cwd — the package root, a real git repo.
+    const expectedRoot = execSync("git rev-parse --show-toplevel", { encoding: "utf8" }).trim();
+
+    await client.tool("goal_create", {
+      objective: "cross-project scoping stamp",
+      slug: "e2e-project-stamp",
+      criteria: crit("ready", "ready"),
+    });
+
+    const got = await client.tool("goal_get", { goal: "e2e-project-stamp" });
+    expect(got.goal.project).toBe(expectedRoot);
+    expect(typeof got.goal.cwd).toBe("string");
+
+    const listed = await client.tool("goal_list", { status: "active" });
+    const summary = listed.goals.find((g: any) => g.slug === "e2e-project-stamp");
+    expect(summary.project).toBe(expectedRoot);
+
+    // An explicit cwd wins over the server's own — the escape hatch for a
+    // caller that knows better than the server process's cwd.
+    await client.tool("goal_create", {
+      objective: "cross-project scoping explicit cwd",
+      slug: "e2e-project-stamp-explicit",
+      criteria: crit("ready", "ready"),
+      cwd: "/tmp/not-this-repo",
+    });
+    const got2 = await client.tool("goal_get", { goal: "e2e-project-stamp-explicit" });
+    expect(got2.goal.project).not.toBe(expectedRoot);
   });
 });

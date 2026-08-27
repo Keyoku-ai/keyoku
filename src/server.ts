@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
@@ -11,7 +12,44 @@ import {
   gateCall,
 } from "./approvals.js";
 import { detectPatterns, draftStep, enrichWithEntities, redactSecrets, type ActivitySuggestion } from "./activity.js";
+import { proposeArchitectureChange, scanArchitecture } from "./architecture.js";
 import { Brain } from "./brain.js";
+import {
+  ActorSchema,
+  findProjectRoot,
+  listOutcomes,
+  loadContribution,
+  loadProject,
+  reviewContribution,
+  runGate,
+  startContribution,
+} from "./contribution.js";
+import {
+  DecisionOptionSchema,
+  DirectionProposalSchema,
+  acknowledgeInstruction,
+  heartbeatAgent,
+  nextInstruction,
+  readProofSession,
+  reportWork,
+  proposeDirection,
+  requestDecision,
+} from "./proof-session.js";
+import {
+  checkpointIteration,
+  currentIterationInstruction,
+  readIteration,
+  startIteration,
+} from "./iteration.js";
+import {
+  appendPulseEvent,
+  planPulseDispatch,
+  readPulseEvents,
+  renderPulseProjection,
+  replayPulseEvents,
+  sealPulseEvent,
+  verifyAndSealLocalCheckpoint,
+} from "./pulse.js";
 import { loadSurfaced, saveSurfaced } from "./nudge.js";
 import { redactConnector } from "./connectors.js";
 import { autoRecordToFocusGoal } from "./engine.js";
@@ -19,21 +57,15 @@ import type { Harness } from "./engine.js";
 import { executeBashStep, executeMcpStep } from "./executor.js";
 import { buildCreateGuidance, buildRecordGuidance, PROTOCOL } from "./guidance.js";
 import { relevantPatterns, runLearning } from "./learn.js";
-import {
-  driveToConvergence,
-  installPolicies,
-  omnigentUserMessageEvent,
-} from "./omnigent-guardrails.js";
-import { compileConstraintsToPolicies } from "./policy-compiler.js";
 import { refineSuggestions } from "./refine.js";
 import { observationDigest, stateTransitions } from "./observe.js";
-import { assertOmnigentDriveAuthorized, runGoalOnOmnigent } from "./run.js";
 import { resolveSlmFromEnv } from "./slm.js";
 import { newId, slugify } from "./store.js";
 import {
   ActionResultSchema,
   AutonomySchema,
   ConnectorTransportSchema,
+  CriterionEditSchema,
   CriterionInputSchema,
   effectiveStability,
   type ActivityEvent,
@@ -82,28 +114,15 @@ function goalSummary(goal: Goal) {
     iterations: `${goal.usedIterations}/${goal.maxIterations}`,
     lastAssessedAt: goal.lastAssessedAt,
     convergedAt: goal.convergedAt,
+    // Cross-project scoping (ADR-35). Absent on goals stamped before this
+    // field existed and never re-focused since — see CHANGELOG.
+    ...(goal.project ? { project: goal.project } : {}),
   };
 }
 
 const GOAL_REF = z
   .string()
   .describe("Goal slug or id (slugs are listed by goal_list).");
-
-function unmetCriteria(report: Awaited<ReturnType<Harness["assess"]>>): string[] {
-  return report.criteria
-    .filter((criterion) => !criterion.pass)
-    .map((criterion) => {
-      const detail = criterion.error ? ` — ${criterion.error}` : "";
-      return `[${criterion.id}] ${criterion.description}${detail}`;
-    });
-}
-
-function parseOmnigentTarget(value: string | undefined): { agentName?: string } | undefined {
-  const match = /^omnigent(?::(.+))?$/.exec(value ?? "");
-  if (!match) return undefined;
-  const agentName = match[1]?.trim();
-  return agentName ? { agentName } : {};
-}
 
 /**
  * Criteria can carry secrets (http probe auth headers). The store keeps the
@@ -124,6 +143,7 @@ function redactCriteria(criteria: Criterion[]): Criterion[] {
         }
       : c,
   );
+
 }
 
 /** Fill {{placeholders}}; unresolved keys are collected, not guessed. */
@@ -174,6 +194,566 @@ export function buildServer(harness: Harness): McpServer {
   const logAudit = (op: string, target: string | undefined, summary: string, ok: boolean) =>
     audit(harness.store, { actor: "agent", op, ...(target ? { target } : {}), summary, ok });
 
+  // ----- repository outcomes and contributions -----
+
+  // The experimental live agent-control surface was archived during the
+  // proof-first pivot. V1 keeps MCP focused on repository outcomes, evidence,
+  // human review, and the architecture projection used by Factfiles.
+
+  server.registerTool(
+    "architecture_scan",
+    {
+      title: "Scan the live project architecture",
+      description:
+        "Return the current architecture projection by combining the repository's declared semantic components with deterministic Git and filesystem observations. Use before substantial work and when architecture drift is suspected.",
+      inputSchema: { cwd: z.string().optional().describe("A path inside the project (default: server cwd).") },
+    },
+    async ({ cwd }) => {
+      try {
+        const root = findProjectRoot(cwd);
+        return json({ root, architecture: scanArchitecture(root) });
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "architecture_propose",
+    {
+      title: "Propose an architecture graph change",
+      description:
+        "Propose a semantic architecture update without silently rewriting declared project truth. Deterministic file and Git state update automatically; component meaning and relationships remain attributed proposals until policy or a human accepts them.",
+      inputSchema: {
+        summary: z.string().min(1).max(500),
+        rationale: z.string().min(1).max(2_000),
+        operations: z.array(z.object({
+          op: z.enum(["add", "update", "remove"]),
+          target: z.string().min(1).max(500),
+          value: z.unknown().optional(),
+        })).min(1).max(100),
+        actorId: z.string().min(1).max(200),
+        actorName: z.string().min(1).max(200),
+        harness: z.string().max(200).optional(),
+        model: z.string().max(200).optional(),
+        confidence: z.number().min(0).max(1),
+        cwd: z.string().optional().describe("A path inside the project (default: server cwd)."),
+      },
+    },
+    async ({ summary, rationale, operations, actorId, actorName, harness, model, confidence, cwd }) => {
+      try {
+        const root = findProjectRoot(cwd);
+        const proposal = proposeArchitectureChange({
+          root,
+          summary,
+          rationale,
+          operations,
+          actor: { id: actorId, name: actorName, ...(harness ? { harness } : {}), ...(model ? { model } : {}) },
+          confidence,
+        });
+        logAudit("architecture_propose", proposal.id, `${summary} (${confidence})`, true);
+        return json({ root, proposal });
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "project_inspect",
+    {
+      title: "Inspect the current Keyoku project",
+      description:
+        "Read the portable .keyoku project contract and list its versioned outcomes. Use this before starting substantial work in a repository that has adopted Keyoku.",
+      inputSchema: {
+        cwd: z.string().optional().describe("A path inside the project (default: server cwd)."),
+      },
+    },
+    async ({ cwd }) => {
+      try {
+        const root = findProjectRoot(cwd);
+        return json({ root, project: loadProject(root), outcomes: listOutcomes(root) });
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "outcome_list",
+    {
+      title: "List project outcomes",
+      description: "List the human-owned, versioned definitions of done under .keyoku/outcomes.",
+      inputSchema: {
+        cwd: z.string().optional().describe("A path inside the project (default: server cwd)."),
+      },
+    },
+    async ({ cwd }) => {
+      try {
+        const root = findProjectRoot(cwd);
+        const outcomes = listOutcomes(root);
+        return json({ root, count: outcomes.length, outcomes });
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "contribution_start",
+    {
+      title: "Start an accountable contribution",
+      description:
+        "Bind new work to an exact outcome revision and Git base. Record the human or agent doing the work; agents should include their harness, model, and accountable ownerId.",
+      inputSchema: {
+        outcome: z.string().min(1).describe("Outcome id from outcome_list."),
+        title: z.string().optional(),
+        actor: ActorSchema.optional(),
+        cwd: z.string().optional().describe("A path inside the project (default: server cwd)."),
+      },
+    },
+    async ({ outcome, title, actor, cwd }) => {
+      try {
+        const root = findProjectRoot(cwd);
+        const contribution = startContribution({ root, outcomeId: outcome, title, actor });
+        logAudit("contribution_start", contribution.id, contribution.title, true);
+        return json({
+          root,
+          contribution,
+          guidance: `Work toward outcome '${contribution.outcomeId}'. Keep work status current, then use contribution_propose_directions with evidence-grounded next moves before the final contribution_gate for contribution '${contribution.id}'. A human must review the resulting Factfile.`,
+        });
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "contribution_get",
+    {
+      title: "Get contribution status",
+      description: "Read an accountable contribution's outcome revision, Git base, actors, and current gate state.",
+      inputSchema: {
+        contribution: z.string().min(1),
+        cwd: z.string().optional().describe("A path inside the project (default: server cwd)."),
+      },
+    },
+    async ({ contribution, cwd }) => {
+      try {
+        const root = findProjectRoot(cwd);
+        return json({ root, contribution: loadContribution(root, contribution), session: readProofSession(root, contribution) });
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "contribution_report_work",
+    {
+      title: "Report agent work to the live Factfile",
+      description: "Upsert one task-level status item. Reported activity coordinates humans and agents; it is never treated as proof of completion.",
+      inputSchema: {
+        contribution: z.string().min(1),
+        id: z.string().min(1),
+        title: z.string().min(1),
+        detail: z.string().optional(),
+        status: z.enum(["queued", "working", "blocked", "done"]),
+        actorId: z.string().min(1),
+        actorName: z.string().min(1),
+        harness: z.string().optional(),
+        model: z.string().optional(),
+        cwd: z.string().optional(),
+      },
+    },
+    async ({ contribution, id, title, detail, status, actorId, actorName, harness, model, cwd }) => {
+      try {
+        const root = findProjectRoot(cwd);
+        const item = reportWork(root, contribution, { id, title, ...(detail ? { detail } : {}), status, actorId });
+        heartbeatAgent(root, contribution, { actorId, name: actorName, ...(harness ? { harness } : {}), ...(model ? { model } : {}), status: status === "working" ? "working" : status === "blocked" ? "waiting" : "idle", currentWorkId: item.id });
+        logAudit("contribution_report_work", contribution, `${item.id}: ${item.status}`, true);
+        return json({ item, session: readProofSession(root, contribution), guidance: "Keep this status current. Completion still requires contribution_gate evidence." });
+      } catch (err) { return fail(err); }
+    },
+  );
+
+  server.registerTool(
+    "contribution_propose_directions",
+    {
+      title: "Publish contextual next directions",
+      description:
+        "Before the final gate, synthesize 1-4 evidence-grounded next moves for the human. Use the whole outcome, changed-source scope, work history, architecture, proof results, and unresolved judgments. Provide concise rationale, evidence references, consequences, and tradeoffs; never expose hidden chain-of-thought or present speculation as fact.",
+      inputSchema: {
+        contribution: z.string().min(1),
+        proposedBy: z.string().min(1),
+        directions: z.array(DirectionProposalSchema.omit({ createdAt: true, proposedBy: true })).min(1).max(4),
+        cwd: z.string().optional(),
+      },
+    },
+    async ({ contribution, proposedBy, directions, cwd }) => {
+      try {
+        const root = findProjectRoot(cwd);
+        const proposed = directions.map((direction) => proposeDirection(root, contribution, { ...direction, proposedBy }));
+        logAudit("contribution_propose_directions", contribution, `${proposed.length} contextual next directions`, true);
+        return json({
+          directions: proposed,
+          session: readProofSession(root, contribution),
+          guidance: "These directions will appear in the next Factfile. Run contribution_gate after all work and proposals are current; the first proposal is presented as the agent recommendation.",
+        });
+      } catch (err) { return fail(err); }
+    },
+  );
+
+  server.registerTool(
+    "contribution_request_decision",
+    {
+      title: "Ask a human for a blocking decision",
+      description: "Create a structured Needs you request only when progress requires accountable product, risk, scope, or preference judgment.",
+      inputSchema: {
+        contribution: z.string().min(1),
+        id: z.string().optional(),
+        title: z.string().min(1),
+        agentIntent: z.string().min(1),
+        blocker: z.string().min(1),
+        whyHuman: z.string().min(1),
+        options: z.array(DecisionOptionSchema).min(1).max(5).describe("Each option should explain the direction, executable instruction, expected outcome effect, deeper context, and meaningful tradeoffs."),
+        recommendedOptionId: z.string().optional(),
+        noResponse: z.string().min(1),
+        requestedBy: z.string().min(1),
+        cwd: z.string().optional(),
+      },
+    },
+    async ({ contribution, id, title, agentIntent, blocker, whyHuman, options, recommendedOptionId, noResponse, requestedBy, cwd }) => {
+      try {
+        const root = findProjectRoot(cwd);
+        const request = requestDecision(root, contribution, { ...(id ? { id } : {}), title, agentIntent, blocker, whyHuman, options, ...(recommendedOptionId ? { recommendedOptionId } : {}), noResponse, requestedBy });
+        logAudit("contribution_request_decision", contribution, request.title, true);
+        return json({ request, guidance: "Pause only the dependent work. Continue independent tasks while the human decision is pending." });
+      } catch (err) { return fail(err); }
+    },
+  );
+
+  server.registerTool(
+    "contribution_next_instruction",
+    {
+      title: "Receive the next human instruction",
+      description: "Read the oldest queued instruction addressed to this agent, including answers created from a Needs you decision.",
+      inputSchema: { contribution: z.string().min(1), actorId: z.string().min(1), actorName: z.string().min(1), harness: z.string().optional(), model: z.string().optional(), cwd: z.string().optional() },
+    },
+    async ({ contribution, actorId, actorName, harness, model, cwd }) => {
+      try {
+        const root = findProjectRoot(cwd);
+        heartbeatAgent(root, contribution, { actorId, name: actorName, ...(harness ? { harness } : {}), ...(model ? { model } : {}), status: "waiting" });
+        const instruction = nextInstruction(root, contribution, actorId);
+        return json({ instruction: instruction ?? null, guidance: instruction ? "Acknowledge after incorporating it into your plan." : "No human instruction is queued." });
+      } catch (err) { return fail(err); }
+    },
+  );
+
+  server.registerTool(
+    "contribution_ack_instruction",
+    {
+      title: "Acknowledge a human instruction",
+      description: "Confirm that an instruction was received and incorporated into the agent's working context.",
+      inputSchema: { contribution: z.string().min(1), instruction: z.string().min(1), actorId: z.string().min(1), cwd: z.string().optional() },
+    },
+    async ({ contribution, instruction, actorId, cwd }) => {
+      try {
+        const root = findProjectRoot(cwd);
+        const acknowledged = acknowledgeInstruction(root, contribution, instruction, actorId);
+        logAudit("contribution_ack_instruction", contribution, acknowledged.id, true);
+        return json({ instruction: acknowledged });
+      } catch (err) { return fail(err); }
+    },
+  );
+
+  server.registerTool(
+    "contribution_gate",
+    {
+      title: "Evaluate a contribution and render its Factfile",
+      description:
+        "Run the outcome's declared probes, fail closed on incomplete or failed evidence, bind results to the exact Git/worktree snapshot, and render JSON, Markdown, and HTML Factfiles. This executes commands declared by the repository; inspect unfamiliar outcome files before calling it.",
+      inputSchema: {
+        contribution: z.string().min(1),
+        cwd: z.string().optional().describe("A path inside the project (default: server cwd)."),
+      },
+    },
+    async ({ contribution, cwd }) => {
+      try {
+        const root = findProjectRoot(cwd);
+        const snapshot = await runGate(root, contribution);
+        logAudit("contribution_gate", contribution, `${snapshot.summary.passed}/${snapshot.summary.total} criteria passed`, snapshot.summary.verified);
+        return json({
+          snapshot,
+          factfile: join(root, ".keyoku", "contributions", contribution, "factfile.html"),
+          guidance: snapshot.state === "ready_for_review"
+            ? "All automated and declared human criteria passed for this exact snapshot. It is ready for the accountable human's acceptance, not universally correct or safe."
+            : snapshot.state === "human_review_required"
+              ? "Automated evidence passed, but required human judgments remain pending. Present the Factfile and use contribution_review for each criterion."
+              : snapshot.state === "review_blocked"
+                ? "Automated evidence passed, but a human criterion failed. Iterate on the outcome and request another named review."
+                : "Automated evidence gaps remain. Address the failed criteria, then run contribution_gate again.",
+        });
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "contribution_review",
+    {
+      title: "Record human review or exact-snapshot acceptance",
+      description:
+        "Append a review note or human acceptance to the current Factfile. The repository must still match the proven Git head and worktree digest; agents cannot act as the reviewer.",
+      inputSchema: {
+        contribution: z.string().min(1),
+        decision: z.enum(["note", "accepted"]),
+        comment: z.string().min(1),
+        criterionId: z.string().optional().describe("Optional human criterion id from the outcome."),
+        verdict: z.enum(["pass", "fail"]).optional().describe("Required with criterionId."),
+        reviewer: ActorSchema.refine((actor) => actor.kind === "human", "reviewer must be human"),
+        cwd: z.string().optional().describe("A path inside the project (default: server cwd)."),
+      },
+    },
+    async ({ contribution, decision, comment, criterionId, verdict, reviewer, cwd }) => {
+      try {
+        const root = findProjectRoot(cwd);
+        const snapshot = reviewContribution({ root, contributionId: contribution, decision, comment, criterionId, verdict, reviewer });
+        logAudit("contribution_review", contribution, `${decision} by ${reviewer.name}`, true);
+        return json({
+          snapshot,
+          factfile: join(root, ".keyoku", "contributions", contribution, "factfile.html"),
+          guidance: decision === "accepted"
+            ? "This named human accepted the exact proven snapshot. Any subsequent source change requires a new gate and acceptance."
+            : "The review note is now part of the append-only contribution history.",
+        });
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  // ----- bounded behavior iteration -----
+
+  server.registerTool(
+    "iteration_start",
+    {
+      title: "Start a bounded behavior iteration",
+      description:
+        "Evaluate a repository-owned outcome, create an exact-revision Factfile, and issue a deterministic repair instruction when evidence is missing. This executes the outcome's declared probes. It does not run an agent, decide human criteria, or accept the contribution.",
+      inputSchema: {
+        outcome: z.string().min(1),
+        maxRounds: z.number().int().min(1).max(100).optional(),
+        maxMinutes: z.number().positive().max(1440).optional(),
+        maxNoProgressRounds: z.number().int().min(1).max(20).optional(),
+        maxTokens: z.number().int().positive().optional(),
+        maxCostUsd: z.number().positive().optional(),
+        actor: ActorSchema.optional(),
+        cwd: z.string().optional().describe("A path inside the project (default: server cwd)."),
+      },
+    },
+    async ({ outcome, maxRounds, maxMinutes, maxNoProgressRounds, maxTokens, maxCostUsd, actor, cwd }) => {
+      try {
+        const root = findProjectRoot(cwd);
+        const state = await startIteration({ root, outcomeId: outcome, ...(actor ? { actor } : {}), limits: {
+          ...(maxRounds !== undefined ? { maxRounds } : {}),
+          ...(maxMinutes !== undefined ? { maxDurationMs: Math.round(maxMinutes * 60_000) } : {}),
+          ...(maxNoProgressRounds !== undefined ? { maxNoProgressRounds } : {}),
+          ...(maxTokens !== undefined ? { maxTokens } : {}),
+          ...(maxCostUsd !== undefined ? { maxCostUsd } : {}),
+        } });
+        logAudit("iteration_start", state.id, `${state.outcomeId}: ${state.status}`, true);
+        return json({ root, state, guidance: state.currentInstruction ?? state.stopReason });
+      } catch (err) { return fail(err); }
+    },
+  );
+
+  server.registerTool(
+    "iteration_status",
+    {
+      title: "Inspect a behavior iteration",
+      description: "Replay and verify the append-only iteration ledger, exact source identity, proof rounds, usage reports, and current stop condition.",
+      inputSchema: {
+        session: z.string().min(1),
+        cwd: z.string().optional(),
+      },
+    },
+    async ({ session, cwd }) => {
+      try {
+        const root = findProjectRoot(cwd);
+        return json({ root, state: readIteration(root, session) });
+      } catch (err) { return fail(err); }
+    },
+  );
+
+  server.registerTool(
+    "iteration_next",
+    {
+      title: "Get the next evidence-bounded repair instruction",
+      description: "Return the current deterministic instruction generated from failed outcome claims. The instruction is coordination, never proof of completion.",
+      inputSchema: {
+        session: z.string().min(1),
+        cwd: z.string().optional(),
+      },
+    },
+    async ({ session, cwd }) => {
+      try {
+        const root = findProjectRoot(cwd);
+        const instruction = currentIterationInstruction(root, session);
+        if (!instruction) throw new Error(`Iteration '${session}' has no pending agent instruction.`);
+        return json({ root, session, instruction });
+      } catch (err) { return fail(err); }
+    },
+  );
+
+  server.registerTool(
+    "iteration_checkpoint",
+    {
+      title: "Checkpoint agent work and re-prove behavior",
+      description:
+        "Record one idempotent agent checkpoint with explicitly sourced usage, rerun repository-owned probes against the exact current source, and either issue the next bounded instruction or stop. Never report estimated UI text as provider usage.",
+      inputSchema: {
+        session: z.string().min(1),
+        checkpointId: z.string().min(1),
+        summary: z.string().min(1),
+        inputTokens: z.number().int().nonnegative().optional(),
+        outputTokens: z.number().int().nonnegative().optional(),
+        cachedInputTokens: z.number().int().nonnegative().optional(),
+        toolCalls: z.number().int().nonnegative().optional(),
+        costUsd: z.number().nonnegative().optional(),
+        usageSource: z.enum(["agent_reported", "provider_receipt", "unknown"]).optional(),
+        cwd: z.string().optional(),
+      },
+    },
+    async ({ session, checkpointId, summary, inputTokens, outputTokens, cachedInputTokens, toolCalls, costUsd, usageSource, cwd }) => {
+      try {
+        const root = findProjectRoot(cwd);
+        const state = await checkpointIteration({
+          root,
+          sessionId: session,
+          checkpointId,
+          summary,
+          usage: {
+            inputTokens: inputTokens ?? 0,
+            outputTokens: outputTokens ?? 0,
+            cachedInputTokens: cachedInputTokens ?? 0,
+            toolCalls: toolCalls ?? 0,
+            costUsd: costUsd ?? 0,
+          },
+          usageSource: usageSource ?? "unknown",
+        });
+        logAudit("iteration_checkpoint", state.id, `${checkpointId}: ${state.status}`, true);
+        return json({ root, state, guidance: state.currentInstruction ?? state.stopReason });
+      } catch (err) { return fail(err); }
+    },
+  );
+
+  // ----- trusted progress across Factfiles -----
+
+  server.registerTool(
+    "pulse_event_ingest",
+    {
+      title: "Append a harness-neutral Pulse lifecycle event",
+      description:
+        "Validate and append one already content-digested Pulse event. Events are idempotent by id and exact digest. Activity is coordination state, never proof; use pulse_checkpoint_publish to bind local Factfile bytes before publishing a checkpoint.",
+      inputSchema: {
+        event: z.record(z.unknown()),
+        cwd: z.string().optional().describe("A path inside an initialized Keyoku project."),
+      },
+    },
+    async ({ event, cwd }) => {
+      try {
+        const root = findProjectRoot(cwd);
+        return json(appendPulseEvent(root, event));
+      } catch (err) { return fail(err); }
+    },
+  );
+
+  server.registerTool(
+    "pulse_checkpoint_publish",
+    {
+      title: "Verify local Factfiles and publish a Pulse checkpoint event",
+      description:
+        "Recompute each referenced local Factfile digest, match its exact Git head/worktree identity, seal the checkpoint, and append checkpoint_published. A digest-shaped reference alone is rejected.",
+      inputSchema: {
+        eventId: z.string().min(1),
+        checkpoint: z.record(z.unknown()),
+        cwd: z.string().optional().describe("A path inside an initialized Keyoku project."),
+      },
+    },
+    async ({ eventId, checkpoint: input, cwd }) => {
+      try {
+        const root = findProjectRoot(cwd);
+        const checkpoint = verifyAndSealLocalCheckpoint(root, input as Parameters<typeof verifyAndSealLocalCheckpoint>[1]);
+        const event = sealPulseEvent({ schemaVersion: "keyoku.dev/pulse-event/v1alpha1", id: eventId, type: "checkpoint_published", at: checkpoint.publishedAt, leaseId: checkpoint.leaseIds[0], checkpoint });
+        return json(appendPulseEvent(root, event));
+      } catch (err) { return fail(err); }
+    },
+  );
+
+  server.registerTool(
+    "pulse_status",
+    {
+      title: "Read Pulse lease and checkpoint state",
+      description: "Replay the append-only Pulse ledger into deterministic harness, agent, lease, and verified-checkpoint state.",
+      inputSchema: { cwd: z.string().optional().describe("A path inside an initialized Keyoku project.") },
+    },
+    async ({ cwd }) => {
+      try {
+        const root = findProjectRoot(cwd);
+        return json({ root, state: replayPulseEvents(readPulseEvents(root)) });
+      } catch (err) { return fail(err); }
+    },
+  );
+
+  server.registerTool(
+    "pulse_dispatch_plan",
+    {
+      title: "Plan a deterministic Pulse dispatch outcome",
+      description:
+        "Return send, defer, deduplicate, suppress, coalesce, or stale_no_send without contacting a delivery channel. Fresh working/verifying leases defer; stale or conflicting state fails closed.",
+      inputSchema: {
+        now: z.string().datetime().optional(),
+        staleAfterMs: z.number().int().nonnegative().optional(),
+        debounceMs: z.number().int().nonnegative().optional(),
+        deliveredContentDigests: z.array(z.string().regex(/^[a-f0-9]{64}$/)).optional(),
+        cwd: z.string().optional().describe("A path inside an initialized Keyoku project."),
+      },
+    },
+    async ({ cwd, ...options }) => {
+      try {
+        const root = findProjectRoot(cwd);
+        return json({ root, decision: planPulseDispatch({ events: readPulseEvents(root), ...options }) });
+      } catch (err) { return fail(err); }
+    },
+  );
+
+  server.registerTool(
+    "pulse_projection_render",
+    {
+      title: "Render one audience view from a planned Pulse snapshot",
+      description:
+        "Render stakeholder, developer, timeline, email-safe, plain-text, or JSON output only after deterministic dispatch planning. This tool does not send the result.",
+      inputSchema: {
+        audience: z.enum(["stakeholder", "developer", "timeline", "email", "text", "json"]),
+        now: z.string().datetime().optional(),
+        staleAfterMs: z.number().int().nonnegative().optional(),
+        debounceMs: z.number().int().nonnegative().optional(),
+        deliveredContentDigests: z.array(z.string().regex(/^[a-f0-9]{64}$/)).optional(),
+        cwd: z.string().optional().describe("A path inside an initialized Keyoku project."),
+      },
+    },
+    async ({ audience, cwd, ...options }) => {
+      try {
+        const root = findProjectRoot(cwd);
+        const decision = planPulseDispatch({ events: readPulseEvents(root), ...options });
+        if (!decision.snapshot || !["send", "coalesce"].includes(decision.outcome)) throw new Error(`Projection refused dispatcher outcome '${decision.outcome}' (${decision.reasonCode}).`);
+        return json({ root, decision, audience, output: renderPulseProjection(decision.snapshot, audience) });
+      } catch (err) { return fail(err); }
+    },
+  );
+
   // ----- goals -----
 
   server.registerTool(
@@ -191,11 +771,17 @@ export function buildServer(harness: Harness): McpServer {
         constraints: z.array(z.string()).optional().describe("Hard constraints the agent must respect while acting."),
         autonomy: AutonomySchema.optional().describe("Default: suggest."),
         maxIterations: z.number().int().positive().max(1000).optional().describe("Action budget before the goal blocks (default 10)."),
+        cwd: z
+          .string()
+          .optional()
+          .describe(
+            "Project dir this goal belongs to, for cross-project scoping (default: the server's own cwd). Stamped once at creation as `project` (the git repo root of this dir, or the dir itself outside a repo); pass it explicitly if the server's cwd doesn't match where the goal is really being worked.",
+          ),
       },
     },
     async (args) => {
       try {
-        const goal = harness.createGoal(args);
+        const goal = harness.createGoal({ ...args, cwd: args.cwd ?? process.cwd() });
         logAudit("goal_create", goal.slug, goal.objective.slice(0, 120), true);
         return json({
           goal: goalSummary(goal),
@@ -253,7 +839,7 @@ export function buildServer(harness: Harness): McpServer {
     {
       title: "Update a goal",
       description:
-        "Update objective, autonomy, constraints, or iteration budget. Raising maxIterations unblocks a blocked goal. Set status to 'abandoned' to retire a goal, or 'active' to resume one.",
+        "Update objective, autonomy, constraints, iteration budget, or CRITERIA. Raising maxIterations unblocks a blocked goal. Set status to 'abandoned' to retire a goal, or 'active' to resume one. Refine criteria in place — no need to create a new goal to fix a wrong/incomplete probe: addCriteria appends new ones, removeCriteriaIds drops by id (see goal_get), editCriteria patches an existing criterion's description/probe/assert by id (fields you omit are preserved). Criteria not referenced by any of these are left unchanged. Editing criteria on a converged goal reopens it to 'active' (or 'blocked' if the budget is exhausted) — its convergence was proven against the OLD criteria and no longer holds; re-run goal_assess.",
       inputSchema: {
         goal: GOAL_REF,
         objective: z.string().optional(),
@@ -261,13 +847,30 @@ export function buildServer(harness: Harness): McpServer {
         constraints: z.array(z.string()).optional(),
         maxIterations: z.number().int().positive().max(1000).optional(),
         status: z.enum(["active", "abandoned"]).optional(),
+        addCriteria: z.array(CriterionInputSchema).optional().describe("New criteria to append."),
+        removeCriteriaIds: z
+          .array(z.string())
+          .optional()
+          .describe("Ids of existing criteria to drop (see goal_get for ids)."),
+        editCriteria: z
+          .array(CriterionEditSchema)
+          .optional()
+          .describe(
+            "Patch existing criteria by id. Only the fields given (description/probe/assert) are changed; everything else on that criterion is preserved.",
+          ),
       },
     },
     async ({ goal: ref, ...patch }) => {
       try {
         const goal = harness.updateGoal(ref, patch);
+        const criteriaTouched =
+          (patch.addCriteria?.length ?? 0) + (patch.removeCriteriaIds?.length ?? 0) + (patch.editCriteria?.length ?? 0) >
+          0;
         logAudit("goal_update", goal.slug, Object.keys(patch).join(","), true);
-        return json({ goal: goalSummary(goal) });
+        return json({
+          goal: goalSummary(goal),
+          ...(criteriaTouched ? { criteria: redactCriteria(goal.criteria) } : {}),
+        });
       } catch (err) {
         return fail(err);
       }
@@ -306,120 +909,6 @@ export function buildServer(harness: Harness): McpServer {
         // workflow relevance (better than a lite model, and zero-dependency).
         return json(await harness.assess(ref, { agentJudges: true }));
       } catch (err) {
-        return fail(err);
-      }
-    },
-  );
-
-  server.registerTool(
-    "goal_converge",
-    {
-      title: "Drive an Omnigent session until a goal converges",
-      description:
-        "Install a Keyoku convergence-gate policy on a dispatched Omnigent session, then keep posting continuation messages while goal_assess reports unmet criteria. The gate is removed only after the goal's criteria pass.",
-      inputSchema: {
-        goal: GOAL_REF,
-        session: z.string().min(1).describe("Omnigent session id."),
-        maxRounds: z.number().int().positive().max(1000).optional().describe("Default: 20."),
-      },
-    },
-    async ({ goal: ref, session, maxRounds }) => {
-      try {
-        assertOmnigentDriveAuthorized(harness.connectors);
-        const result = await driveToConvergence({
-          connectors: harness.connectors,
-          sessionId: session,
-          goalSlug: ref,
-          maxRounds,
-          assess: async () => {
-            const report = await harness.assess(ref, { agentJudges: true });
-            return { converged: report.converged, unmet: unmetCriteria(report) };
-          },
-          postMessage: async (text) => {
-            const posted = await harness.connectors.callTool("omnigent", "post_event_v1_sessions__session_id__events_post", {
-              session_id: session,
-              body: omnigentUserMessageEvent(text),
-            });
-            if (posted.isError) throw new Error(`posting Omnigent continuation failed: ${posted.text}`);
-          },
-        });
-        logAudit("goal_converge", ref, `${session} → ${result.converged ? "converged" : "not converged"} in ${result.rounds} rounds`, result.converged);
-        return json(result);
-      } catch (err) {
-        logAudit("goal_converge", ref, err instanceof Error ? err.message.slice(0, 120) : String(err), false);
-        return fail(err);
-      }
-    },
-  );
-
-  server.registerTool(
-    "goal_guardrails",
-    {
-      title: "Install Omnigent policies for a goal's constraints",
-      description:
-        "Compile the goal's natural-language constraints into Omnigent runtime policies using the harness model, then install them on the given Omnigent session.",
-      inputSchema: {
-        goal: GOAL_REF,
-        session: z.string().min(1).describe("Omnigent session id."),
-      },
-    },
-    async ({ goal: ref, session }) => {
-      try {
-        assertOmnigentDriveAuthorized(harness.connectors);
-        const goal = harness.getGoal(ref);
-        const warnings: string[] = [];
-        const specs = await compileConstraintsToPolicies(goal.constraints, {
-          slm: harness.slm,
-          log: (message) => warnings.push(message),
-        });
-        const policyIds = await installPolicies(harness.connectors, session, specs);
-        logAudit("goal_guardrails", goal.slug, `${policyIds.length} polic${policyIds.length === 1 ? "y" : "ies"} installed on ${session}`, true);
-        return json({
-          goal: goal.slug,
-          session,
-          policies: policyIds,
-          specs,
-          ...(warnings.length > 0 ? { warnings } : {}),
-        });
-      } catch (err) {
-        logAudit("goal_guardrails", ref, err instanceof Error ? err.message.slice(0, 120) : String(err), false);
-        return fail(err);
-      }
-    },
-  );
-
-  server.registerTool(
-    "goal_run",
-    {
-      title: "Run a goal on an Omnigent fleet",
-      description:
-        "Create an Omnigent session, install the goal's compiled constraint policies, post the goal objective and current unmet criteria, then drive the session until goal_assess converges.",
-      inputSchema: {
-        goal: GOAL_REF,
-        on: z.string().optional().describe("Target runner, currently omnigent[:agentName]. Default: omnigent."),
-        maxRounds: z.number().int().positive().max(1000).optional().describe("Default: 20."),
-      },
-    },
-    async ({ goal: ref, on, maxRounds }) => {
-      const target = parseOmnigentTarget(on ?? "omnigent");
-      if (!target) {
-        return fail(new Error("Unsupported runner. Use on: 'omnigent' or 'omnigent:<agentName>'."));
-      }
-      try {
-        const result = await runGoalOnOmnigent({
-          engine: harness,
-          connectors: harness.connectors,
-          goalSlug: ref,
-          ...(target.agentName ? { agentName: target.agentName } : {}),
-          ...(maxRounds !== undefined ? { maxRounds } : {}),
-        });
-        const dispatch = result.dispatch
-          ? `; dispatch ${result.dispatch.agent}: ${result.dispatch.rationale.slice(0, 100)}`
-          : "";
-        logAudit("goal_run", ref, `${result.sessionId} → ${result.converged ? "converged" : "not converged"} in ${result.rounds} rounds${dispatch}`, result.converged);
-        return json(result);
-      } catch (err) {
-        logAudit("goal_run", ref, err instanceof Error ? err.message.slice(0, 120) : String(err), false);
         return fail(err);
       }
     },
@@ -467,7 +956,7 @@ export function buildServer(harness: Harness): McpServer {
     {
       title: "Focus a goal for live capture",
       description:
-        "Declare that you are now working toward this goal. While focused, every real action you take (Bash/Edit/Write/connector — not inspection) is captured into the goal's trace LIVE as a source:'activity' record, so a build-then-verify run becomes a reusable workflow without you calling goal_record by hand. Capture is scoped to this session/project so it won't absorb other work. Clears automatically when the goal converges; call goal_unfocus to stop early.",
+        "Declare that you are now working toward this goal. While focused, every real action you take (Bash/Edit/Write/connector — not inspection) is captured into the goal's trace LIVE as a source:'activity' record, so a build-then-verify run becomes a reusable workflow without you calling goal_record by hand. Capture is scoped to this session/project so it won't absorb other work. Also backfills the goal's `project` (cross-project scoping) from this cwd if it wasn't already stamped at goal_create. Clears automatically when the goal converges; call goal_unfocus to stop early.",
       inputSchema: {
         goal: GOAL_REF,
         cwd: z.string().optional().describe("Project dir to scope capture to (default: the server's cwd)."),

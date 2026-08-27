@@ -1,51 +1,45 @@
-# Publishing
+# Publishing Keyoku v3
 
-Releases are tag-driven. Pushing a `v*` tag runs `.github/workflows/release.yml`,
-which typechecks, tests, runs the muscle-memory eval (a hard quality gate), and
-then publishes to npm. The workflow is **idempotent** — it skips a version that is
-already on npm — and it **never reports a false success**: if no publish auth is
-configured it emits a loud warning and exits 0 rather than pretending it shipped.
+This repository is an unpublished v3 candidate. npm `latest` remains on the v2
+release line. A passing build or preflight is evidence for a candidate, not
+authorization to tag, push, publish, or move a dist-tag.
 
-## Cut a release
+## Candidate sequence
 
-1. Bump `version` in `package.json` and add a `CHANGELOG.md` entry.
-2. Commit, then tag and push:
-   ```bash
-   git tag vX.Y.Z
-   git push origin vX.Y.Z
-   ```
-3. Watch the **Release** workflow. Green + "Published keyoku@X.Y.Z with provenance"
-   means done.
+1. Freeze exact candidate revisions for `keyoku`, `keyoku-engine`, and
+   `keyoku-site` without changing the existing public release.
+2. Run typecheck, full tests, public-surface inventory checks, security gates,
+   clean archive install, generated-output execution, browser acceptance, and
+   the declared support matrix against those exact revisions.
+3. Generate release notes, migration guidance, checksums, SBOM/provenance where
+   supported, rollback instructions, and a revision-bound evidence manifest.
+4. Obtain the owner's explicit approval for that exact candidate and resolve
+   any licensing or repository-posture decision.
+5. Publish an alpha to the `next` dist-tag. Do not move `latest`.
+6. Verify clean installation with `npm install keyoku@next`, the bounded CLI and
+   MCP inventories, `proof demo`, Factfile stale rejection, and Pulse replay.
+7. Only after alpha acceptance, separately approve a stable v3 tag and any
+   `latest` dist-tag change.
 
-## One-time auth setup (the only manual gap)
+## Rollback
 
-The workflow code is complete; npm just needs to trust it. Pick **one**:
-
-### Option A — Trusted Publishing (recommended: tokenless + provenance)
-
-No secret to manage. On npmjs.com:
-
-> package **`keyoku`** → **Settings** → **Trusted Publishing** → add publisher:
-> repository **`Keyoku-ai/keyoku`**, workflow **`release.yml`**.
-
-The workflow already requests the OIDC token (`permissions: id-token: write`) and
-upgrades npm to a version that supports OIDC, so once this is added the next tag
-publishes automatically with provenance.
-
-### Option B — `NPM_TOKEN` secret (fallback)
-
-Create an **Automation** access token on npmjs.com and add it as the repo secret
-`NPM_TOKEN` (Settings → Secrets and variables → Actions). The workflow already
-wires `NODE_AUTH_TOKEN` from it.
-
-## Manual fallback
-
-Until A or B is configured, publish from an authenticated maintainer machine:
+The stable rollback boundary is explicit:
 
 ```bash
-npm run build
-npm publish --access public
+npm install -g keyoku@2
 ```
 
-This is safe to run anytime — npm rejects a re-publish of an existing version,
-matching the workflow's idempotency.
+Do not remove the v2 package line or overwrite an existing version. npm package
+versions are immutable; a bad v3 candidate should be deprecated or superseded,
+not silently replaced.
+
+## Authentication and provenance
+
+Trusted Publishing with npm OIDC is preferred over a long-lived token. The
+release workflow requests `id-token: write`, but credentials do not grant
+product approval. Publication automation must preserve the chosen dist-tag and
+must fail visibly when publish did not occur.
+
+Never run `npm publish`, push a release tag, or change `latest` merely because
+this document or `npm run preflight` is present. Those are separately approved
+external actions.

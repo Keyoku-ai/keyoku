@@ -1,0 +1,29 @@
+schemaVersion: keyoku.dev/roadmap/v1alpha1
+goalId: project-intelligence-v1
+updatedAt: 2026-08-12T02:10:00Z
+iteration:
+  current: 1
+  target: 4
+  confidence: medium
+  basis: One iteration each for connection, Factfile experience, durable dispatch, and developer validation.
+milestones:
+  - id: connection-truth
+    title: Persistent daemon and honest agent connection
+    status: in_progress
+    targetIteration: 1
+    proof: Stable private URL, renewable presence lease, and semantic delivery receipts.
+  - id: factfile-view
+    title: Shareable live Factfile
+    status: in_progress
+    targetIteration: 2
+    proof: Snapshot, architecture, decisions, roadmap, gates, and human review render in Keyoku.
+  - id: durable-dispatch
+    title: Harness activation and resumable task dispatch
+    status: planned
+    targetIteration: 3
+    proof: A queued task wakes a configured harness and receives delivered, understood, applied, and verified receipts.
+  - id: developer-validation
+    title: Daily-driver validation
+    status: planned
+    targetIteration: 4
+    proof: Five external developers complete the goal-to-acceptance loop and can explain project state in under one minute.

@@ -1,0 +1,8 @@
+schemaVersion: keyoku.dev/project/v1alpha1
+id: keyoku
+name: Keyoku
+summary: Free, provider-neutral continuous proof for human-owned software contributions.
+repository: https://github.com/Keyoku-ai/keyoku.git
+defaultBranch: main
+createdAt: 2026-08-09T00:06:21Z
+updatedAt: 2026-08-09T00:06:21Z

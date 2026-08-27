@@ -1,0 +1,116 @@
+schemaVersion: keyoku.dev/outcome/v1alpha1
+id: project-state-v1
+revision: 1
+title: A developer can keep up with what coding agents are building
+objective: >-
+  From one current project brief, a developer can understand what the software does, the goal
+  changing it, the important product and architecture movement, the evidence supporting current
+  claims, the people and agents contributing, and the decisions or steering that require a human.
+owner:
+  kind: human
+  id: keyoku-owner
+  name: Tye
+  role: accountable product owner
+constraints:
+  - Keyoku does not become a coding-agent runtime, terminal multiplexer, or general task manager.
+  - The open-source V1 is useful without a hosted account, external model, vector database, or transcript ingestion.
+  - Memory is optional and project-scoped; Keyoku integrates with harness-native memory rather than replacing it.
+  - Agent proposals, deterministic observations, and human-approved decisions remain visibly distinct.
+  - Phone and local-network access are explicit, temporary, tokenized, and never enabled silently.
+  - Shared artifacts exclude hidden reasoning, secrets, and raw transcripts by default.
+criteria:
+  - description: The product and technical plan defines the wedge, V1 features, state graph, components, MCP tools, memory boundary, live access, exports, security, milestones, and acceptance criteria
+    probe:
+      kind: command
+      run: >-
+        node -e "const fs=require('fs');const s=fs.readFileSync('docs/KEYOKU-PROJECT-STATE-V1.md','utf8');process.exit(['V1 adoption wedge','Project State Graph','MCP design','Memory boundary','Live access and human steering','Shareable artifacts','Security and trust boundaries','Implementation sequence','Acceptance criteria'].every(x=>s.includes(x))?0:1)"
+      timeoutMs: 30000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: The plan fixes the V1 around a current project brief and defines the full system without requiring agent orchestration or generic memory.
+      whyItMatters: Contributors can implement compatible components without rediscovering the product boundary.
+      code:
+        - path: docs/KEYOKU-PROJECT-STATE-V1.md
+          purpose: Canonical V1 product, architecture, MCP, memory, sharing, security, and rollout decision.
+      artifacts: []
+  - description: The human interface shows current project capabilities, active goal, change path, evidence boundaries, contributors, and human attention
+    probe:
+      kind: command
+      run: >-
+        node -e "const fs=require('fs');const s=fs.readFileSync('docs/KEYOKU-PROJECT-STATE.html','utf8');process.exit(['No decision needed','Live exchange','Human intent','Shared project state','Agent execution','Intervention channel','Delivery contract'].every(x=>s.includes(x))?0:1)"
+      timeoutMs: 30000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: The Convergence Thread leads with a causal live exchange—human direction, active agent work, and its receipt—then separates human intent, shared project truth, and agent execution into drill-down lanes.
+      whyItMatters: A maintainer can orient before reading raw files, test output, or agent transcripts.
+      code:
+        - path: docs/KEYOKU-PROJECT-STATE.html
+          purpose: Interactive human-facing current project brief.
+      artifacts: []
+  - description: The local briefing gateway provides authenticated live state, typed interventions, agent heartbeats, decision capture, and portable Markdown and JSON exports
+    probe:
+      kind: command
+      run: >-
+        sh -c "node --check scripts/serve-project-brief.mjs &&
+        grep -q '/api/events' scripts/serve-project-brief.mjs &&
+        grep -q '/api/steer' scripts/serve-project-brief.mjs &&
+        grep -q '/api/ask' scripts/serve-project-brief.mjs &&
+        grep -q '/api/interventions' scripts/serve-project-brief.mjs &&
+        grep -q '/api/agent-heartbeat' scripts/serve-project-brief.mjs &&
+        grep -q '/api/context' scripts/serve-project-brief.mjs &&
+        grep -q '/api/decision' scripts/serve-project-brief.mjs &&
+        grep -q '/export/project-update.md' scripts/serve-project-brief.mjs &&
+        grep -q 'SameSite=Strict' scripts/serve-project-brief.mjs"
+      timeoutMs: 30000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: A dependency-free local server creates a temporary authenticated session, streams changes, records typed human interventions and lease-backed agent presence, and exports the current brief.
+      whyItMatters: Long-running agents gain a useful phone-accessible communication surface without exposing a raw terminal or requiring a hosted service.
+      code:
+        - path: scripts/serve-project-brief.mjs
+          purpose: Local and explicit LAN briefing gateway with server-sent events, steering, decisions, and exports.
+      artifacts: []
+  - description: Existing Keyoku TypeScript behavior remains internally consistent after adding the prototype
+    probe:
+      kind: command
+      run: npm run typecheck
+      timeoutMs: 120000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: The existing TypeScript product still type-checks while the new project-state direction is developed alongside it.
+      whyItMatters: The prototype does not require destabilizing the current reusable goal, evidence, approval, and MCP foundations.
+      code:
+        - path: src/
+          purpose: Existing Keyoku implementation retained as the V1 foundation.
+      artifacts: []
+humanCriteria:
+  - id: one-minute-orientation
+    description: A developer can explain what Keyoku does, its current goal, what exists, what is planned, and what needs a human after one minute in the interface
+    guidance: Start on the default view without reading the plan or source files.
+  - id: wedge-resonance
+    description: The promise keep up with what your agents build feels like an urgent, specific developer problem rather than a generic documentation or memory product
+    guidance: Ask whether the first screen makes the intended user and pain immediately recognizable.
+  - id: mobile-steering-clarity
+    description: A phone user can see meaningful progress and send a bounded direction without believing they directly controlled an agent that did not acknowledge it
+    guidance: Review committed, delivered, understood, applied, verified, superseded, and could-not-apply language before shipping the intervention loop.
+  - id: evidence-clarity
+    description: The interface clearly distinguishes current supported behavior, prototype hypotheses, and unimplemented plans
+    guidance: No green state or progress percentage should imply product behavior that has not been demonstrated.
+createdAt: 2026-08-11T00:00:00Z
+updatedAt: 2026-08-12T01:30:00Z

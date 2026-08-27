@@ -1,6 +1,158 @@
 # Changelog
 
+## 3.0.0-alpha.1 — 2026-08-25
+
+Unreleased candidate for Keyoku's narrow, local, Git-native proof and attention
+layer around coding agents. This entry does not claim that the package has been
+published or that npm `latest` has moved from v2.
+
+### Added
+
+- A durable provider-neutral session protocol for agent work, structured human decisions, queued instructions, acknowledgements, and leased presence.
+- A token-scoped loopback UI with **Agent work**, **Needs you**, **Review first**, and claim-by-claim **Proof** surfaces.
+- Active contribution reuse per branch and outcome, plus content binding for the exact outcome contract.
+- Annotated screenshot and timestamped video evidence in portable Factfiles.
+- `keyoku proof serve`, five bounded MCP proof-session tools, seven bounded Pulse tools, one side-effect-free assurance evaluator, and a Marketplace-compatible composite GitHub Action.
+- Exact-digest Factfile verification plus `keyoku factfile inspect|verify|assess|publish`.
+- Harness-neutral Pulse lifecycle events, verified checkpoints, deterministic dispatch planning, and stakeholder/developer/timeline/email/text/JSON projections.
+- An optional neutral `EvidenceProvider` and WorkEvent bridge; callers retain runtime orchestration and assurance-profile policy.
+- A SHA-256 source capsule for command-backed Factfile criteria, materialized into one fresh disposable Git checkout per criterion with dirty/untracked bytes, paths, modes, symlinks, mutation detection, original-source race rejection, and validated cleanup.
+
+### Changed
+
+- Factfiles now present claim → observation → meaning → limits → reproduction → relevant code and artifacts; raw assertions remain audit detail.
+- The launch promise is intentionally narrow: Keyoku coordinates proof and human attention without replacing GitHub, coding harnesses, or project-management systems.
+- The v3 package entrypoint now exposes only `proof`, `factfile`, `pulse`, `serve`, `doctor`, `version`, and help. Goals, workflows, connectors, activity recording, memory, execution, and behavior-iteration commands remain compatibility source and are excluded from the v3 archive.
+- Synthetic and adapter-attested checkpoints remain visibly attested and nondispatchable. Local promotion rechecks Factfile project/outcome/source identity, rejects symlinked or signature-mismatched media, and public adapter ingestion cannot self-claim local verification.
+- Repository identity uses fail-closed Git calls and NUL-delimited paths; gates bracket probes, evidence resolution, and persistence with source captures so checkout mutation fails closed.
+- Repository commands are now explicitly read-only proof observations. Writes, additions, deletions, mode changes, and mutate-restore behavior reject proof; this evidence isolation does not claim OS sandboxing of arbitrary repository code.
+
 ## Unreleased
+
+> The entries below record work on the v2 compatibility lineage. They are not
+> v3 public commands or MCP tools unless a later release explicitly promotes
+> them into the checked `docs/PUBLIC-SURFACE.md` inventory.
+
+### Added
+- **Compatibility behavior iteration: `keyoku iterate` plus four MCP tools.** A provider-neutral,
+  bounded prove → repair → re-prove protocol now turns failed repository-owned
+  claims into deterministic agent instructions and re-evaluates only at an
+  idempotent checkpoint. Each round records the exact Git/worktree identity,
+  Factfile digest, passing/failing/regressed claim indexes, declared human-review
+  state, explicitly sourced token/cost usage, and stop reason in a hash-chained
+  append-only ledger. The controller stops on success, human judgment, failed
+  human review, no source progress, or configured round/time/token/cost limits.
+  It deliberately does not run an agent, infer billing, fill human decisions,
+  accept a contribution, push, or deploy. See `docs/ITERATION.md`.
+
+- **Demo evidence: `keyoku demo <init|record|watch>`.** A generic, project-agnostic
+  "record -> watch -> gate" workflow that makes a recorded product demo
+  first-class Keyoku evidence (the existing `EvidencePresentationSchema`
+  `artifacts` already supported `kind: "screenshot"/"video"`; this adds the
+  workflow that actually produces and validates them). `keyoku demo init`
+  writes a commented `.keyoku/demo.yaml` template (won't overwrite an
+  existing one) plus a ready-to-paste outcome criterion snippet. `keyoku demo
+  record` reads/validates that config, launches Chromium via Playwright
+  resolved from the *target* project (not a keyoku dependency — clear error
+  if `playwright` isn't installed there), walks each declared "stop"
+  (optional auth once, then goto -> actions -> settle -> screenshot), and
+  writes `.keyoku/demo/frames/*.jpeg` + `.keyoku/demo/manifest.json`. `keyoku
+  demo watch [--assert]` composes a prompt from the manifest's frames and
+  per-stop `expect` assertions, spawns `claude -p ... --permission-mode
+  acceptEdits` to review the frames and run a UI/UX audit, validates the
+  resulting `.keyoku/demo/verdict.json` against a zod contract, and with
+  `--assert` exits 0 only when `overall.verdict === "pass"` AND the verdict
+  is newer than the manifest — usable directly as an outcome criterion probe
+  (`keyoku demo record && keyoku demo watch --assert`) in any project. See
+  `docs/demo-evidence.md`.
+
+- **ADR-35: `Goal.project`/`Goal.cwd` — the keyoku side of belay's cross-project
+  scoping fix.** belay's loop portfolio/proposals now scope by project to stop
+  goals bleeding across unrelated repos sharing one `~/.keyoku`; that read a
+  `project`/`cwd` off the goal row, but the goal record had no such field —
+  this adds it.
+  - **What cwd context is actually available to an MCP tool handler** (the
+    key finding): MCP does not hand a tool call the client's cwd — there is
+    no protocol-level "caller's cwd" param. The only two reliable signals are
+    (a) an explicit `cwd` argument the calling agent chooses to pass, and (b)
+    `process.cwd()` of the long-lived stdio server process itself, fixed at
+    the moment Claude Code spawned it (typically the project dir the session
+    started in). `goal_focus` already leaned on exactly this — `cwd` optional,
+    defaulting to `process.cwd()` — so that's the established, trusted
+    convention this change follows for `goal_create` too, rather than
+    inventing a new mechanism.
+  - **`goal_create` gains an optional `cwd` param**, defaulting to the
+    server's `process.cwd()` when omitted — so every newly created goal is
+    stamped going forward, not just focused ones. Stored as two fields:
+    `Goal.cwd` (the raw dir) and `Goal.project` (the git repo root of that
+    dir, or the dir itself outside a repo — `never-throw`, via
+    `projectForCwd()` in `engine.ts`) — repo-root normalization means a goal
+    created from any subdir of a monorepo checkout lands on the same
+    `project` value.
+  - **`goal_focus` backfills `project`/`cwd`** on a goal that doesn't have
+    them yet, from the focus `cwd` (itself already optional-with-a-
+    `process.cwd()`-default on that tool). **First stamp wins** — focusing an
+    already-stamped goal from a different directory never reassigns it, so a
+    shared/portfolio goal can't get bounced between projects by whoever
+    focuses it next.
+  - **Surfaced** in `goal_get` (full goal object) and `goal_list`/`goal_create`
+    responses (`goalSummary`, `project` only, when set) — as well as directly
+    in `goals.json`, which is how belay itself reads it.
+  - **Backward compat, stated plainly:** the ~97 goals that existed before
+    this field shipped have neither `project` nor `cwd` and are **NOT**
+    retroactively scoped — there is no backfill migration, because inferring
+    a project from a goal's free-text objective/activity would produce false
+    positives that are worse than "unscoped." An old goal becomes scopeable
+    only once it is re-focused (`goal_focus`) from a real cwd, or recreated.
+    belay-side scoping logic must treat an absent `project`/`cwd` as
+    "unknown," not "global."
+- **B2: edit a goal's criteria in place.** `goal_update` gains `addCriteria` /
+  `removeCriteriaIds` / `editCriteria`, so a wrong or incomplete criterion no
+  longer forces creating a whole new goal (which was fragmenting the loop
+  portfolio into duplicate `-v2`-style goals with their own, disconnected
+  learned workflow). `addCriteria` appends new criteria (ids continue the
+  goal's `c<N>` sequence, never colliding with survivors after a removal);
+  `removeCriteriaIds` drops criteria by id; `editCriteria` patches an
+  existing criterion's `description`/`probe`/`assert` by id — fields left
+  out of the patch are preserved. Criteria not referenced by any of the three
+  pass through completely unchanged (verified by identity-equality in tests,
+  not just value equality). Backward compatible: a `goal_update` call with
+  none of the three new params behaves byte-for-byte as before (same patch
+  application, same response shape — the redacted `criteria` array is only
+  added to the response when a criteria edit actually happened).
+  - **Re-validated on every edit**, through the same gate `goal_create` uses:
+    at least one criterion must remain, and any `mcp` criterion (added or
+    edited-in) must reference a connector that's actually registered. A
+    rejected edit never partially applies — the goal's criteria are left
+    exactly as they were.
+  - **Converged-goal guard, safe default (no force flag):** editing criteria
+    on a `converged` goal reopens it — to `active`, or to `blocked` if its
+    iteration budget is already exhausted — mirroring the existing
+    drift-detection auto-reactivation in `assess()`. Rationale: a
+    `converged` status is a proof that criteria held; changing the criteria
+    invalidates that proof, so leaving the status untouched would be a
+    second silent-false-convergence hole right next to the one closed in
+    2.18.0. No flag is needed to opt into the safe behavior — the harness
+    never leaves a goal claiming a convergence it hasn't re-verified.
+  - **The edit lands in the goal's trace/history** (visible via `goal_get`)
+    as a new `source:"system"` `ActionRecord` — distinct from `"recorded"`
+    (an explicit `goal_record` corrective action) and `"activity"` (live
+    capture). It does NOT spend the corrective-action iteration budget, and
+    it is excluded from workflow-step promotion and the `totalActions` stat
+    — a criteria edit is bookkeeping about the goal's definition of done, not
+    a reusable action toward it, so it must not pollute a learned workflow's
+    steps.
+  - Server instructions (`PROTOCOL`) and `goal_update`'s tool description
+    updated — the old "criteria are IMMUTABLE after goal_create... make a
+    NEW goal to change them" guidance is now actively wrong and has been
+    replaced with guidance to refine in place instead.
+
+### Changed
+- **Command probe `timeoutMs` cap raised from 5 minutes to 15 minutes
+  (300,000ms -> 900,000ms)** in `CommandProbeSchema`/`HttpProbeSchema`
+  (`src/types.ts`) — real frontend production builds (and the new demo
+  record/watch pipeline) routinely exceed 5 minutes, and the old cap made
+  those outcome checks structurally unable to declare an honest timeout.
 
 ## 2.18.0 — 2026-07-02
 

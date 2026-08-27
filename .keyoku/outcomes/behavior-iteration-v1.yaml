@@ -1,0 +1,126 @@
+schemaVersion: keyoku.dev/outcome/v1alpha1
+id: behavior-iteration-v1
+revision: 2
+title: Keyoku governs AI product iteration toward observable behavior
+objective: >-
+  A coding harness can use Keyoku to move one repository-owned product outcome through bounded,
+  exact-source proof rounds until evidence passes or a truthful stop condition requires a human.
+owner:
+  kind: human
+  id: keyoku-owner
+  name: Tye
+  role: accountable product owner
+constraints:
+  - Keyoku coordinates evidence and instructions but does not silently run an agent, accept work, push, or deploy.
+  - Every round is bound to the exact Git head and worktree digest.
+  - Human judgment remains separate from automated proof.
+  - Checkpoint retries are idempotent and conflicting replays fail closed.
+  - Usage is explicitly sourced and is never inferred from UI or chat messages.
+scope:
+  include:
+    - src/iteration.ts
+    - src/iteration-cli.ts
+    - src/index.ts
+    - src/server.ts
+    - src/contribution.ts
+    - tests/iteration.test.ts
+    - tests/contribution.test.ts
+    - tests/e2e.test.ts
+    - tests/mcp-e2e.test.ts
+    - docs/ITERATION.md
+    - README.md
+    - CHANGELOG.md
+    - .keyoku/outcomes/behavior-iteration-v1.yaml
+  maxChangedFiles: 13
+criteria:
+  - description: The behavior-iteration state machine, limit rules, idempotency, and tamper detection pass together
+    probe:
+      kind: command
+      run: >-
+        sh -c "npx vitest run tests/iteration.test.ts &&
+        npx vitest run tests/contribution.test.ts -t 'distinguishes a clean committed contribution'"
+      timeoutMs: 120000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: Deterministic tests exercise convergence, replay, no progress, cost ceilings, human review, and ledger tampering.
+      whyItMatters: The controller must stop truthfully and must not turn repeated or manipulated activity into proof.
+      code:
+        - path: src/iteration.ts
+          purpose: Implements the append-only protocol, exact-source rounds, limits, instructions, and replay rules.
+        - path: tests/iteration.test.ts
+          purpose: Exercises the behavior and adversarial boundaries in real temporary Git repositories.
+      artifacts: []
+  - description: CLI and MCP expose one provider-neutral iteration protocol without an autonomous runner or acceptance tool
+    probe:
+      kind: command
+      run: >-
+        sh -c "npx tsx src/index.ts iterate help | grep -q 'Keyoku behavior iteration' &&
+        npx vitest run tests/mcp-e2e.test.ts -t 'provider-neutral iteration protocol'"
+      timeoutMs: 180000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: The public CLI and MCP catalog expose start, status, next, and checkpoint while excluding agent-run and auto-accept capabilities.
+      whyItMatters: Codex, Claude Code, and other harnesses can share the same loop without handing Keyoku undeclared execution authority.
+      code:
+        - path: src/iteration-cli.ts
+          purpose: Provides the human-operable local interface.
+        - path: src/server.ts
+          purpose: Provides the harness-neutral MCP interface.
+        - path: tests/mcp-e2e.test.ts
+          purpose: Asserts the public capability and absence boundaries.
+      artifacts: []
+  - description: The complete active Keyoku suite passes with the iteration layer enabled
+    probe:
+      kind: command
+      run: npm test
+      timeoutMs: 300000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: All active Keyoku behavior passes in one clean-revision suite.
+      whyItMatters: The iteration layer must not regress Factfiles, Pulse, proof sessions, security, or retained compatibility behavior.
+      code:
+        - path: tests/
+          purpose: Covers the complete active product surface.
+        - path: package.json
+          purpose: Defines the reproducible project gate.
+      artifacts: []
+  - description: Strict TypeScript checking accepts the public event, state, CLI, and MCP contracts
+    probe:
+      kind: command
+      run: npm run typecheck
+      timeoutMs: 120000
+      parse: text
+    assert:
+      path: exitCode
+      op: eq
+      value: 0
+    evidence:
+      summary: TypeScript validates the schemas and every consumer without an error.
+      whyItMatters: Agent adapters must receive one consistent iteration contract across CLI, MCP, and library use.
+      code:
+        - path: src/iteration.ts
+          purpose: Defines the exported schemas and derived state.
+        - path: src/index.ts
+          purpose: Exports the library contract and routes the CLI.
+      artifacts: []
+humanCriteria:
+  - id: useful-agent-direction
+    description: A coding agent receives enough evidence and constraint context to make the next bounded product change without hidden chain-of-thought
+    guidance: Inspect a failed-round instruction and confirm it names the objective, failed claim, reproduction path, source identity, constraints, and checkpoint contract.
+  - id: truthful-product-boundary
+    description: The product reads as an iteration and proof layer rather than an autonomous coding harness or auto-approval system
+    guidance: Inspect README, CLI help, MCP descriptions, and the behavior-iteration guide for conflicting authority claims.
+createdAt: 2026-08-25T17:00:00.000Z
+updatedAt: 2026-08-25T17:30:00.000Z

@@ -1,0 +1,11 @@
+# Reviewed public-history false positives: synthetic credential-redaction tests
+# and model identifiers. Fingerprint scoping preserves detection everywhere else.
+5d57b56527daf6864c01a1834ce29b05719ec8e8:tests/activity.test.ts:curl-auth-header:154
+5d57b56527daf6864c01a1834ce29b05719ec8e8:tests/mcp-e2e.test.ts:curl-auth-header:92
+8a9db83a91a4df8ab4d2422a22f65f080c79e050:tests/activity.test.ts:generic-api-key:143
+8a9db83a91a4df8ab4d2422a22f65f080c79e050:tests/activity.test.ts:generic-api-key:149
+8a9db83a91a4df8ab4d2422a22f65f080c79e050:tests/activity.test.ts:curl-auth-header:146
+5d57b56527daf6864c01a1834ce29b05719ec8e8:VALIDATION-REPORT-2026-07-02.md:curl-auth-header:43
+66eab48d48f66892cbd2dc4a447f6181f31dd70c:packages/openclaw/src/init.ts:generic-api-key:288
+66eab48d48f66892cbd2dc4a447f6181f31dd70c:packages/openclaw/src/init.ts:generic-api-key:318
+1052ae1dcefda24aeb3dfb3880a17b7939bbb30e:packages/openclaw/src/init.ts:generic-api-key:306

@@ -18,7 +18,10 @@ export const CommandProbeSchema = z.object({
     .min(1)
     .describe("Shell command to execute. Its stdout becomes the probe output."),
   cwd: z.string().optional().describe("Working directory for the command."),
-  timeoutMs: z.number().int().positive().max(300_000).optional(),
+  // Cap raised from 5min to 15min (300_000 -> 900_000): real frontend
+  // production builds (and demo record/watch pipelines) routinely exceed 5
+  // minutes — the old cap made those probes untimeoutable-but-still-fail.
+  timeoutMs: z.number().int().positive().max(900_000).optional(),
   parse: ParseModeSchema.optional(),
 });
 
@@ -28,7 +31,7 @@ export const HttpProbeSchema = z.object({
   method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]).optional(),
   headers: z.record(z.string()).optional(),
   body: z.string().optional(),
-  timeoutMs: z.number().int().positive().max(300_000).optional(),
+  timeoutMs: z.number().int().positive().max(900_000).optional(),
   parse: ParseModeSchema.optional(),
 });
 
@@ -36,7 +39,7 @@ export const McpProbeSchema = z.object({
   kind: z.literal("mcp"),
   connector: z
     .string()
-    .describe("Name of a registered connector (see connector_add)."),
+    .describe("Compatibility connector name. The bounded v3 entrypoint does not register connector management."),
   tool: z.string().describe("Tool to call on the connector's MCP server."),
   args: z.record(z.unknown()).optional(),
   parse: ParseModeSchema.optional(),
@@ -151,6 +154,20 @@ export interface Criterion extends CriterionInput {
   id: string;
 }
 
+/**
+ * A patch to an EXISTING criterion (goal_update's editCriteria). Only the
+ * fields present are changed; everything else on the criterion is preserved.
+ * `id` is required and must reference a criterion already on the goal.
+ */
+export const CriterionEditSchema = z.object({
+  id: z.string().min(1).describe("Id of the criterion to edit (see goal_get)."),
+  description: z.string().min(1).optional(),
+  probe: ProbeSchema.optional(),
+  assert: AssertionSchema.optional(),
+});
+
+export type CriterionEditInput = z.infer<typeof CriterionEditSchema>;
+
 export type GoalStatus = "active" | "converged" | "blocked" | "abandoned";
 
 export interface Goal {
@@ -168,6 +185,24 @@ export interface Goal {
   updatedAt: string;
   convergedAt: string | null;
   lastAssessedAt: string | null;
+  /**
+   * Project this goal belongs to — cross-project scoping so a portfolio/
+   * proposal view over one `~/.keyoku` doesn't bleed goals between unrelated
+   * repos (the coordinated keyoku side of belay's ADR-35; belay's
+   * `goalOwnProject` reads this field off the goal row when present). The
+   * git repo root of the cwd it was stamped from, or that raw cwd if it
+   * isn't inside a git repo. Stamped once — at `goal_create` when a cwd is
+   * available, and backfilled at `goal_focus` if still unset — and never
+   * overwritten afterward (first stamp wins), so re-focusing an existing
+   * goal from a different directory can't reassign it. Optional for
+   * backward compat: goals persisted before this field existed have neither
+   * `project` nor `cwd` and are NOT retroactively scoped (see CHANGELOG).
+   */
+  project?: string;
+  /** Raw cwd captured at the same time as `project` (pre-git-root
+   *  normalization) — kept alongside for provenance/debugging. Optional for
+   *  the same backward-compat reason as `project`. */
+  cwd?: string;
 }
 
 export interface CriterionEvaluation {
@@ -234,8 +269,11 @@ export interface ActionRecord {
   at: string;
   /** Provenance: "recorded" = an explicit goal_record corrective action;
    *  "activity" = captured live from the activity stream while this goal was
-   *  the focus (goal_focus). Absent means recorded (back-compat). */
-  source?: "recorded" | "activity";
+   *  the focus (goal_focus); "system" = the harness's own bookkeeping (e.g. a
+   *  goal_update criteria edit) — visible in the trace/history but excluded
+   *  from workflow-step promotion (it's not a reusable action). Absent means
+   *  recorded (back-compat). */
+  source?: "recorded" | "activity" | "system";
 }
 
 // ---------------------------------------------------------------------------

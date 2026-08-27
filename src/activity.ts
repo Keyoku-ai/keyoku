@@ -1,4 +1,5 @@
 import type { ActivityEvent, WorkflowStepTemplate } from "./types.js";
+export { redactSecrets } from "./redaction.js";
 
 export interface ActivitySuggestion {
   slug: string;
@@ -148,34 +149,6 @@ export function detectPatterns(
       kind,
     };
   });
-}
-
-// Secrets must never enter the activity log — they would propagate into
-// drafts, baked skills (committed to repos!), and the engine mirror. Redact
-// at record time: key=value/key: value assignments whose key smells like a
-// credential, and bearer tokens. Conservative by design — losing a file path
-// to over-redaction is fine; leaking a token is not.
-const SECRET_ASSIGNMENT_RE =
-  /([\w-]*(?:token|secret|passwd|password|api[_-]?key|access[_-]?key|credential|auth)[\w-]*["']?\s*[:=]\s*)(["']?)(?!bearer\b)(?!basic\b)(?!«redacted»)[^\s"']{4,}\2/gi;
-const BEARER_RE = /\b(bearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi;
-// "Authorization: Basic <base64(user:pass)>" — the assignment rule alone
-// mis-redacts the literal word "Basic" and leaks the credential after it.
-const BASIC_RE = /\b(basic\s+)[A-Za-z0-9+/=]{8,}/gi;
-// URL userinfo: postgres://user:pass@host, redis://:pass@host (empty user),
-// mongodb+srv://:pass@host — redact the password between ':' and '@' while
-// keeping scheme, user, and host readable. The username is OPTIONAL (`*`, not
-// `+`) so the common no-username form is covered. (Ports like host:8080/ aren't
-// matched: they have no trailing '@'.)
-const URL_USERINFO_RE = /([a-z][a-z0-9+.-]*:\/\/[^\s/:@"']*:)[^\s@"']+@/gi;
-
-export function redactSecrets(text: string): string {
-  // Scheme-specific rules first (bearer/basic/url-userinfo) so the generic
-  // key=value assignment rule doesn't consume the scheme keyword as the value.
-  return text
-    .replace(BEARER_RE, "$1«redacted»")
-    .replace(BASIC_RE, "$1«redacted»")
-    .replace(URL_USERINFO_RE, "$1«redacted»@")
-    .replace(SECRET_ASSIGNMENT_RE, "$1«redacted»");
 }
 
 /** Map one observed event to a draft workflow step. Shared by pattern

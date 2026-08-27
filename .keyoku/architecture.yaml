@@ -1,0 +1,94 @@
+schemaVersion: keyoku.dev/architecture/v1alpha1
+projectId: keyoku
+title: Keyoku proof and attention layer
+updatedAt: 2026-08-15T18:35:00Z
+components:
+  - id: contributors
+    label: People + coding agents
+    summary: Any human, harness, model, or CI process can produce a contribution.
+    layer: execution
+    icon: agent
+    view: { x: 40, y: 250 }
+    external: true
+  - id: outcome-contract
+    label: Outcome contract
+    summary: Repository-owned intent, constraints, proof claims, scope, and human criteria.
+    layer: source
+    icon: git
+    view: { x: 280, y: 70 }
+    owns:
+      - .keyoku/outcomes
+      - docs/FACTFILE-STANDARD.md
+  - id: repository-snapshot
+    label: Exact Git snapshot
+    summary: Base, head, committed diff, worktree digest, changed paths, and outcome history.
+    layer: source
+    icon: git
+    view: { x: 280, y: 300 }
+    owns:
+      - src/contribution.ts
+  - id: project-onboarding
+    label: One-command setup
+    summary: Project detection, starter outcome, and safe GitHub workflow generation.
+    layer: experience
+    icon: plug
+    view: { x: 280, y: 500 }
+    owns:
+      - src/project-profile.ts
+      - tests/project-profile.test.ts
+  - id: proof-evaluator
+    label: Proof evaluator
+    summary: Executes repository-defined observations, fails closed, and separates machine facts from judgment.
+    layer: proof
+    icon: proof
+    view: { x: 520, y: 190 }
+    owns:
+      - src/engine.ts
+      - src/probes.ts
+      - src/assert.ts
+      - tests/contribution.test.ts
+  - id: factfile
+    label: Factfile renderers
+    summary: Canonical JSON plus concise GitHub Markdown, detailed Markdown, HTML, and architecture SVG.
+    layer: proof
+    icon: keyoku
+    view: { x: 760, y: 190 }
+    owns:
+      - src/contribution.ts
+      - src/architecture.ts
+  - id: github
+    label: GitHub pull request
+    summary: Read-only Check summary and downloadable exact-revision proof artifact.
+    layer: experience
+    icon: git
+    view: { x: 1000, y: 70 }
+    external: true
+  - id: human-reviewer
+    label: Accountable reviewer
+    summary: Judges coherence, usability, maintainability, risk, and final acceptance.
+    layer: control
+    icon: human
+    view: { x: 1000, y: 330 }
+    external: true
+relations:
+  - from: contributors
+    to: repository-snapshot
+    kind: changes source
+  - from: outcome-contract
+    to: proof-evaluator
+    kind: defines claims
+  - from: repository-snapshot
+    to: proof-evaluator
+    kind: binds exact scope
+  - from: project-onboarding
+    to: proof-evaluator
+    kind: installs workflow
+  - from: proof-evaluator
+    to: factfile
+    kind: emits evidence
+  - from: factfile
+    to: github
+    kind: attaches summary
+  - from: factfile
+    to: human-reviewer
+    kind: requests judgment

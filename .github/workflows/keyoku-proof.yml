@@ -1,0 +1,45 @@
+name: Keyoku proof
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+# Outcome probes execute the proposed repository revision. Keep this job
+# read-only; GitHub's native PR review owns the human decision.
+permissions:
+  contents: read
+
+concurrency:
+  group: keyoku-proof-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  factfile:
+    name: Keyoku / outcome proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install project dependencies
+        run: npm ci
+      - name: Build this source revision
+        run: npm run build
+      - name: Prove Keyoku's own GitHub outcome
+        id: proof
+        env:
+          KEYOKU_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+        run: node dist/index.js proof ci github-proof-v1 --base "$KEYOKU_BASE_SHA"
+      - name: Attach the full Factfile
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: keyoku-factfile-${{ github.sha }}
+          path: .keyoku/contributions/${{ steps.proof.outputs.contribution_id }}/factfile.*
+          if-no-files-found: error
+          retention-days: 14

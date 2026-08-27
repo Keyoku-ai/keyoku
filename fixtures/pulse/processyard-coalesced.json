@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "keyoku.dev/pulse-dispatch/v1alpha1",
+  "plannedAt": "2026-08-24T16:42:00.000Z",
+  "outcome": "suppress",
+  "reasonCode": "attested_checkpoint",
+  "reason": "2 checkpoints are fixture- or adapter-attested, not locally verified. No dispatchable snapshot was produced.",
+  "failClosed": true,
+  "checkpointIds": [
+    "processyard-m5",
+    "processyard-m6"
+  ]
+}

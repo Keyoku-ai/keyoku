@@ -1,18 +1,38 @@
 {
   "name": "keyoku",
-  "version": "2.18.0",
-  "description": "The harness with muscle memory — watches what you do in Claude Code, Cursor, or Codex, learns your patterns, and turns them into reusable MCP-native workflows.",
+  "version": "3.0.0-alpha.1",
+  "description": "Free Git-native proof and human-attention layer for software contributions made by people and coding agents.",
   "type": "module",
   "bin": {
     "keyoku": "dist/index.js"
   },
   "main": "dist/index.js",
   "exports": {
-    ".": "./dist/index.js"
+    ".": "./dist/index.js",
+    "./fixtures/assurance/*": "./fixtures/assurance/*",
+    "./fixtures/conformance/*": "./fixtures/conformance/*"
   },
   "files": [
-    "dist/*.js",
+    "dist/index.js",
+    "dist/index.js.map",
+    "assets/banner-dark.svg",
+    "assets/banner-light.svg",
+    "docs/ASSURANCE-ADAPTER.md",
+    "docs/FACTFILE-STANDARD.md",
+    "docs/GITHUB.md",
+    "docs/PRODUCTION-READINESS.md",
+    "docs/PUBLIC-SURFACE.md",
+    "docs/PULSE.md",
+    "docs/REPO-MAP.md",
+    "docs/SECURITY-REVIEW.md",
+    "fixtures/assurance",
+    "fixtures/conformance",
+    "fixtures/pulse",
+    "scripts/render-assurance-fixtures.mjs",
+    "scripts/render-conformance-fixtures.mjs",
+    "scripts/render-pulse-fixtures.mjs",
     "README.md",
+    "SECURITY.md",
     "LICENSE"
   ],
   "scripts": {
@@ -21,7 +41,11 @@
     "test": "npm run build && vitest run",
     "test:watch": "vitest",
     "eval": "tsx evals/muscle-memory.eval.ts",
+    "fixtures:pulse": "node scripts/render-pulse-fixtures.mjs",
+    "fixtures:conformance": "npm run build && node scripts/render-conformance-fixtures.mjs",
+    "fixtures:assurance": "npm run build && node scripts/render-assurance-fixtures.mjs",
     "typecheck": "tsc --noEmit",
+    "prepare": "npm run build",
     "preflight": "npm run build && node scripts/preflight.mjs",
     "prepublishOnly": "npm run build"
   },
@@ -32,11 +56,19 @@
     "claude-code",
     "cursor",
     "agents",
-    "workflow",
-    "activity-tracing",
-    "automation"
+    "ai-code-verification",
+    "github-actions",
+    "pull-request",
+    "continuous-proof",
+    "code-review",
+    "factfile",
+    "git",
+    "open-source",
+    "evidence",
+    "human-review",
+    "progress"
   ],
-  "author": "Keyoku <support@keyoku.ai>",
+  "author": "Keyoku",
   "license": "MIT",
   "homepage": "https://keyoku.ai",
   "repository": {
@@ -50,18 +82,24 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.104.1",
     "@modelcontextprotocol/sdk": "^1.12.0",
     "jmespath": "^0.16.0",
     "yaml": "^2.9.0",
     "zod": "^3.25.0"
   },
   "devDependencies": {
+    "@anthropic-ai/sdk": "^0.104.1",
     "@types/jmespath": "^0.15.2",
     "@types/node": "^20.10.0",
     "tsup": "^8.0.1",
     "tsx": "^4.19.0",
     "typescript": "^5.3.0",
-    "vitest": "^1.0.0"
+    "vitest": "^4.1.10"
+  },
+  "optionalDependencies": {
+    "fsevents": "https://registry.npmjs.org/fsevents/-/fsevents-2.3.3.tgz"
+  },
+  "overrides": {
+    "esbuild": "^0.28.2"
   }
 }

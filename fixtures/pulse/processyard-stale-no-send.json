@@ -1,0 +1,9 @@
+{
+  "schemaVersion": "keyoku.dev/pulse-dispatch/v1alpha1",
+  "plannedAt": "2026-08-24T16:59:00.000Z",
+  "outcome": "stale_no_send",
+  "reasonCode": "stale_activity_lease",
+  "reason": "No normal update: 1 active lease is stale; the last trusted checkpoint is frozen.",
+  "failClosed": true,
+  "checkpointIds": []
+}
