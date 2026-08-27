@@ -51,6 +51,7 @@ export interface SourceCapsule {
 
 export interface MutationMonitor {
   readonly mutations: string[];
+  readonly structuralMutations: string[];
   clear(): void;
   close(): void;
 }
@@ -84,10 +85,20 @@ function filesystemDirectoryIdentityKey(path: string): string {
   return [stat.dev, stat.ino, stat.mode].join(":");
 }
 
+function sourceDirectoryMutationKey(root: string, path: string): string {
+  // `.keyoku` contains both tracked proof contracts and excluded generated
+  // ledgers. Its child-entry mtime is therefore not source identity; deeper
+  // tracked directories and every ordinary source directory remain fully
+  // mutation-bound.
+  return normalizedRelative(root, path) === ".keyoku"
+    ? filesystemDirectoryIdentityKey(path)
+    : filesystemMutationKey(path);
+}
+
 function assertPlainParentChain(root: string, path: string): string {
   const relativeDirectory = normalizedRelative(root, dirname(path));
   const parts = relativeDirectory.split("/").filter((part) => part && part !== ".");
-  const identities: string[] = [`.:${filesystemDirectoryIdentityKey(root)}`];
+  const identities: string[] = [`.:${sourceDirectoryMutationKey(root, root)}`];
   let current = root;
   for (const part of parts) {
     current = join(current, part);
@@ -98,7 +109,7 @@ function assertPlainParentChain(root: string, path: string): string {
     if (realpathSync(current) !== current) {
       throw new Error(`Source path ancestor resolves outside its lexical directory: ${normalizedRelative(root, current)}`);
     }
-    identities.push(`${normalizedRelative(root, current)}:${filesystemDirectoryIdentityKey(current)}`);
+    identities.push(`${normalizedRelative(root, current)}:${sourceDirectoryMutationKey(root, current)}`);
   }
   return identities.join("|");
 }
@@ -309,8 +320,8 @@ function publicEntries(entries: ScannedEntry[]): SourceCapsuleEntry[] {
 
 function sourceStateDigest(root: string, entries: ScannedEntry[]): string {
   return canonicalJsonDigest({
-    root: filesystemDirectoryIdentityKey(root),
-    directories: visibleSourceDirectories(root).map((path) => ({ path, mutationKey: filesystemDirectoryIdentityKey(resolve(root, path)) })),
+    root: sourceDirectoryMutationKey(root, root),
+    directories: visibleSourceDirectories(root).map((path) => ({ path, mutationKey: sourceDirectoryMutationKey(root, resolve(root, path)) })),
     entries: entries.map((entry) => ({ path: entry.path, mutationKey: entry.mutationKey })),
   });
 }
@@ -448,14 +459,18 @@ function assertMaterializedCheckout(capsule: SourceCapsule, checkout: string): v
 function watchDirectories(rootInput: string, directories: string[], ignored: (path: string) => boolean): MutationMonitor {
   const root = resolve(rootInput);
   const changed = new Set<string>();
+  const structural = new Set<string>();
   const watchers: FSWatcher[] = [];
   for (const relativeDirectory of [...new Set(["", ...directories])].sort()) {
     const directory = resolve(root, relativeDirectory);
     if (!existsSync(directory) || !lstatSync(directory).isDirectory()) continue;
     try {
-      watchers.push(watch(directory, { persistent: false }, (_event, name) => {
+      watchers.push(watch(directory, { persistent: false }, (event, name) => {
         const path = name == null ? relativeDirectory || "<unknown>" : join(relativeDirectory, String(name)).split(sep).join("/");
-        if (!ignored(path)) changed.add(path);
+        if (!ignored(path)) {
+          changed.add(path);
+          if (event === "rename") structural.add(path);
+        }
       }));
     } catch (error) {
       watchers.forEach((watcher) => watcher.close());
@@ -464,7 +479,8 @@ function watchDirectories(rootInput: string, directories: string[], ignored: (pa
   }
   return {
     get mutations() { return [...changed].sort(); },
-    clear() { changed.clear(); },
+    get structuralMutations() { return [...structural].sort(); },
+    clear() { changed.clear(); structural.clear(); },
     close() { watchers.forEach((watcher) => watcher.close()); },
   };
 }
@@ -491,8 +507,8 @@ export async function assertOriginalSourceUnchanged(capsule: SourceCapsule, moni
   const current = scanSourceTree(capsule.sourceRoot);
   const currentContentDigest = capsuleDigest(publicEntries(current));
   const currentStateDigest = sourceStateDigest(capsule.sourceRoot, current);
-  if (monitor.mutations.length > 0 || currentContentDigest !== capsule.contentDigest || currentStateDigest !== capsule.captureStateDigest) {
-    const details = monitor.mutations.slice(0, 8).join(", ") || "bytes, paths, or filesystem identity changed";
+  if (monitor.structuralMutations.length > 0 || currentContentDigest !== capsule.contentDigest || currentStateDigest !== capsule.captureStateDigest) {
+    const details = (monitor.structuralMutations.length > 0 ? monitor.structuralMutations : monitor.mutations).slice(0, 8).join(", ") || "bytes, paths, or filesystem identity changed";
     throw new Error(`Original source changed while probes were running (${details}).`);
   }
 }
