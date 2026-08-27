@@ -8,8 +8,10 @@ import {
   readlinkSync,
   readdirSync,
   renameSync,
+  statSync,
   symlinkSync,
   unlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -143,7 +145,11 @@ describe("content-addressed source capsules", () => {
         "require('fs').writeFileSync('added.txt','added')",
         "require('fs').unlinkSync('README.md')",
         "require('fs').chmodSync('README.md',0o755)",
-        "const f=require('fs');const b=f.readFileSync('README.md');f.writeFileSync('README.md','temporary');f.writeFileSync('README.md',b)",
+        "const f=require('fs');const p='README.md';const s=f.statSync(p);const b=f.readFileSync(p);f.writeFileSync(p,'temporary');f.writeFileSync(p,b);f.utimesSync(p,s.atime,s.mtime)",
+        "const f=require('fs');const p='README.md';const s=f.statSync(p);f.chmodSync(p,0o755);f.chmodSync(p,s.mode);f.utimesSync(p,s.atime,s.mtime)",
+        "const f=require('fs');const s=f.statSync('.');f.writeFileSync('transient.txt','temporary');f.unlinkSync('transient.txt');f.utimesSync('.',s.atime,s.mtime)",
+        "const f=require('fs');f.renameSync('README.md','README.preserved');f.renameSync('README.preserved','README.md')",
+        "const f=require('fs');const p='README.md';const r='README.replacement';const s=f.statSync(p);const b=f.readFileSync(p);f.writeFileSync(r,b);f.chmodSync(r,s.mode);f.utimesSync(r,s.atime,s.mtime);f.renameSync(r,p)",
       ];
       for (const script of probes) {
         await expect(runCommandInSourceCapsule(capsule, { kind: "command", run: `node -e ${JSON.stringify(script)}` })).rejects.toThrow(/mutated its disposable source checkout/);
@@ -184,8 +190,12 @@ describe("content-addressed source capsules", () => {
     try {
       const running = runCommandInSourceCapsule(capsule, { kind: "command", run: "node -e \"setTimeout(()=>{},150)\"", timeoutMs: 1_000 });
       await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      const readmeBefore = statSync(join(root, "README.md"));
       writeFileSync(join(root, "README.md"), "concurrent mutation\n", "utf8");
       writeFileSync(join(root, "README.md"), "captured\n", "utf8");
+      utimesSync(join(root, "README.md"), readmeBefore.atime, readmeBefore.mtime);
+      chmodSync(join(root, "README.md"), 0o755);
+      chmodSync(join(root, "README.md"), readmeBefore.mode);
       writeFileSync(join(root, "transient.txt"), "created then removed\n", "utf8");
       unlinkSync(join(root, "transient.txt"));
       writeFileSync(join(root, "empty-directory", "transient.txt"), "nested transient\n", "utf8");
@@ -223,6 +233,113 @@ describe("content-addressed source capsules", () => {
       await expect(assertOriginalSourceUnchanged(capsule, contractMonitor)).rejects.toThrow(/Original source changed while probes were running/);
     } finally {
       contractMonitor.close();
+      disposeSourceCapsule(capsule);
+    }
+  });
+
+  it("tolerates directory-mtime normalization but rejects transient source path churn", async () => {
+    const root = repository();
+    mkdirSync(join(root, "nested"));
+    writeFileSync(join(root, "nested", "tracked.txt"), "nested source\n", "utf8");
+    execFileSync("git", ["add", "nested/tracked.txt"], { cwd: root });
+    execFileSync("git", ["commit", "-qm", "add nested source"], { cwd: root });
+    const capsule = createSourceCapsule(root);
+    const normalizedMonitor = watchOriginalSource(capsule);
+    try {
+      for (const directory of [root, join(root, "nested")]) {
+        const before = statSync(directory);
+        const normalizedMtime = new Date(Math.round(before.mtimeMs / 1_000) * 1_000);
+        utimesSync(directory, before.atime, normalizedMtime);
+      }
+      await expect(assertOriginalSourceUnchanged(capsule, normalizedMonitor)).resolves.toBeUndefined();
+    } finally {
+      normalizedMonitor.close();
+    }
+
+    const transientMonitor = watchOriginalSource(capsule);
+    try {
+      const before = statSync(root);
+      writeFileSync(join(root, "transient-root.txt"), "created then removed\n", "utf8");
+      unlinkSync(join(root, "transient-root.txt"));
+      writeFileSync(join(root, "nested", "transient-nested.txt"), "created then removed\n", "utf8");
+      unlinkSync(join(root, "nested", "transient-nested.txt"));
+      renameSync(join(root, "README.md"), join(root, "README.preserved"));
+      renameSync(join(root, "README.preserved"), join(root, "README.md"));
+      utimesSync(root, before.atime, before.mtime);
+      await expect(assertOriginalSourceUnchanged(capsule, transientMonitor)).rejects.toThrow(/Original source changed while probes were running/);
+    } finally {
+      transientMonitor.close();
+      disposeSourceCapsule(capsule);
+    }
+  });
+
+  it("rejects transient Git-ignored churn but ignores generated ledger writes", async () => {
+    const root = repository();
+    const capsule = createSourceCapsule(root);
+    const ignoredMonitor = watchOriginalSource(capsule);
+    try {
+      writeFileSync(join(root, "ignored.log"), "transient cache output\n", "utf8");
+      unlinkSync(join(root, "ignored.log"));
+      await expect(assertOriginalSourceUnchanged(capsule, ignoredMonitor)).rejects.toThrow(/Original source changed while probes were running/);
+    } finally {
+      ignoredMonitor.close();
+    }
+
+    const generatedMonitor = watchOriginalSource(capsule);
+    try {
+      mkdirSync(join(root, ".keyoku", "runtime", "temporary"), { recursive: true });
+      writeFileSync(join(root, ".keyoku", "runtime", "temporary", "state.json"), "{}\n", "utf8");
+      await expect(assertOriginalSourceUnchanged(capsule, generatedMonitor)).resolves.toBeUndefined();
+    } finally {
+      generatedMonitor.close();
+      disposeSourceCapsule(capsule);
+    }
+  });
+
+  it("rejects restored symlink targets, ignored-directory renames, and byte-identical inode replacement", async () => {
+    const root = repository();
+    mkdirSync(join(root, "nested"));
+    writeFileSync(join(root, "nested", "tracked.txt"), "nested source\n", "utf8");
+    writeFileSync(join(root, "target-a.txt"), "same bytes\n", "utf8");
+    writeFileSync(join(root, "target-b.txt"), "same bytes\n", "utf8");
+    symlinkSync("target-a.txt", join(root, "selected.txt"));
+    writeFileSync(join(root, ".gitignore"), "ignored.log\nignored-temp/\n", "utf8");
+    execFileSync("git", ["add", ".gitignore", "nested/tracked.txt", "target-a.txt", "target-b.txt", "selected.txt"], { cwd: root });
+    execFileSync("git", ["commit", "-qm", "add adversarial paths"], { cwd: root });
+    const capsule = createSourceCapsule(root);
+
+    const symlinkMonitor = watchOriginalSource(capsule);
+    try {
+      unlinkSync(join(root, "selected.txt"));
+      symlinkSync("target-b.txt", join(root, "selected.txt"));
+      unlinkSync(join(root, "selected.txt"));
+      symlinkSync("target-a.txt", join(root, "selected.txt"));
+      await expect(assertOriginalSourceUnchanged(capsule, symlinkMonitor)).rejects.toThrow(/Original source changed while probes were running/);
+    } finally {
+      symlinkMonitor.close();
+    }
+
+    const directoryMonitor = watchOriginalSource(capsule);
+    try {
+      renameSync(join(root, "nested"), join(root, "ignored-temp"));
+      renameSync(join(root, "ignored-temp"), join(root, "nested"));
+      await expect(assertOriginalSourceUnchanged(capsule, directoryMonitor)).rejects.toThrow(/Original source changed while probes were running/);
+    } finally {
+      directoryMonitor.close();
+    }
+
+    const replacementMonitor = watchOriginalSource(capsule);
+    try {
+      const readme = join(root, "README.md");
+      const replacement = join(root, "README.replacement");
+      const before = statSync(readme);
+      writeFileSync(replacement, readFileSync(readme));
+      chmodSync(replacement, before.mode);
+      utimesSync(replacement, before.atime, before.mtime);
+      renameSync(replacement, readme);
+      await expect(assertOriginalSourceUnchanged(capsule, replacementMonitor)).rejects.toThrow(/Original source changed while probes were running/);
+    } finally {
+      replacementMonitor.close();
       disposeSourceCapsule(capsule);
     }
   });

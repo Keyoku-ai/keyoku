@@ -96,6 +96,9 @@
     "typescript": "^5.3.0",
     "vitest": "^4.1.10"
   },
+  "optionalDependencies": {
+    "fsevents": "https://registry.npmjs.org/fsevents/-/fsevents-2.3.3.tgz"
+  },
   "overrides": {
     "esbuild": "^0.28.2"
   }

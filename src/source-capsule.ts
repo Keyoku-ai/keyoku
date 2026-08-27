@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 import {
   closeSync,
   constants,
@@ -17,6 +18,7 @@ import {
   watch,
   type FSWatcher,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { canonicalJsonDigest } from "./canonical-json.js";
@@ -27,6 +29,18 @@ import type { Probe, ProbeEnvelope } from "./types.js";
 const CAPSULE_SCHEMA = "keyoku.dev/source-capsule/v1alpha1" as const;
 const RUNTIME_CAPSULE_DIR = join(".keyoku", "runtime", "probe-capsules");
 const EXCLUDED_PREFIXES = [join(".keyoku", "contributions"), join(".keyoku", "pulse"), join(".keyoku", "runtime")];
+const moduleRequire = createRequire(import.meta.url);
+
+interface FseventsModule {
+  constants: Record<
+    | "MustScanSubDirs" | "UserDropped" | "KernelDropped" | "EventIdsWrapped"
+    | "RootChanged" | "Mount" | "Unmount" | "ItemCreated" | "ItemRemoved"
+    | "ItemInodeMetaMod" | "ItemRenamed" | "ItemModified" | "ItemChangeOwner"
+    | "ItemCloned",
+    number
+  >;
+  watch(path: string, handler: (path: string, flags: number, id: string) => void): () => Promise<void>;
+}
 
 export interface SourceCapsuleEntry {
   path: string;
@@ -52,6 +66,8 @@ export interface SourceCapsule {
 export interface MutationMonitor {
   readonly mutations: string[];
   readonly structuralMutations: string[];
+  readonly entryMutations: string[];
+  prepareForVerification(): Promise<void>;
   clear(): void;
   close(): void;
 }
@@ -85,14 +101,14 @@ function filesystemDirectoryIdentityKey(path: string): string {
   return [stat.dev, stat.ino, stat.mode].join(":");
 }
 
-function sourceDirectoryMutationKey(root: string, path: string): string {
-  // `.keyoku` contains both tracked proof contracts and excluded generated
-  // ledgers. Its child-entry mtime is therefore not source identity; deeper
-  // tracked directories and every ordinary source directory remain fully
-  // mutation-bound.
-  return normalizedRelative(root, path) === ".keyoku"
-    ? filesystemDirectoryIdentityKey(path)
-    : filesystemMutationKey(path);
+function sourceDirectoryMutationKey(_root: string, path: string): string {
+  // macOS metadata services can asynchronously normalize directory mtimes in
+  // a freshly cloned Desktop checkout without changing any child entry. A
+  // directory mtime is therefore not trustworthy source identity. Bind the
+  // directory object itself; exact scans bind every lasting path and byte,
+  // while structural watcher events fail closed on transient add/delete/
+  // replace attempts even when the final inventory is restored.
+  return filesystemDirectoryIdentityKey(path);
 }
 
 function assertPlainParentChain(root: string, path: string): string {
@@ -456,32 +472,148 @@ function assertMaterializedCheckout(capsule: SourceCapsule, checkout: string): v
   if (extras.length > 0) throw new Error(`Disposable checkout contains paths outside the source capsule: ${extras.slice(0, 8).join(", ")}`);
 }
 
-function watchDirectories(rootInput: string, directories: string[], ignored: (path: string) => boolean): MutationMonitor {
-  const root = resolve(rootInput);
+function watchDirectories(
+  rootInput: string,
+  directories: string[],
+  ignored: (path: string) => boolean,
+  directPaths: string[] = [],
+  allowStableInodeOnly = false,
+): MutationMonitor {
+  const root = realpathSync(resolve(rootInput));
   const changed = new Set<string>();
   const structural = new Set<string>();
+  const direct = new Set<string>();
   const watchers: FSWatcher[] = [];
+  const stopCallbacks: Array<() => void> = [];
+  let preparing = false;
   for (const relativeDirectory of [...new Set(["", ...directories])].sort()) {
     const directory = resolve(root, relativeDirectory);
     if (!existsSync(directory) || !lstatSync(directory).isDirectory()) continue;
     try {
-      watchers.push(watch(directory, { persistent: false }, (event, name) => {
-        const path = name == null ? relativeDirectory || "<unknown>" : join(relativeDirectory, String(name)).split(sep).join("/");
+      const watcher = watch(directory, { persistent: false }, (event, name) => {
+        if (name == null) {
+          changed.add("<unknown>");
+          direct.add("<unknown>");
+          return;
+        }
+        const path = join(relativeDirectory, String(name)).split(sep).join("/");
         if (!ignored(path)) {
           changed.add(path);
           if (event === "rename") structural.add(path);
         }
-      }));
+      });
+      watcher.on("error", () => {
+        changed.add(`<watch-error:${relativeDirectory || "."}>`);
+        direct.add(`<watch-error:${relativeDirectory || "."}>`);
+      });
+      watchers.push(watcher);
     } catch (error) {
       watchers.forEach((watcher) => watcher.close());
       throw new Error(`Cannot monitor source mutations at ${directory}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
+
+  const directPathSet = new Set(directPaths);
+  if (process.platform === "darwin" && directPathSet.size > 0) {
+    let fsevents: FseventsModule;
+    try {
+      fsevents = moduleRequire("fsevents") as FseventsModule;
+    } catch (error) {
+      watchers.forEach((watcher) => watcher.close());
+      throw new Error(`Cannot monitor captured source entries on macOS: optional dependency fsevents is required (${error instanceof Error ? error.message : String(error)}).`);
+    }
+    const { constants: flags } = fsevents;
+    const uncertaintyMask = flags.MustScanSubDirs | flags.UserDropped | flags.KernelDropped
+      | flags.EventIdsWrapped | flags.RootChanged | flags.Mount | flags.Unmount;
+    const topologyMask = flags.ItemCreated | flags.ItemRemoved | flags.ItemRenamed;
+    const directMask = topologyMask | flags.ItemModified | flags.ItemInodeMetaMod | flags.ItemChangeOwner;
+    try {
+      const stop = fsevents.watch(root, (eventPath, eventFlags) => {
+        const absolute = resolve(eventPath);
+        const path = normalizedRelative(root, absolute) || ".";
+        if (path.startsWith("../") || isAbsolute(path)) {
+          changed.add("<outside-source-event>");
+          direct.add("<outside-source-event>");
+          return;
+        }
+        if ((eventFlags & uncertaintyMask) !== 0) {
+          changed.add(`<uncertain:${path}>`);
+          direct.add(`<uncertain:${path}>`);
+          return;
+        }
+        if (ignored(path)) return;
+
+        // APFS can finish copy-on-write materialization after `git clone` has
+        // returned. fsevents reports that as ItemCloned + ItemInodeMetaMod even
+        // though bytes, path, mode, and mtime are unchanged. Ignore only this
+        // clone-only signature. Any content, topology, or ownership flag still
+        // fails closed, and exact before/after scans remain mandatory.
+        const cloneOnly = (eventFlags & flags.ItemCloned) !== 0
+          && (eventFlags & (topologyMask | flags.ItemModified | flags.ItemChangeOwner)) === 0;
+        if (cloneOnly) return;
+
+        // A freshly cloned APFS file can also emit delayed inode-only events.
+        // Disposable probe checkouts ignore these only during their explicit
+        // setup window; after the probe begins they fail closed. The original
+        // source is never executed, so inode-only notifications can be left to
+        // its exact dev/ino/mode/size/mtime rescan while content, topology, and
+        // ownership events remain immediate failures.
+        const inodeOnly = (eventFlags & flags.ItemInodeMetaMod) !== 0
+          && (eventFlags & (topologyMask | flags.ItemModified | flags.ItemChangeOwner)) === 0;
+        if ((preparing || allowStableInodeOnly) && inodeOnly) return;
+
+        if ((eventFlags & topologyMask) !== 0) {
+          changed.add(path);
+          structural.add(path);
+        }
+        if (directPathSet.has(path) && (eventFlags & directMask) !== 0) {
+          changed.add(path);
+          direct.add(path);
+        }
+      });
+      stopCallbacks.push(() => { void stop().catch(() => undefined); });
+    } catch (error) {
+      watchers.forEach((watcher) => watcher.close());
+      throw new Error(`Cannot monitor captured source entries at ${root}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  } else {
+    for (const path of [...directPathSet].sort()) {
+      const absolute = resolve(root, path);
+      if (!existsSync(absolute)) continue;
+      try {
+        const watcher = watch(absolute, { persistent: false }, () => {
+          changed.add(path);
+          direct.add(path);
+        });
+        watcher.on("error", () => {
+          changed.add(`<watch-error:${path}>`);
+          direct.add(`<watch-error:${path}>`);
+        });
+        watchers.push(watcher);
+      } catch (error) {
+        watchers.forEach((watcher) => watcher.close());
+        throw new Error(`Cannot monitor captured source entry at ${absolute}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
   return {
     get mutations() { return [...changed].sort(); },
     get structuralMutations() { return [...structural].sort(); },
-    clear() { changed.clear(); structural.clear(); },
-    close() { watchers.forEach((watcher) => watcher.close()); },
+    get entryMutations() { return [...direct].sort(); },
+    async prepareForVerification() {
+      preparing = true;
+      try {
+        await new Promise<void>((resolvePromise) => setTimeout(resolvePromise,
+          process.platform === "darwin" ? 250 : 25));
+      } finally {
+        preparing = false;
+      }
+    },
+    clear() { changed.clear(); structural.clear(); direct.clear(); },
+    close() {
+      watchers.forEach((watcher) => watcher.close());
+      stopCallbacks.forEach((stop) => stop());
+    },
   };
 }
 
@@ -495,11 +627,13 @@ export function watchOriginalSource(capsule: SourceCapsule): MutationMonitor {
     // only this ambiguous ancestor notification so Keyoku's own Factfile and
     // session writes cannot make an otherwise stable proof fail at random.
     return path === ".keyoku" || isExcluded(path);
-  });
+  }, capsule.entries.map((entry) => entry.path), true);
 }
 
 async function settleWatcher(): Promise<void> {
-  await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 25));
+  // FSEvents is delivered in batches. Give its semantic flags time to arrive
+  // before clearing clone materialization noise and before the final scan.
+  await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, process.platform === "darwin" ? 250 : 25));
 }
 
 export async function assertOriginalSourceUnchanged(capsule: SourceCapsule, monitor: MutationMonitor): Promise<void> {
@@ -507,8 +641,18 @@ export async function assertOriginalSourceUnchanged(capsule: SourceCapsule, moni
   const current = scanSourceTree(capsule.sourceRoot);
   const currentContentDigest = capsuleDigest(publicEntries(current));
   const currentStateDigest = sourceStateDigest(capsule.sourceRoot, current);
-  if (monitor.structuralMutations.length > 0 || currentContentDigest !== capsule.contentDigest || currentStateDigest !== capsule.captureStateDigest) {
-    const details = (monitor.structuralMutations.length > 0 ? monitor.structuralMutations : monitor.mutations).slice(0, 8).join(", ") || "bytes, paths, or filesystem identity changed";
+  const currentPaths = new Set([".", ...visibleSourceDirectories(capsule.sourceRoot), ...current.map((entry) => entry.path)]);
+  // Directory watchers report topology candidates, but macOS also emits
+  // rename-shaped notifications for unchanged existing children when a parent
+  // directory's metadata is normalized. Exact scans validate those existing
+  // paths. A candidate for an uncaptured path (including one already removed)
+  // remains evidence of transient topology churn and fails closed. Direct
+  // entry watchers distinguish write/restore and delete/recreate of captured
+  // files from those parent-directory notifications.
+  const topologyMutations = monitor.structuralMutations.filter((path) => path === "<unknown>" || !currentPaths.has(path));
+  const observedMutations = [...new Set([...monitor.entryMutations, ...topologyMutations])].sort();
+  if (observedMutations.length > 0 || currentContentDigest !== capsule.contentDigest || currentStateDigest !== capsule.captureStateDigest) {
+    const details = observedMutations.slice(0, 8).join(", ") || monitor.mutations.slice(0, 8).join(", ") || "bytes, paths, or filesystem identity changed";
     throw new Error(`Original source changed while probes were running (${details}).`);
   }
 }
@@ -528,13 +672,17 @@ function mapProbeCwd(capsule: SourceCapsule, checkout: string, cwdInput?: string
 }
 
 export async function withSourceCapsuleCheckout<T>(capsule: SourceCapsule, callback: (checkout: string) => Promise<T> | T): Promise<T> {
-  const checkout = mkdtempSync(join(capsule.capsuleRoot, "checkout-"));
+  // Keep executable probe checkouts outside the source tree. Besides reducing
+  // self-generated watcher noise, this prevents project-local tooling from
+  // accidentally discovering the disposable checkout as nested source.
+  const checkoutParent = mkdtempSync(join(tmpdir(), "keyoku-source-capsule-checkout-"));
+  const checkout = join(checkoutParent, "checkout");
   try {
     gitText(capsule.sourceRoot, ["clone", "--quiet", "--no-local", capsule.gitDir, checkout], "materialize a fresh capsule checkout");
     assertMaterializedCheckout(capsule, checkout);
     return await callback(checkout);
   } finally {
-    safeCleanup(checkout, capsule.capsuleRoot);
+    safeCleanup(checkoutParent, tmpdir());
   }
 }
 
@@ -544,10 +692,11 @@ export async function runCommandInSourceCapsule(capsule: SourceCapsule, probe: E
   return withSourceCapsuleCheckout(capsule, async (checkout) => {
     const before = scanMaterializedTree(checkout);
     const directories = before.paths.filter((path) => existsSync(join(checkout, path)) && lstatSync(join(checkout, path)).isDirectory());
-    const monitor = watchDirectories(checkout, directories, (path) => path === ".git" || path.startsWith(".git/"));
+    const directPaths = before.paths.filter((path) => !directories.includes(path));
+    const monitor = watchDirectories(checkout, directories, (path) => path === ".git" || path.startsWith(".git/"), directPaths);
     let envelope: ProbeEnvelope;
     try {
-      await settleWatcher();
+      await monitor.prepareForVerification();
       monitor.clear();
       envelope = await runProbe({ ...probe, cwd: mapProbeCwd(capsule, checkout, probe.cwd) });
       await settleWatcher();
@@ -555,8 +704,11 @@ export async function runCommandInSourceCapsule(capsule: SourceCapsule, probe: E
       monitor.close();
     }
     const after = scanMaterializedTree(checkout);
-    if (before.digest !== after.digest || before.mutationDigest !== after.mutationDigest) {
-      const details = monitor.mutations.slice(0, 8).join(", ") || "filesystem state changed";
+    const afterPaths = new Set(after.paths);
+    const topologyMutations = monitor.structuralMutations.filter((path) => path === "<unknown>" || !afterPaths.has(path));
+    const observedMutations = [...new Set([...monitor.entryMutations, ...topologyMutations])].sort();
+    if (observedMutations.length > 0 || before.digest !== after.digest || before.mutationDigest !== after.mutationDigest) {
+      const details = observedMutations.slice(0, 8).join(", ") || monitor.mutations.slice(0, 8).join(", ") || "filesystem state changed";
       throw new Error(`Proof refused: a verification probe mutated its disposable source checkout (${details}).`);
     }
     return envelope;

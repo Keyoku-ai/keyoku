@@ -1218,6 +1218,7 @@ export async function runGate(rootInput: string | undefined, contributionId: str
     throw error;
   }
   try {
+    await originalMonitor.prepareForVerification();
     await assertOriginalSourceUnchanged(capsule, originalMonitor);
     originalMonitor.clear();
     const report = await evaluateFactfileCriteria(capsule, originalMonitor, criteria, outcome.criteria.map((criterion) => criterion.evidence));
