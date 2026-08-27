@@ -244,16 +244,21 @@ describe("content-addressed source capsules", () => {
     execFileSync("git", ["add", "nested/tracked.txt"], { cwd: root });
     execFileSync("git", ["commit", "-qm", "add nested source"], { cwd: root });
     const capsule = createSourceCapsule(root);
-    const normalizedMonitor = watchOriginalSource(capsule);
+    // The exact capsule identity excludes directory mtimes on every platform.
+    // Only macOS emits the APFS metadata-normalization event this regression
+    // reproduces. Linux fs.watch reports an explicit utimes call as a
+    // conservative rename-shaped event, so keep its live monitor fail-closed.
+    const normalizedMonitor = process.platform === "darwin" ? watchOriginalSource(capsule) : undefined;
     try {
       for (const directory of [root, join(root, "nested")]) {
         const before = statSync(directory);
         const normalizedMtime = new Date(Math.round(before.mtimeMs / 1_000) * 1_000);
         utimesSync(directory, before.atime, normalizedMtime);
       }
-      await expect(assertOriginalSourceUnchanged(capsule, normalizedMonitor)).resolves.toBeUndefined();
+      expect(() => assertSourceCapsuleCurrent(capsule)).not.toThrow();
+      if (normalizedMonitor) await expect(assertOriginalSourceUnchanged(capsule, normalizedMonitor)).resolves.toBeUndefined();
     } finally {
-      normalizedMonitor.close();
+      normalizedMonitor?.close();
     }
 
     const transientMonitor = watchOriginalSource(capsule);
